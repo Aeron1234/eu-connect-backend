@@ -1,0 +1,76 @@
+import express from "express";
+import multer from "multer";
+import { verifyUser } from "../middleware/verifyUser.js";
+import { verifyRole } from "../middleware/verifyRole.js";
+
+import {
+  generalLimiter,
+  mediumLimiter,
+  paginationLimiter,
+  strictLimiter,
+} from "../middleware/rateLimiter.js";
+
+import {
+  getSearchedUser,
+  getSearchedStudentDTRs,
+  getSearchedStudentNarratives,
+  getSearchedStudentFiles,
+  setSearchedStudentDtrLocation,
+  getSearchedStudentDtrLocation,
+} from "../controllers/searchedUserController.js";
+
+const searchedUserRoutes = express.Router();
+const storage = multer.memoryStorage();
+const upload = multer({ storage: storage });
+
+searchedUserRoutes.get(
+  "/searched-user/:searchedUserId",
+  verifyUser,
+  verifyRole(["student", "employer", "department_head", "admin"]),
+  generalLimiter,
+  getSearchedUser,
+);
+
+searchedUserRoutes.get(
+  "/searched-user/dtrs/:searchedUserId",
+  verifyUser,
+  verifyRole(["employer", "department_head", "admin"]),
+  generalLimiter,
+  getSearchedStudentDTRs,
+);
+
+searchedUserRoutes.get(
+  "/searched-user/narratives/:searchedUserId",
+  verifyUser,
+  verifyRole(["employer", "department_head", "admin"]),
+  generalLimiter,
+  getSearchedStudentNarratives,
+);
+
+searchedUserRoutes.get(
+  "/searched-user/files/:searchedUserId",
+  verifyUser,
+  verifyRole(["department_head", "admin"]),
+  generalLimiter,
+  getSearchedStudentFiles,
+);
+
+searchedUserRoutes.get(
+  "/searched-user/set-dtr-location/:searchedUserId",
+  verifyUser,
+  verifyRole(["employer", "admin"]),
+  generalLimiter,
+
+  getSearchedStudentDtrLocation,
+);
+
+searchedUserRoutes.put(
+  "/searched-user/set-dtr-location/:searchedUserId",
+  verifyUser,
+  verifyRole(["employer", "admin"]),
+  strictLimiter,
+  upload.none(),
+  setSearchedStudentDtrLocation,
+);
+
+export default searchedUserRoutes;
