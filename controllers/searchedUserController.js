@@ -1,4 +1,8 @@
 import { db } from "../config/db.js";
+import { supabase } from "../config/supabase.js";
+import { ALLOWED_TYPES, UPLOAD_ROOT } from "../config/helpers.js";
+
+const BUCKET = process.env.SUPABASE_BUCKET;
 
 export const getSearchedUser = async (req, res) => {
   const { searchedUserId } = req.params;
@@ -233,55 +237,6 @@ export const getSearchedStudentNarratives = async (req, res) => {
     if (connection) connection.release();
   }
 };
-export const getSearchedStudentFiles = async (req, res) => {
-  // 🛡️ GUARD CLAUSE: Validate searched user route parameter
-  const { searchedUserId } = req.params;
-  if (!searchedUserId) {
-    return res
-      .status(400)
-      .json({ error: "Searched User ID parameter is required." });
-  }
-
-  let connection;
-  try {
-    // 🌟 Acquire explicit pool connection
-    connection = await db.getConnection();
-
-    // Fetch the files while confirming the target user exists and isn't soft-deleted
-    const query = `
-      SELECT 
-        id.id,
-        id.user_id,
-        id.file_name,
-        id.company_name,
-        id.category,
-        id.url,
-        id.path,
-        id.file_type,
-        id.created_at
-      FROM internship_documents id
-      INNER JOIN users u ON id.user_id = u.id
-      WHERE id.user_id = ? AND u.deleted_at IS NULL
-      ORDER BY id.created_at DESC
-    `;
-
-    const [rows] = await connection.execute(query, [searchedUserId]);
-
-    // Format the response structure to match the frontend expectations
-    const records = rows.length > 0 ? rows : null;
-
-    return res.status(200).json(records);
-  } catch (error) {
-    console.error("Get searched student files query failure:", error);
-    return res.status(500).json({
-      success: false,
-      error: "Database query failed to get student files.",
-    });
-  } finally {
-    // 🌟 Ensure pool connection thread is safely released back to the pool
-    if (connection) connection.release();
-  }
-};
 
 export const getSearchedStudentDtrLocation = async (req, res) => {
   try {
@@ -483,6 +438,420 @@ export const setSearchedStudentDtrLocation = async (req, res) => {
       error: "Server error while setting DTR location.",
       success: false,
     });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const getSearchedStudentFiles = async (req, res) => {
+  const { searchedUserId } = req.params;
+  if (!searchedUserId) {
+    return res
+      .status(400)
+      .json({ error: "Searched User ID parameter is required." });
+  }
+
+  let connection;
+  try {
+    connection = await db.getConnection();
+
+    // 1. Get every internship record for this student — this is the
+    // top-level grouping, since a student may have 1 or several.
+    // Ongoing internship (if any) always sorts first; the rest fall
+    // into "past records" ordered by most recently started.
+    const [internships] = await connection.execute(
+      `SELECT 
+         ir.id, ir.company_name, ir.internship_position,
+         ir.date_started, ir.date_ended, ir.status
+       FROM internship_records ir
+       INNER JOIN users u ON ir.user_id = u.id
+       WHERE ir.user_id = ? AND u.deleted_at IS NULL AND ir.deleted_at IS NULL
+       ORDER BY 
+         (ir.status = 'ongoing') DESC,
+         ir.date_started DESC`,
+      [searchedUserId],
+    );
+
+    if (internships.length === 0) {
+      return res.status(200).json([]);
+    }
+
+    // 2. Get every document belonging to this student, across all
+    // their internships, in one query — cheaper than N queries per record.
+    // Files uploaded directly by the student have no verification_status
+    // (NULL) and always show. Files uploaded by an employer only show once
+    // the student has accepted them — a 'pending' one shouldn't count
+    // toward requirements or appear anywhere until confirmed.
+    const [documents] = await connection.execute(
+      `SELECT 
+         doc.id, doc.internship_id, doc.file_name, doc.company_name,
+         doc.category, doc.requirement_type_id, doc.file_type, doc.created_at,
+         doc.uploaded_by_id, doc.uploaded_by_role, doc.verification_status,
+         rt.name AS requirement_name, rt.requires_notarization, rt.copies_needed
+       FROM internship_documents doc
+       LEFT JOIN requirement_types rt ON doc.requirement_type_id = rt.id
+       WHERE doc.user_id = ?
+         AND (doc.verification_status IS NULL OR doc.verification_status = 'accepted')
+       ORDER BY doc.created_at DESC`,
+      [searchedUserId],
+    );
+
+    // 3. Total requirement count, for the completion percentage denominator
+    const [[{ totalRequirements }]] = await connection.execute(
+      `SELECT COUNT(*) AS totalRequirements FROM requirement_types`,
+    );
+
+    // 4. Attach each internship's own files + completion stats
+    const records = internships.map((internship) => {
+      const files = documents.filter(
+        (doc) => doc.internship_id === internship.id,
+      );
+
+      const submittedCount = new Set(files.map((f) => f.requirement_type_id))
+        .size;
+
+      return {
+        ...internship,
+        totalRequirements,
+        submittedCount,
+        completionPercent:
+          totalRequirements > 0
+            ? Math.round((submittedCount / totalRequirements) * 100)
+            : 0,
+        files,
+      };
+    });
+
+    return res.status(200).json(records);
+  } catch (error) {
+    console.error("Get searched student files query failure:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Database query failed to get student files.",
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const downloadSearchedStudentInternshipFile = async (req, res) => {
+  try {
+    const { id: requesterId, role } = req.verifiedUser;
+    const { searchedUserId, fileId } = req.params;
+
+    if (!searchedUserId || !fileId) {
+      return res
+        .status(400)
+        .json({ error: "searchedUserId and fileId are required." });
+    }
+
+    const [rows] = await db.execute(
+      `SELECT user_id, path, file_name, file_type, uploaded_by_id FROM internship_documents WHERE id = ?`,
+      [fileId],
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "File not found." });
+    }
+
+    const doc = rows[0];
+
+    // Confirm the file actually belongs to the student named in the route —
+    // never trust fileId alone, or an authorized staff member could pull
+    // a file by guessing/reusing an id that belongs to a different student
+    if (doc.user_id !== searchedUserId) {
+      // 404 rather than 403 — don't reveal that a file with this id
+      // exists under a *different* student
+      return res.status(404).json({ error: "File not found." });
+    }
+
+    // Employers can only download files they personally uploaded —
+    // admins/department heads are not restricted this way
+    if (role === "employer" && doc.uploaded_by_id !== requesterId) {
+      return res.status(403).json({
+        error: "You can only download files you uploaded yourself.",
+      });
+    }
+
+    const { data, error } = await supabase.storage
+      .from(BUCKET)
+      .createSignedUrl(doc.path, 120);
+
+    if (error) {
+      console.error("Signed URL error:", error.message);
+      return res.status(404).json({ error: "File not found on server." });
+    }
+
+    return res.status(200).json({
+      url: data.signedUrl,
+      fileName: doc.file_name,
+    });
+  } catch (error) {
+    console.error("Download Error:", error.message);
+    res.status(500).json({ error: "Failed to retrieve file." });
+  }
+};
+
+export const deleteSearchedStudentFile = async (req, res) => {
+  let connection;
+  try {
+    const { id: requesterId, role } = req.verifiedUser;
+    const { searchedUserId, fileId } = req.params;
+
+    if (!searchedUserId || !fileId) {
+      return res
+        .status(400)
+        .json({ error: "searchedUserId and fileId are required." });
+    }
+
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    // Look up the record, and confirm it actually belongs to the student
+    // named in the route — never trust fileId alone, or a caller could
+    // delete an arbitrary file by guessing/reusing an id from another student
+    const [rows] = await connection.execute(
+      `SELECT id, user_id, path, uploaded_by_id, verification_status FROM internship_documents WHERE id = ? FOR UPDATE`,
+      [fileId],
+    );
+
+    if (rows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "File not found." });
+    }
+
+    const doc = rows[0];
+
+    if (doc.user_id !== searchedUserId) {
+      await connection.rollback();
+      // 404 rather than 403 here — don't reveal that a file with this id
+      // exists under a *different* student
+      return res.status(404).json({ error: "File not found." });
+    }
+
+    // Employers can only delete files they personally uploaded on a
+    // student's behalf — admins/department heads are not restricted this way
+    if (role === "employer" && doc.uploaded_by_id !== requesterId) {
+      await connection.rollback();
+      return res.status(403).json({
+        error: "You can only delete files you uploaded yourself.",
+      });
+    }
+
+    if (role === "employer" && doc.verification_status === "accepted") {
+      await connection.rollback();
+      return res.status(403).json({
+        error:
+          "This certificate has already been confirmed by the student and can no longer be deleted.",
+      });
+    }
+
+    const [result] = await connection.execute(
+      `DELETE FROM internship_documents WHERE id = ?`,
+      [fileId],
+    );
+
+    if (result.affectedRows === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "File not found." });
+    }
+
+    await connection.commit();
+
+    // Delete from storage AFTER commit succeeds — same reasoning as deleteFile:
+    // DB is source of truth, an orphaned storage object is recoverable,
+    // an orphaned DB row isn't
+    const { error: storageError } = await supabase.storage
+      .from(BUCKET)
+      .remove([doc.path]);
+
+    if (storageError) {
+      console.error("Failed to delete from storage:", storageError.message);
+    }
+
+    res.status(200).json({
+      message: "File deleted successfully.",
+      success: true,
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Delete searched student file error: ", error);
+    res.status(500).json({ error: "Database query failed", success: false });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const getEmployerUploadedFiles = async (req, res) => {
+  try {
+    const { id: employerId } = req.verifiedUser;
+    const { searchedUserId } = req.params;
+
+    if (!searchedUserId) {
+      return res
+        .status(400)
+        .json({ error: "Searched User ID parameter is required." });
+    }
+
+    const [rows] = await db.execute(
+      `SELECT 
+         doc.id, doc.internship_id, doc.file_name, doc.company_name,
+         doc.category, doc.requirement_type_id, doc.file_type, doc.created_at,
+         doc.uploaded_by_id, doc.uploaded_by_role, doc.verification_status,
+         rt.name AS requirement_name
+       FROM internship_documents doc
+       LEFT JOIN requirement_types rt ON doc.requirement_type_id = rt.id
+       WHERE doc.user_id = ? 
+         AND doc.uploaded_by_id = ? 
+         AND doc.uploaded_by_role = 'employer'
+       ORDER BY doc.created_at DESC`,
+      [searchedUserId, employerId],
+    );
+
+    return res.status(200).json(rows);
+  } catch (error) {
+    console.error("Get employer uploaded file error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Database query failed to get uploaded files.",
+    });
+  }
+};
+
+export const uploadFileToSearchedStudent = async (req, res) => {
+  const CERTIFICATE_OF_COMPLETION_NAME = "Certificate of Completion";
+
+  let connection;
+  let uploadedStoragePath;
+  try {
+    const { id: employerId, role } = req.verifiedUser;
+    const { searchedUserId } = req.params;
+    const { file_name, company_name } = req.body;
+    const file = req.file;
+
+    if (!searchedUserId) {
+      return res.status(400).json({ error: "searchedUserId is required." });
+    }
+
+    if (!file) {
+      return res.status(400).json({ error: "No file uploaded." });
+    }
+
+    if (!ALLOWED_TYPES.includes(file.mimetype)) {
+      return res.status(400).json({ error: "Invalid file type." });
+    }
+
+    if (file.size > 50 * 1024 * 1024) {
+      return res.status(400).json({ error: "File is too large (Max 50MB)." });
+    }
+
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    // 1. Confirm the target student has an ONGOING internship
+    const [internships] = await connection.execute(
+      `SELECT id FROM internship_records WHERE user_id = ? AND status = 'ongoing' LIMIT 1 FOR UPDATE`,
+      [searchedUserId],
+    );
+
+    if (internships.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        error: "This student does not have an ongoing internship.",
+      });
+    }
+
+    const internshipId = internships[0].id;
+
+    // ⚠️ NOTE: No check yet that this employer is actually the one supervising
+    // this student — there's currently no relational link between employer
+    // accounts and internship_records in the schema. Any verified employer
+    // can currently upload to any student. Revisit once that link exists.
+    // uploaded_by_id/uploaded_by_role below at least gives you a trail of
+    // who did it, in the meantime.
+
+    // 2. This endpoint only ever files a Certificate of Completion — the
+    // requirement type is looked up server-side, never trusted from the
+    // client, so an employer can't submit a file against an arbitrary
+    // requirement type via this route
+    const [reqTypes] = await connection.execute(
+      `SELECT id, category FROM requirement_types WHERE name = ? LIMIT 1`,
+      [CERTIFICATE_OF_COMPLETION_NAME],
+    );
+
+    if (reqTypes.length === 0) {
+      await connection.rollback();
+      // This means the requirement type itself isn't seeded in the DB —
+      // a config problem, not something the client did wrong
+      console.error(
+        `"${CERTIFICATE_OF_COMPLETION_NAME}" requirement type not found in requirement_types table.`,
+      );
+      return res.status(500).json({
+        error: "Certificate of Completion requirement type is not configured.",
+      });
+    }
+
+    const { id: requirementTypeId, category: catLower } = reqTypes[0];
+
+    // 3. Upload to Supabase Storage — stored under the STUDENT's folder,
+    // not the employer's, so it lands in the same place student-uploaded
+    // files do and is reachable by the existing download/delete routes
+    const fileExt = file.originalname.split(".").pop();
+    uploadedStoragePath = `requirements/${searchedUserId}/${Date.now()}.${fileExt}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from(BUCKET)
+      .upload(uploadedStoragePath, file.buffer, {
+        contentType: file.mimetype,
+      });
+
+    if (uploadError) throw uploadError;
+
+    // 4. Save to DB — file belongs to the student (user_id), but track who
+    // actually submitted it (uploaded_by_id / uploaded_by_role). Starts as
+    // 'pending' — it doesn't count toward requirements or appear in the
+    // student's file list until they accept it via reviewEmployerCertificate.
+    const [result] = await connection.execute(
+      `INSERT INTO internship_documents 
+        (user_id, internship_id, file_name, company_name, category, requirement_type_id, file_type, path, uploaded_by_id, uploaded_by_role, verification_status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+      [
+        searchedUserId,
+        internshipId,
+        file_name || CERTIFICATE_OF_COMPLETION_NAME,
+        company_name,
+        catLower,
+        requirementTypeId,
+        file.mimetype,
+        uploadedStoragePath,
+        employerId,
+        role,
+      ],
+    );
+
+    if (result.affectedRows === 0) {
+      await connection.rollback();
+      await supabase.storage.from(BUCKET).remove([uploadedStoragePath]);
+      return res.status(400).json({ error: "Uploading file failed." });
+    }
+
+    await connection.commit();
+
+    return res.status(201).json({
+      message: "Document uploaded successfully on behalf of the student.",
+      success: true,
+      id: result.insertId,
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    if (uploadedStoragePath) {
+      await supabase.storage
+        .from(BUCKET)
+        .remove([uploadedStoragePath])
+        .catch(() => {});
+    }
+    console.error("Upload to searched user error:", error.message);
+    return res.status(500).json({ error: "Server failed to process upload." });
   } finally {
     if (connection) connection.release();
   }

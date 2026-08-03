@@ -17,6 +17,7 @@ import dashboardStatsRoutes from "./routes/dashboardStatsRoutes.js";
 import searchHistoryRoutes from "./routes/searchhistoryRoutes.js";
 import searchedUserRoutes from "./routes/searchedUserRoutes.js";
 import { autoCloseStaleShifts } from "./config/autoCloseStaleShifts.js";
+import internshipPostingRoutes from "./routes/internshipPostsRoutes.js";
 
 dotenv.config();
 const app = express();
@@ -46,6 +47,7 @@ app.use("/eu-connect/api", studentEvaluationRoutes);
 app.use("/eu-connect/api", dashboardStatsRoutes);
 app.use("/eu-connect/api", searchHistoryRoutes);
 app.use("/eu-connect/api", searchedUserRoutes);
+app.use("/eu-connect/api", internshipPostingRoutes);
 
 io.on("connection", (socket) => {
   console.log("A user connected:", socket.id);

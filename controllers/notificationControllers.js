@@ -86,8 +86,8 @@ export const getAllNotifications = async (req, res) => {
         INNER JOIN regions AS r ON ir.region_id = r.id
         LEFT JOIN notifications AS n ON n.user_id = ? AND n.link = ir.id AND n.type = 'submission'
         WHERE ir.status = 'pending' 
-          AND (? = 'admin' OR sai.department_id = ?)
-          AND (? IN ('admin', 'department_head'))
+          AND (? COLLATE utf8mb4_general_ci = 'admin' OR sai.department_id = ?)
+          AND (? COLLATE utf8mb4_general_ci IN ('admin', 'department_head'))
 
         UNION ALL
 

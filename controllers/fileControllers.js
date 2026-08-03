@@ -1,20 +1,71 @@
 import { db } from "../config/db.js";
 import { supabase } from "../config/supabase.js";
+import { newUUID, ALLOWED_TYPES } from "../config/helpers.js";
+
+const BUCKET = process.env.SUPABASE_BUCKET;
+
+export const getFileRequirementTypes = async (req, res) => {
+  try {
+    const { category } = req.query;
+
+    const conditions = [];
+    const params = [];
+
+    if (category) {
+      conditions.push("category = ?");
+      params.push(category);
+    }
+
+    const whereClause = conditions.length
+      ? `WHERE ${conditions.join(" AND ")}`
+      : "";
+
+    const [rows] = await db.execute(
+      `SELECT id, category, name, requires_notarization, copies_needed, sort_order
+       FROM requirement_types
+       ${whereClause}
+       ORDER BY category, sort_order ASC`,
+      params,
+    );
+
+    res.status(200).json(rows); // always an array, even when empty
+  } catch (error) {
+    console.error("Get requirement types error: ", error);
+    res.status(500).json({ error: "Database query failed", success: false });
+  }
+};
 
 export const getInternshipFiles = async (req, res) => {
   try {
-    const { id } = req.verifiedUser;
+    const { id: userId } = req.verifiedUser;
+    const { internshipId, category } = req.query;
+
+    const conditions = ["doc.user_id = ?"];
+    const params = [userId];
+
+    if (internshipId) {
+      conditions.push("doc.internship_id = ?");
+      params.push(internshipId);
+    }
+
+    if (category) {
+      conditions.push("doc.category = ?");
+      params.push(category);
+    }
 
     const [rows] = await db.execute(
-      `SELECT * FROM internship_documents
-       WHERE user_id = ?
-       `,
-      [id],
+      `SELECT 
+         doc.id, doc.internship_id, doc.file_name, doc.company_name, 
+         doc.category, doc.requirement_type_id, doc.file_type, doc.created_at,
+         rt.name AS requirement_name, rt.requires_notarization, rt.copies_needed
+       FROM internship_documents doc
+       LEFT JOIN requirement_types rt ON doc.requirement_type_id = rt.id
+       WHERE ${conditions.join(" AND ")}
+       ORDER BY doc.created_at DESC`,
+      params,
     );
 
-    const records = rows.length > 0 ? rows : null;
-
-    res.status(200).json(records);
+    res.status(200).json(rows); // always an array, even when empty
   } catch (error) {
     console.error("Get internship files error: ", error);
     res.status(500).json({ error: "Database query failed", success: false });
@@ -22,30 +73,22 @@ export const getInternshipFiles = async (req, res) => {
 };
 
 export const uploadInternshipFile = async (req, res) => {
+  let connection;
+  let uploadedStoragePath;
   try {
     const { id: userId } = req.verifiedUser;
-
-    // 1. Text fields come from req.body
-    const { file_name, company_name, category } = req.body;
-    const catLower = category?.toLowerCase();
-
-    // 2. The file comes from req.file (thanks to Multer)
+    const { file_name, company_name, requirement_type_id } = req.body;
     const file = req.file;
 
     if (!file) {
       return res.status(400).json({ error: "No file uploaded." });
     }
 
-    // 3. Validation using Multer's property names
-    const ALLOWED_TYPES = [
-      "application/pdf",
-      "text/plain",
-      "application/msword",
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      "application/vnd.ms-excel",
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "text/csv",
-    ];
+    if (!requirement_type_id) {
+      return res
+        .status(400)
+        .json({ error: "requirement_type_id is required." });
+    }
 
     if (!ALLOWED_TYPES.includes(file.mimetype)) {
       return res.status(400).json({ error: "Invalid file type." });
@@ -55,108 +98,206 @@ export const uploadInternshipFile = async (req, res) => {
       return res.status(400).json({ error: "File is too large (Max 10MB)." });
     }
 
-    if (catLower !== "before" && catLower !== "after") {
-      return res.status(400).json({
-        error: 'Category must be "Before" or "After".',
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    // 1. Gate: user must have an ONGOING internship
+    const [internships] = await connection.execute(
+      `SELECT id FROM internship_records WHERE user_id = ? AND status = 'ongoing' LIMIT 1 FOR UPDATE`,
+      [userId],
+    );
+
+    if (internships.length === 0) {
+      await connection.rollback();
+      return res.status(403).json({
+        error:
+          "You don't have an ongoing internship. Requirement uploads are only allowed during an active internship.",
       });
     }
 
-    // 4. Prepare Supabase Upload
-    const fileExt = file.originalname.split(".").pop();
-    const uploadFilePath = `requirements/${userId}/${Date.now()}.${fileExt}`;
+    const internshipId = internships[0].id;
 
-    // IMPORTANT: In Express, the file is a Buffer. Use file.buffer
-    const { data: uploadData, error: uploadError } = await supabase.storage
-      .from("eu-connect_storage")
-      .upload(uploadFilePath, file.buffer, {
-        contentType: file.mimetype, // Crucial so the browser knows how to open it
+    // 2. Validate requirement_type_id and derive category from it
+    // (never trust a client-sent "category" that might not match the requirement)
+    const [reqTypes] = await connection.execute(
+      `SELECT id, category FROM requirement_types WHERE id = ?`,
+      [requirement_type_id],
+    );
+
+    if (reqTypes.length === 0) {
+      await connection.rollback();
+      return res.status(400).json({ error: "Invalid requirement type." });
+    }
+
+    const { category: catLower } = reqTypes[0];
+
+    // 3. Upload to Supabase Storage (private bucket — no public URL)
+    const fileExt = file.originalname.split(".").pop();
+    uploadedStoragePath = `requirements/${userId}/${Date.now()}.${fileExt}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from(BUCKET)
+      .upload(uploadedStoragePath, file.buffer, {
+        contentType: file.mimetype,
       });
 
     if (uploadError) throw uploadError;
 
-    const {
-      data: { publicUrl },
-    } = supabase.storage
-      .from("eu-connect_storage")
-      .getPublicUrl(uploadFilePath);
-
-    // 5. Save to Database
-    const [result] = await db.execute(
-      `INSERT INTO internship_documents (user_id, file_name, company_name, category, file_type, url, path)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    // 4. Save to Database — no public url stored; downloads go through
+    // a signed URL generated on-demand in downloadInternshipFile
+    const [result] = await connection.execute(
+      `INSERT INTO internship_documents 
+        (user_id, internship_id, file_name, company_name, category, requirement_type_id, file_type, path)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         userId,
+        internshipId,
         file_name,
         company_name,
         catLower,
+        requirement_type_id,
         file.mimetype,
-        publicUrl,
-        uploadFilePath,
+        uploadedStoragePath,
       ],
     );
 
     if (result.affectedRows === 0) {
-      return res.status(400).json({
-        error: "Uploading file failed.",
-      });
+      await connection.rollback();
+      await supabase.storage.from(BUCKET).remove([uploadedStoragePath]);
+      return res.status(400).json({ error: "Uploading file failed." });
     }
+
+    await connection.commit();
 
     res.status(201).json({
       message: "Document uploaded successfully!",
       success: true,
     });
   } catch (error) {
+    if (connection) await connection.rollback();
+    if (uploadedStoragePath) {
+      await supabase.storage
+        .from(BUCKET)
+        .remove([uploadedStoragePath])
+        .catch(() => {});
+    }
     console.error("Upload Error:", error.message);
     res.status(500).json({ error: "Server failed to process upload." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const downloadInternshipFile = async (req, res) => {
+  try {
+    const { id: userId, role } = req.verifiedUser;
+    const { fileId } = req.params;
+
+    const [rows] = await db.execute(
+      `SELECT user_id, path, file_name, file_type FROM internship_documents WHERE id = ?`,
+      [fileId],
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "File not found." });
+    }
+
+    const doc = rows[0];
+
+    const isOwner = doc.user_id === userId;
+    const isStaff = role === "admin" || role === "department_head";
+
+    if (!isOwner && !isStaff) {
+      return res
+        .status(403)
+        .json({ error: "You don't have access to this file." });
+    }
+
+    // Bumped from 60s to 120s to give some buffer for the
+    // Server Action round trip before the client actually uses the URL
+    const { data, error } = await supabase.storage
+      .from(BUCKET)
+      .createSignedUrl(doc.path, 120);
+
+    if (error) {
+      console.error("Signed URL error:", error.message);
+      return res.status(404).json({ error: "File not found on server." });
+    }
+
+    return res.status(200).json({
+      url: data.signedUrl,
+      fileName: doc.file_name,
+    });
+  } catch (error) {
+    console.error("Download Error:", error.message);
+    res.status(500).json({ error: "Failed to retrieve file." });
   }
 };
 
 export const deleteFile = async (req, res) => {
   let connection;
   try {
-    connection = await db.getConnection();
-
-    const { id } = req.verifiedUser;
+    const { id: userId, role } = req.verifiedUser;
     const { fileId } = req.params;
-    const { filePath } = req.query;
 
-    if (!fileId || !filePath) {
-      return res.status(400).json({ error: "File ID and path are required." });
+    if (!fileId) {
+      return res.status(400).json({ error: "File ID is required." });
     }
 
+    connection = await db.getConnection();
     await connection.beginTransaction();
 
+    // Look up the record first — never trust a client-supplied path
+    const [rows] = await connection.execute(
+      `SELECT id, user_id, path FROM internship_documents WHERE id = ? FOR UPDATE`,
+      [fileId],
+    );
+
+    if (rows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "File not found." });
+    }
+
+    const doc = rows[0];
+    const isOwner = doc.user_id === userId;
+    const isAdmin = role === "admin";
+
+    if (!isOwner && !isAdmin) {
+      await connection.rollback();
+      return res.status(403).json({
+        error: "You do not have permission to delete this file.",
+      });
+    }
+
     const [result] = await connection.execute(
-      `DELETE FROM internship_documents WHERE id = ? AND user_id = ?`,
-      [fileId, id],
+      `DELETE FROM internship_documents WHERE id = ?`,
+      [fileId],
     );
 
     if (result.affectedRows === 0) {
       await connection.rollback();
-      return res.status(404).json({
-        error: "File not found or you do not have permission to delete it.",
-      });
-    }
-
-    const { error: storageError } = await supabase.storage
-      .from("eu-connect_storage")
-      .remove([filePath]);
-
-    if (storageError) {
-      await connection.rollback();
-      return res
-        .status(500)
-        .json({ error: `Storage Error: ${storageError.message}` });
+      return res.status(404).json({ error: "File not found." });
     }
 
     await connection.commit();
+
+    // Delete from storage AFTER commit succeeds — DB is source of truth,
+    // an orphaned storage object is recoverable, an orphaned DB row isn't
+    const { error: storageError } = await supabase.storage
+      .from(BUCKET)
+      .remove([doc.path]);
+
+    if (storageError) {
+      console.error("Failed to delete from storage:", storageError.message);
+    }
+
     res.status(200).json({
       message: "File deleted successfully.",
       success: true,
     });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.log("Delete file error: ", error);
+    console.error("Delete file error: ", error);
     res.status(500).json({ error: "Database query failed", success: false });
   } finally {
     if (connection) connection.release();

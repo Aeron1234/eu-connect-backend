@@ -1,4 +1,6 @@
 import { v4 as uuidv4 } from "uuid";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 /**
  * Calculates distance between two coordinates and checks if it's within radius.
@@ -42,3 +44,22 @@ export function isWithinRadius(lat1, lon1, lat2, lon2, radiusMeters = 100) {
 export function newUUID() {
   return uuidv4();
 }
+
+export const UPLOAD_ROOT = path.join(
+  process.cwd(),
+  "private-uploads",
+  "internship-documents",
+);
+
+export const ALLOWED_TYPES = [
+  "application/pdf",
+  "text/plain",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "text/csv",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+];

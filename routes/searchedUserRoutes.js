@@ -17,6 +17,10 @@ import {
   getSearchedStudentFiles,
   setSearchedStudentDtrLocation,
   getSearchedStudentDtrLocation,
+  uploadFileToSearchedStudent,
+  deleteSearchedStudentFile,
+  downloadSearchedStudentInternshipFile,
+  getEmployerUploadedFiles,
 } from "../controllers/searchedUserController.js";
 
 const searchedUserRoutes = express.Router();
@@ -48,19 +52,10 @@ searchedUserRoutes.get(
 );
 
 searchedUserRoutes.get(
-  "/searched-user/files/:searchedUserId",
-  verifyUser,
-  verifyRole(["department_head", "admin"]),
-  generalLimiter,
-  getSearchedStudentFiles,
-);
-
-searchedUserRoutes.get(
   "/searched-user/set-dtr-location/:searchedUserId",
   verifyUser,
   verifyRole(["employer", "admin"]),
   generalLimiter,
-
   getSearchedStudentDtrLocation,
 );
 
@@ -71,6 +66,47 @@ searchedUserRoutes.put(
   strictLimiter,
   upload.none(),
   setSearchedStudentDtrLocation,
+);
+
+searchedUserRoutes.get(
+  "/searched-user/files/:searchedUserId",
+  verifyUser,
+  verifyRole(["department_head", "admin"]),
+  generalLimiter,
+  getSearchedStudentFiles,
+);
+
+searchedUserRoutes.get(
+  "/searched-user/files/:fileId/:searchedUserId",
+  verifyUser,
+  verifyRole(["employer", "department_head", "admin"]), // adjust to your actual role strings
+  generalLimiter,
+  downloadSearchedStudentInternshipFile,
+);
+
+searchedUserRoutes.delete(
+  "/searched-user/files/:fileId/:searchedUserId",
+  verifyUser,
+  verifyRole(["employer", "department_head", "admin"]), // adjust to your actual role strings
+  generalLimiter,
+  deleteSearchedStudentFile,
+);
+
+searchedUserRoutes.get(
+  "/searched-user/employer-uploaded-files/:searchedUserId",
+  verifyUser,
+  verifyRole(["employer", "admin"]),
+  generalLimiter,
+  getEmployerUploadedFiles,
+);
+
+searchedUserRoutes.post(
+  "/searched-user/files/:searchedUserId",
+  verifyUser,
+  verifyRole(["employer", "admin"]),
+  strictLimiter,
+  upload.single("file"),
+  uploadFileToSearchedStudent,
 );
 
 export default searchedUserRoutes;
