@@ -20,22 +20,41 @@ import { autoCloseStaleShifts } from "./config/autoCloseStaleShifts.js";
 import internshipPostingRoutes from "./routes/internshipPostsRoutes.js";
 
 dotenv.config();
+
 const app = express();
 const httpServer = createServer(app);
 
+// Dynamic CORS configuration for both production and local dev
+const allowedOrigins = [process.env.CLIENT_URL, "http://localhost:3000"].filter(
+  Boolean,
+);
+
 const io = new Server(httpServer, {
   cors: {
-    origin: "http://localhost:3000",
-    methods: ["GET", "POST"],
+    origin: allowedOrigins,
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    credentials: true,
   },
 });
 
-app.use(cors());
+app.use(
+  cors({
+    origin: allowedOrigins,
+    credentials: true,
+  }),
+);
+
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 app.set("socketio", io);
 
+// Health check endpoint for Render
+app.get("/", (req, res) => {
+  res.status(200).send("API Service is live.");
+});
+
+// Routes
 app.use("/eu-connect/api", announcementRoutes);
 app.use("/eu-connect/api", accountRoutes);
 app.use("/eu-connect/api", internshipRecordRoutes);
@@ -49,26 +68,28 @@ app.use("/eu-connect/api", searchHistoryRoutes);
 app.use("/eu-connect/api", searchedUserRoutes);
 app.use("/eu-connect/api", internshipPostingRoutes);
 
+// Socket.io Events
 io.on("connection", (socket) => {
   console.log("A user connected:", socket.id);
 
   socket.on("join", (userId) => {
     socket.join(`user-${userId}`);
-    // console.log(`User ${userId} joined their personal room`);
   });
 
   socket.on("disconnect", () => {
-    console.log("User disconnected");
+    console.log("User disconnected:", socket.id);
   });
 });
 
+// Cron Jobs
 cron.schedule("0 * * * *", () => {
   console.log("Running autoCloseStaleShifts job...");
   autoCloseStaleShifts();
 });
 
-const PORT = process.env.PORT;
+// Port Configuration
+const PORT = process.env.PORT || 5000;
 
 httpServer.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
