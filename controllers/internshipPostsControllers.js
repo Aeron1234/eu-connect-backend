@@ -2,6 +2,7 @@ import { db } from "../config/db.js";
 import { newUUID } from "../config/helpers.js";
 
 const ALLOWED_WORK_TYPES = ["on-site", "hybrid", "remote"];
+const ALLOWED_STATUSES = ["open", "filled"];
 
 export const getInternshipPostings = async (req, res) => {
   let connection;
@@ -94,19 +95,19 @@ export const getInternshipPostings = async (req, res) => {
       postingIds,
     );
 
-    // Applications for the current requester across these postings —
+    // Favorites for the current requester across these postings —
     // only meaningful for students, but harmless to compute regardless
-    const [applications] = await connection.execute(
-      `SELECT posting_id FROM internship_applications
+    const [favorites] = await connection.execute(
+      `SELECT posting_id FROM internship_favorites
        WHERE student_id = ? AND posting_id IN (${placeholders})`,
       [requesterId, ...postingIds],
     );
-    const appliedPostingIds = new Set(applications.map((a) => a.posting_id));
+    const favoritedPostingIds = new Set(favorites.map((f) => f.posting_id));
 
     const records = postings.map((posting) => ({
       ...posting,
       isOwner: posting.employer_id === requesterId,
-      isApplied: appliedPostingIds.has(posting.id),
+      isFavorited: favoritedPostingIds.has(posting.id),
       courses: courseLinks
         .filter((c) => c.posting_id === posting.id)
         .map((c) => ({
@@ -135,7 +136,6 @@ export const getInternshipPostings = async (req, res) => {
     if (connection) connection.release();
   }
 };
-
 export const createInternshipPosting = async (req, res) => {
   let connection;
   try {
@@ -256,6 +256,312 @@ export const createInternshipPosting = async (req, res) => {
     if (connection) await connection.rollback();
     console.error("Create internship posting error:", error);
     return res.status(500).json({ error: "Server failed to create posting." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const updateInternshipPosting = async (req, res) => {
+  let connection;
+  try {
+    const { id: requesterId } = req.verifiedUser;
+    const { postingId } = req.params;
+
+    if (!postingId) {
+      return res.status(400).json({ error: "postingId is required." });
+    }
+
+    const {
+      company_name,
+      position,
+      vacancies,
+      location,
+      work_type,
+      duration_hours,
+      description,
+      requirements,
+      contact_name,
+      contact_email,
+      contact_phone,
+      contact_website,
+      status,
+      course_ids, // optional: array of course ids, replaces the existing set if provided
+    } = req.body;
+
+    if (work_type !== undefined && !ALLOWED_WORK_TYPES.includes(work_type)) {
+      return res.status(400).json({
+        error: `work_type must be one of: ${ALLOWED_WORK_TYPES.join(", ")}.`,
+      });
+    }
+
+    if (status !== undefined && !ALLOWED_STATUSES.includes(status)) {
+      return res.status(400).json({
+        error: `status must be one of: ${ALLOWED_STATUSES.join(", ")}.`,
+      });
+    }
+
+    let vacancyCount;
+    if (vacancies !== undefined) {
+      vacancyCount = parseInt(vacancies);
+      if (!Number.isInteger(vacancyCount) || vacancyCount < 1) {
+        return res
+          .status(400)
+          .json({ error: "vacancies must be a positive integer." });
+      }
+    }
+
+    if (
+      course_ids !== undefined &&
+      (!Array.isArray(course_ids) || course_ids.length === 0)
+    ) {
+      return res
+        .status(400)
+        .json({ error: "course_ids must be a non-empty array if provided." });
+    }
+
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    const [rows] = await connection.execute(
+      `SELECT id, employer_id, deleted_at FROM internship_postings WHERE id = ? FOR UPDATE`,
+      [postingId],
+    );
+
+    if (rows.length === 0 || rows[0].deleted_at !== null) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Posting not found." });
+    }
+
+    const posting = rows[0];
+
+    // Same ownership rule as delete — only the original poster can edit
+    if (posting.employer_id !== requesterId) {
+      await connection.rollback();
+      return res.status(403).json({
+        error: "You can only edit postings you created yourself.",
+      });
+    }
+
+    // Validate course ids actually exist before swapping the join table
+    if (course_ids !== undefined) {
+      const coursePlaceholders = course_ids.map(() => "?").join(",");
+      const [validCourses] = await connection.execute(
+        `SELECT id FROM courses WHERE id IN (${coursePlaceholders})`,
+        course_ids,
+      );
+
+      if (validCourses.length !== course_ids.length) {
+        await connection.rollback();
+        return res
+          .status(400)
+          .json({ error: "One or more selected courses are invalid." });
+      }
+    }
+
+    // Build the SET clause dynamically from whatever fields were sent
+    const fieldMap = {
+      company_name,
+      position,
+      vacancies: vacancyCount,
+      location,
+      work_type,
+      duration_hours,
+      description,
+      requirements,
+      contact_name,
+      contact_email,
+      contact_phone,
+      contact_website,
+      status,
+    };
+
+    const setClauses = [];
+    const setValues = [];
+
+    for (const [column, value] of Object.entries(fieldMap)) {
+      if (value !== undefined) {
+        setClauses.push(`${column} = ?`);
+        setValues.push(value);
+      }
+    }
+
+    if (setClauses.length === 0 && course_ids === undefined) {
+      await connection.rollback();
+      return res.status(400).json({ error: "No fields provided to update." });
+    }
+
+    // Bump updated_at whenever anything actually changed — including a
+    // course-only edit, which the plain column loop above wouldn't catch
+    if (setClauses.length > 0 || course_ids !== undefined) {
+      if (setClauses.length > 0) {
+        setClauses.push("updated_at = CURRENT_TIMESTAMP");
+        await connection.execute(
+          `UPDATE internship_postings SET ${setClauses.join(", ")} WHERE id = ?`,
+          [...setValues, postingId],
+        );
+      } else {
+        await connection.execute(
+          `UPDATE internship_postings SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+          [postingId],
+        );
+      }
+    }
+
+    // Replace course links wholesale if a new set was provided
+    if (course_ids !== undefined) {
+      await connection.execute(
+        `DELETE FROM internship_posting_courses WHERE posting_id = ?`,
+        [postingId],
+      );
+      const courseValues = course_ids.map((courseId) => [postingId, courseId]);
+      await connection.query(
+        `INSERT INTO internship_posting_courses (posting_id, course_id) VALUES ?`,
+        [courseValues],
+      );
+    }
+
+    await connection.commit();
+
+    return res.status(200).json({
+      message: "Posting updated successfully.",
+      success: true,
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Update internship posting error:", error);
+    return res.status(500).json({ error: "Failed to update posting." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const deleteInternshipPosting = async (req, res) => {
+  let connection;
+  try {
+    const { id: requesterId, role } = req.verifiedUser;
+    const { postingId } = req.params;
+
+    if (!postingId) {
+      return res.status(400).json({ error: "postingId is required." });
+    }
+
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    const [rows] = await connection.execute(
+      `SELECT id, employer_id, deleted_at FROM internship_postings WHERE id = ? FOR UPDATE`,
+      [postingId],
+    );
+
+    if (rows.length === 0 || rows[0].deleted_at !== null) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Posting not found." });
+    }
+
+    const posting = rows[0];
+
+    // Only the employer who created the posting can delete it —
+    // admins are not given a moderation override here, per the requirement
+    // that posting ownership is exclusive to the original poster
+    if (posting.employer_id !== requesterId) {
+      await connection.rollback();
+      return res.status(403).json({
+        error: "You can only delete postings you created yourself.",
+      });
+    }
+
+    const [result] = await connection.execute(
+      `UPDATE internship_postings SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [postingId],
+    );
+
+    if (result.affectedRows === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Posting not found." });
+    }
+
+    await connection.commit();
+
+    return res.status(200).json({
+      message: "Posting deleted successfully.",
+      success: true,
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Delete internship posting error:", error);
+    return res.status(500).json({ error: "Failed to delete posting." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const toggleInternshipFavorite = async (req, res) => {
+  let connection;
+  try {
+    const { id: studentId } = req.verifiedUser;
+    const { postingId } = req.params;
+
+    if (!postingId) {
+      return res.status(400).json({ error: "postingId is required." });
+    }
+
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    const [rows] = await connection.execute(
+      `SELECT id, deleted_at FROM internship_postings WHERE id = ? FOR UPDATE`,
+      [postingId],
+    );
+
+    if (rows.length === 0 || rows[0].deleted_at !== null) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Posting not found." });
+    }
+
+    const [existing] = await connection.execute(
+      `SELECT id FROM internship_favorites WHERE posting_id = ? AND student_id = ?`,
+      [postingId, studentId],
+    );
+
+    if (existing.length > 0) {
+      await connection.execute(
+        `DELETE FROM internship_favorites WHERE id = ?`,
+        [existing[0].id],
+      );
+
+      await connection.commit();
+
+      return res.status(200).json({
+        message: "Removed from favorites.",
+        success: true,
+        isFavorited: false,
+      });
+    }
+
+    const favoriteId = newUUID();
+
+    const [result] = await connection.execute(
+      `INSERT INTO internship_favorites (id, posting_id, student_id) VALUES (?, ?, ?)`,
+      [favoriteId, postingId, studentId],
+    );
+
+    if (result.affectedRows === 0) {
+      await connection.rollback();
+      return res.status(400).json({ error: "Failed to add favorite." });
+    }
+
+    await connection.commit();
+
+    return res.status(201).json({
+      message: "Added to favorites.",
+      success: true,
+      isFavorited: true,
+      id: favoriteId,
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Toggle internship favorite error:", error);
+    return res.status(500).json({ error: "Failed to update favorite status." });
   } finally {
     if (connection) connection.release();
   }

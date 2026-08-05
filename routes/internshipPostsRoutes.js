@@ -10,7 +10,10 @@ import {
 } from "../middleware/rateLimiter.js";
 import {
   createInternshipPosting,
+  deleteInternshipPosting,
   getInternshipPostings,
+  toggleInternshipFavorite,
+  updateInternshipPosting,
 } from "../controllers/internshipPostsControllers.js";
 
 const internshipPostingRoutes = express.Router();
@@ -27,8 +30,32 @@ internshipPostingRoutes.post(
   "/internship-postings",
   verifyUser,
   verifyRole(["employer"]),
-  strictLimiter,
+  // strictLimiter,
   createInternshipPosting,
+);
+
+internshipPostingRoutes.put(
+  "/internship-postings/:postingId",
+  verifyUser,
+  verifyRole(["employer"]),
+  mediumLimiter,
+  updateInternshipPosting,
+);
+
+internshipPostingRoutes.delete(
+  "/internship-postings/:postingId",
+  verifyUser,
+  verifyRole(["employer"]),
+  mediumLimiter,
+  deleteInternshipPosting,
+);
+
+internshipPostingRoutes.post(
+  "/internship-postings/apply/:postingId",
+  verifyUser,
+  verifyRole(["student"]),
+  strictLimiter,
+  toggleInternshipFavorite,
 );
 
 export default internshipPostingRoutes;

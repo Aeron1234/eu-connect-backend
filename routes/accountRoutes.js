@@ -49,7 +49,7 @@ accountRoutes.get(
 accountRoutes.get(
   "/courses",
   verifyUser,
-  verifyRole(["student", "department_head", "admin"]),
+  verifyRole(["student", "employer", "department_head", "admin"]),
   generalLimiter,
   getCourses,
 );
