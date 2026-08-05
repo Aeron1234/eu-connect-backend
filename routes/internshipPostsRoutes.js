@@ -30,7 +30,7 @@ internshipPostingRoutes.post(
   "/internship-postings",
   verifyUser,
   verifyRole(["employer"]),
-  // strictLimiter,
+  strictLimiter,
   createInternshipPosting,
 );
 
