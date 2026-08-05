@@ -99,7 +99,7 @@ export const getInternshipPostings = async (req, res) => {
     // only meaningful for students, but harmless to compute regardless
     const [favorites] = await connection.execute(
       `SELECT posting_id FROM internship_favorites
-       WHERE student_id = ? AND posting_id IN (${placeholders})`,
+   WHERE student_id = ? AND posting_id IN (${placeholders})`,
       [requesterId, ...postingIds],
     );
     const favoritedPostingIds = new Set(favorites.map((f) => f.posting_id));
