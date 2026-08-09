@@ -315,14 +315,18 @@ export const createStudentEvaluation = async (req, res) => {
   let connection;
   try {
     connection = await db.getConnection();
+    await connection.beginTransaction();
 
-    // Fetch active ongoing internship record and employer's profile details
+    // Fetch active ongoing internship record — lock it, since we're about
+    // to check who's allowed to evaluate this student
     const [records] = await connection.execute(
-      `SELECT id, company_name FROM internship_records WHERE user_id = ? AND status = 'ongoing' LIMIT 1`,
+      `SELECT id, company_name, employer_id FROM internship_records 
+       WHERE user_id = ? AND status = 'ongoing' LIMIT 1 FOR UPDATE`,
       [student_id],
     );
 
     if (records.length === 0) {
+      await connection.rollback();
       return res.status(404).json({
         error:
           "Submission rejected. This student does not have an active, 'ongoing' internship record.",
@@ -331,6 +335,16 @@ export const createStudentEvaluation = async (req, res) => {
 
     const internship_record_id = records[0].id;
     const companyName = records[0].company_name;
+
+    // Only this internship's accepted supervisor can submit an evaluation —
+    // same restriction as certificate uploads and DTR location
+    if (records[0].employer_id !== evaluated_by) {
+      await connection.rollback();
+      return res.status(403).json({
+        error:
+          "Only this student's accepted supervisor can submit their evaluation.",
+      });
+    }
 
     const [employerProfile] = await connection.execute(
       `SELECT first_name, last_name FROM user_profiles WHERE user_id = ?`,
@@ -343,7 +357,6 @@ export const createStudentEvaluation = async (req, res) => {
         : "Your Supervisor";
 
     const masterId = newUUID();
-    await connection.beginTransaction();
 
     // 1. Insert Master Entry as 'pending'
     const masterQuery = `
@@ -383,7 +396,6 @@ export const createStudentEvaluation = async (req, res) => {
     const notifTitle = "Verify Your Evaluation";
     const notifMessage = `${employerName} from ${companyName} has submitted your internship evaluation. Please confirm this was your actual supervisor to finalize your grade.`;
 
-    // 🌟 UPDATED: Save both the integer mapping layout and our exact string deep-link UUID column
     await connection.execute(
       `INSERT INTO notifications (user_id, sender_id, type, title, message, link, link_uuid) VALUES (?, ?, 'submission', ?, ?, ?, ?)`,
       [
@@ -391,8 +403,8 @@ export const createStudentEvaluation = async (req, res) => {
         evaluated_by,
         notifTitle,
         notifMessage,
-        internship_record_id, // link (int)
-        masterId, // link_uuid (char/string)
+        internship_record_id,
+        masterId,
       ],
     );
 
@@ -406,7 +418,7 @@ export const createStudentEvaluation = async (req, res) => {
         message: notifMessage,
         type: "submission",
         link: internship_record_id,
-        link_uuid: masterId, // 🌟 Added payload field for frontend precise routing navigation
+        link_uuid: masterId,
       });
     }
 
@@ -422,79 +434,6 @@ export const createStudentEvaluation = async (req, res) => {
     res.status(500).json({
       success: false,
       error: "Failed to process evaluation submission safely.",
-    });
-  } finally {
-    if (connection) connection.release();
-  }
-};
-
-export const confirmStudentEvaluation = async (req, res) => {
-  const { id: studentId } = req.verifiedUser; // Security gate: ensure student is verifying their own record
-  const { evaluationId } = req.params; // Passed via link query variable
-
-  if (!evaluationId) {
-    return res.status(400).json({ error: "Evaluation ID is required." });
-  }
-
-  let connection;
-  try {
-    connection = await db.getConnection();
-
-    await connection.beginTransaction();
-
-    // 1. Verify the evaluation master belongs to this student and is pending
-    const [evaluationCheck] = await connection.execute(
-      `SELECT m.status, ir.user_id 
-       FROM student_evaluation_masters m
-       INNER JOIN internship_records ir ON m.internship_record_id = ir.id
-       WHERE m.id = ?`,
-      [evaluationId],
-    );
-
-    if (evaluationCheck.length === 0) {
-      await connection.rollback();
-      return res.status(404).json({ error: "Evaluation record not found." });
-    }
-
-    if (evaluationCheck[0].user_id !== studentId) {
-      await connection.rollback();
-      return res.status(403).json({
-        error: "Unauthorized. You can only verify your own evaluation profile.",
-      });
-    }
-
-    if (evaluationCheck[0].status !== "pending") {
-      await connection.rollback();
-      return res.status(400).json({
-        error: "This evaluation has already been verified and posted.",
-      });
-    }
-
-    // 2. Flip evaluation status to completed
-    await connection.execute(
-      `UPDATE student_evaluation_masters SET status = 'completed' WHERE id = ?`,
-      [evaluationId],
-    );
-
-    // 3. Mark the verification notification as read
-    await connection.execute(
-      `UPDATE notifications SET is_read = 1 WHERE link = ? AND type = 'submission'`,
-      [evaluationId],
-    );
-
-    await connection.commit();
-
-    res.status(200).json({
-      success: true,
-      message:
-        "Evaluation verified successfully! Your internship grades are now officially posted.",
-    });
-  } catch (error) {
-    if (connection) await connection.rollback();
-    console.log("Confirm student evaluation error:", error);
-    res.status(500).json({
-      success: false,
-      error: "Database transaction validation failed.",
     });
   } finally {
     if (connection) connection.release();
@@ -717,6 +656,482 @@ export const deleteStudentEvaluation = async (req, res) => {
       success: false,
       error: "Database transaction validation failed.",
       details: error.message,
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const respondToStudentEvaluation = async (req, res) => {
+  const { id: studentId } = req.verifiedUser; // Security gate: ensure student is verifying their own record
+  const { evaluationId } = req.params;
+  const { decision } = req.body; // "completed" | "disputed"
+
+  if (!evaluationId) {
+    return res.status(400).json({ error: "Evaluation ID is required." });
+  }
+
+  if (!["completed", "disputed"].includes(decision)) {
+    return res
+      .status(400)
+      .json({ error: "decision must be 'completed' or 'disputed'." });
+  }
+
+  let connection;
+  try {
+    connection = await db.getConnection();
+
+    await connection.beginTransaction();
+
+    // 1. Verify the evaluation master belongs to this student and is pending
+    const [evaluationCheck] = await connection.execute(
+      `SELECT m.status, ir.user_id 
+       FROM student_evaluation_masters m
+       INNER JOIN internship_records ir ON m.internship_record_id = ir.id
+       WHERE m.id = ?`,
+      [evaluationId],
+    );
+
+    if (evaluationCheck.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Evaluation record not found." });
+    }
+
+    if (evaluationCheck[0].user_id !== studentId) {
+      await connection.rollback();
+      return res.status(403).json({
+        error: "Unauthorized. You can only respond to your own evaluation.",
+      });
+    }
+
+    if (evaluationCheck[0].status !== "pending") {
+      await connection.rollback();
+      return res.status(400).json({
+        error: "This evaluation has already been responded to.",
+      });
+    }
+
+    const newStatus = decision; // decision now maps 1:1 to the enum value
+
+    // 2. Flip evaluation status
+    await connection.execute(
+      `UPDATE student_evaluation_masters SET status = ? WHERE id = ?`,
+      [newStatus, evaluationId],
+    );
+
+    // 3. Mark the verification notification as read either way —
+    // the student has acted on it, whether by confirming or disputing
+    await connection.execute(
+      `UPDATE notifications SET is_read = 1 WHERE link = ? AND type = 'submission'`,
+      [evaluationId],
+    );
+
+    await connection.commit();
+
+    const message =
+      decision === "completed"
+        ? "Evaluation verified successfully! Your internship grades are now officially posted."
+        : "Evaluation disputed. This has been flagged for review.";
+
+    res.status(200).json({ success: true, message, status: newStatus });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Respond to student evaluation error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Database transaction validation failed.",
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const restoreDisputedEvaluation = async (req, res) => {
+  const { id: studentId } = req.verifiedUser; // Security gate: student can only restore their own record
+  const { evaluationId } = req.params;
+
+  if (!evaluationId) {
+    return res.status(400).json({ error: "Evaluation ID is required." });
+  }
+
+  let connection;
+  try {
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    // 1. Verify the evaluation master belongs to this student and is currently disputed
+    const [evaluationCheck] = await connection.execute(
+      `SELECT m.status, ir.user_id 
+       FROM student_evaluation_masters m
+       INNER JOIN internship_records ir ON m.internship_record_id = ir.id
+       WHERE m.id = ?`,
+      [evaluationId],
+    );
+
+    if (evaluationCheck.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Evaluation record not found." });
+    }
+
+    if (evaluationCheck[0].user_id !== studentId) {
+      await connection.rollback();
+      return res.status(403).json({
+        error: "Unauthorized. You can only restore your own evaluation.",
+      });
+    }
+
+    if (evaluationCheck[0].status !== "disputed") {
+      await connection.rollback();
+      return res.status(400).json({
+        error: "Only a disputed evaluation can be restored.",
+      });
+    }
+
+    // 2. Flip status back to pending — the student can review and
+    // confirm/dispute it again from a clean slate
+    await connection.execute(
+      `UPDATE student_evaluation_masters SET status = 'pending' WHERE id = ?`,
+      [evaluationId],
+    );
+
+    // 3. Re-open the original notification so it shows as unread/pending
+    // again in whatever inbox surfaces it
+    await connection.execute(
+      `UPDATE notifications SET is_read = 0 WHERE link = ? AND type = 'submission'`,
+      [evaluationId],
+    );
+
+    await connection.commit();
+
+    res.status(200).json({
+      success: true,
+      message: "Evaluation restored to pending. You can review it again.",
+      status: "pending",
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Restore disputed evaluation error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Database transaction validation failed.",
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const getDisputedStudentEvaluations = async (req, res) => {
+  const { id: studentId } = req.verifiedUser; // Security gate: only the student's own disputed records
+
+  const POINTS_PER_CRITERION = 5;
+
+  let connection;
+  try {
+    connection = await db.getConnection();
+
+    const query = `
+      SELECT 
+        m.id AS evaluation_id,
+        m.status AS evaluation_status,
+        m.other_remarks AS comments,
+        m.created_at AS submitted_date,
+        m.evaluated_by AS evaluator_id,
+        ir.company_name AS company,
+        CONCAT(up.first_name, ' ', up.last_name) AS evaluator,
+        c.category AS breakdown_label,
+        s.score AS breakdown_score
+      FROM student_evaluation_masters AS m
+      JOIN internship_records AS ir ON m.internship_record_id = ir.id
+      JOIN student_evaluation_scores AS s ON s.evaluation_master_id = m.id
+      JOIN student_evaluation_criteria AS c ON s.criterion_id = c.id
+      JOIN user_profiles AS up ON m.evaluated_by = up.user_id
+      WHERE ir.user_id = ? AND m.status = 'disputed'
+      ORDER BY m.created_at DESC, c.category ASC
+    `;
+
+    const [rows] = await connection.execute(query, [studentId]);
+
+    // 🛡️ Guard Clause: If nothing is disputed, return an empty list gracefully
+    if (!rows || rows.length === 0) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+      });
+    }
+
+    const evaluationsGroup = {};
+
+    rows.forEach((row) => {
+      const evalId = row.evaluation_id;
+
+      if (!evaluationsGroup[evalId]) {
+        const dateObj = new Date(row.submitted_date);
+
+        const formattedDate = dateObj.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        });
+
+        const formattedPeriod = dateObj.toLocaleDateString("en-US", {
+          month: "long",
+          year: "numeric",
+        });
+
+        evaluationsGroup[evalId] = {
+          id: evalId,
+          type: "Performance Evaluation",
+          status:
+            row.evaluation_status.charAt(0).toUpperCase() +
+            row.evaluation_status.slice(1),
+          period: formattedPeriod,
+          evaluator: row.evaluator,
+          evaluator_id: row.evaluator_id,
+          company: row.company,
+          submittedDate: formattedDate,
+          comments: row.comments || "",
+          breakdown: [],
+        };
+      }
+
+      let existingCategory = evaluationsGroup[evalId].breakdown.find(
+        (b) => b.label === row.breakdown_label,
+      );
+
+      const currentScore = Number(row.breakdown_score);
+
+      if (existingCategory) {
+        existingCategory.score += currentScore;
+        existingCategory.max += POINTS_PER_CRITERION;
+      } else {
+        evaluationsGroup[evalId].breakdown.push({
+          label: row.breakdown_label,
+          score: currentScore,
+          max: POINTS_PER_CRITERION,
+        });
+      }
+    });
+
+    const evaluationsList = Object.values(evaluationsGroup);
+
+    return res.status(200).json({
+      success: true,
+      data: evaluationsList,
+    });
+  } catch (error) {
+    console.error("Get disputed student evaluations error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to compile disputed evaluation records.",
+      details: error.message,
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const getAllStudentEvaluations = async (req, res) => {
+  const { id: studentId } = req.verifiedUser;
+
+  const POINTS_PER_CRITERION = 5;
+
+  let connection;
+  try {
+    connection = await db.getConnection();
+
+    // 1. Evaluations ABOUT the student, from their employer — only once confirmed
+    const receivedQuery = `
+      SELECT 
+        m.id AS evaluation_id,
+        m.other_remarks AS comments,
+        m.created_at AS submitted_date,
+        m.evaluated_by AS actor_id,
+        ir.company_name AS company,
+        CONCAT(up.first_name, ' ', up.last_name) AS actor_name,
+        c.category AS breakdown_label,
+        s.score AS breakdown_score
+      FROM student_evaluation_masters AS m
+      JOIN internship_records AS ir ON m.internship_record_id = ir.id
+      JOIN student_evaluation_scores AS s ON s.evaluation_master_id = m.id
+      JOIN student_evaluation_criteria AS c ON s.criterion_id = c.id
+      JOIN user_profiles AS up ON m.evaluated_by = up.user_id
+      WHERE ir.user_id = ? AND m.status = 'completed'
+      ORDER BY m.created_at DESC, c.category ASC
+    `;
+
+    // 2. Evaluations the student submitted ABOUT their supervisor
+    const givenQuery = `
+      SELECT 
+        m.id AS evaluation_id,
+        m.other_remarks AS comments,
+        m.created_at AS submitted_date,
+        m.employer_id AS actor_id,
+        ir.company_name AS company,
+        CONCAT(up.first_name, ' ', up.last_name) AS actor_name,
+        c.category AS breakdown_label,
+        s.score AS breakdown_score
+      FROM employer_evaluation_masters AS m
+      JOIN internship_records AS ir ON m.internship_record_id = ir.id
+      JOIN employer_evaluation_scores AS s ON s.evaluation_master_id = m.id
+      JOIN employer_evaluation_criteria AS c ON s.criterion_id = c.id
+      LEFT JOIN user_profiles AS up ON m.employer_id = up.user_id
+      WHERE m.student_id = ?
+      ORDER BY m.created_at DESC, c.category ASC
+    `;
+
+    const [receivedRows] = await connection.execute(receivedQuery, [studentId]);
+    const [givenRows] = await connection.execute(givenQuery, [studentId]);
+
+    function groupRows(rows, type, actorLabel) {
+      const group = {};
+
+      rows.forEach((row) => {
+        const evalId = row.evaluation_id;
+
+        if (!group[evalId]) {
+          const dateObj = new Date(row.submitted_date);
+
+          const formattedDate = dateObj.toLocaleDateString("en-US", {
+            month: "short",
+            day: "numeric",
+            year: "numeric",
+          });
+
+          const formattedPeriod = dateObj.toLocaleDateString("en-US", {
+            month: "long",
+            year: "numeric",
+          });
+
+          group[evalId] = {
+            id: evalId,
+            type,
+            status: "Confirmed",
+            period: formattedPeriod,
+            evaluator:
+              actorLabel === "self"
+                ? "You"
+                : row.actor_name || "Your Supervisor",
+            evaluator_id: row.actor_id,
+            company: row.company,
+            submittedDate: formattedDate,
+            comments: row.comments || "",
+            breakdown: [],
+          };
+        }
+
+        let existingCategory = group[evalId].breakdown.find(
+          (b) => b.label === row.breakdown_label,
+        );
+
+        const currentScore = Number(row.breakdown_score);
+
+        if (existingCategory) {
+          existingCategory.score += currentScore;
+          existingCategory.max += POINTS_PER_CRITERION;
+        } else {
+          group[evalId].breakdown.push({
+            label: row.breakdown_label,
+            score: currentScore,
+            max: POINTS_PER_CRITERION,
+          });
+        }
+      });
+
+      return Object.values(group);
+    }
+
+    const received = groupRows(
+      receivedRows,
+      "Performance Evaluation",
+      "employer",
+    );
+    const given = groupRows(givenRows, "Supervisor Evaluation", "self");
+
+    const combined = [...received, ...given].sort(
+      (a, b) => new Date(b.submittedDate) - new Date(a.submittedDate),
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: combined,
+    });
+  } catch (error) {
+    console.error("Get all student evaluations error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to compile evaluation history.",
+      details: error.message,
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const reviewDisputedEvaluation = async (req, res) => {
+  const { id: reviewerId, role } = req.verifiedUser; // Security gate: only staff can review
+  const { evaluationId } = req.params;
+  const { review_notes } = req.body;
+
+  if (!evaluationId) {
+    return res.status(400).json({ error: "Evaluation ID is required." });
+  }
+
+  if (!["department_head", "admin"].includes(role)) {
+    return res.status(403).json({
+      error:
+        "Only a department head or admin can review a disputed evaluation.",
+    });
+  }
+
+  let connection;
+  try {
+    connection = await db.getConnection();
+
+    await connection.beginTransaction();
+
+    // 1. Verify the evaluation exists and is currently disputed —
+    // reviewing doesn't require ownership of the internship, since this
+    // is a staff-side action, not the student's own
+    const [evaluationCheck] = await connection.execute(
+      `SELECT status FROM student_evaluation_masters WHERE id = ? FOR UPDATE`,
+      [evaluationId],
+    );
+
+    if (evaluationCheck.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Evaluation record not found." });
+    }
+
+    if (evaluationCheck[0].status !== "disputed") {
+      await connection.rollback();
+      return res.status(400).json({
+        error: "Only a disputed evaluation can be marked as reviewed.",
+      });
+    }
+
+    // 2. Record who reviewed it, when, and any notes — this does NOT
+    // change `status`. Reviewing acknowledges the dispute was looked at;
+    // it doesn't overturn it. The student's dispute still stands unless
+    // they themselves restore it via restoreDisputedEvaluation.
+    await connection.execute(
+      `UPDATE student_evaluation_masters 
+       SET reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP, review_notes = ?
+       WHERE id = ?`,
+      [reviewerId, review_notes || null, evaluationId],
+    );
+
+    await connection.commit();
+
+    res.status(200).json({
+      success: true,
+      message: "Disputed evaluation marked as reviewed.",
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Review disputed evaluation error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Database transaction validation failed.",
     });
   } finally {
     if (connection) connection.release();

@@ -420,11 +420,41 @@ export const updateInternshipPosting = async (req, res) => {
       );
     }
 
+    // Re-fetch the full posting + its current courses so the client
+    // gets back the true persisted state, not just a success flag
+    const [[updatedPosting]] = await connection.execute(
+      `SELECT id, employer_id, company_name, position, vacancies, location,
+              work_type, duration_hours, description, requirements,
+              contact_name, contact_email, contact_phone, contact_website,
+              status, created_at, updated_at
+       FROM internship_postings WHERE id = ?`,
+      [postingId],
+    );
+
+    const [updatedCourseLinks] = await connection.execute(
+      `SELECT c.id AS course_id, c.course_name, c.short_name
+       FROM internship_posting_courses ipc
+       JOIN courses c ON ipc.course_id = c.id
+       WHERE ipc.posting_id = ?`,
+      [postingId],
+    );
+
     await connection.commit();
+
+    const responseData = {
+      ...updatedPosting,
+      isOwner: true, // requester was just confirmed as the owner above
+      courses: updatedCourseLinks.map((c) => ({
+        id: c.course_id,
+        name: c.course_name,
+        shortName: c.short_name,
+      })),
+    };
 
     return res.status(200).json({
       message: "Posting updated successfully.",
       success: true,
+      data: responseData,
     });
   } catch (error) {
     if (connection) await connection.rollback();

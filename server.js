@@ -18,6 +18,9 @@ import searchHistoryRoutes from "./routes/searchhistoryRoutes.js";
 import searchedUserRoutes from "./routes/searchedUserRoutes.js";
 import { autoCloseStaleShifts } from "./config/autoCloseStaleShifts.js";
 import internshipPostingRoutes from "./routes/internshipPostsRoutes.js";
+import supervisorRequestRoutes from "./routes/supervisorRequestRoutes.js";
+import employerEvaluationsRoutes from "./routes/employerEvaluationsRoutes.js";
+import mapRoutes from "./routes/mapRoutes.js";
 
 dotenv.config();
 
@@ -67,6 +70,9 @@ app.use("/eu-connect/api", dashboardStatsRoutes);
 app.use("/eu-connect/api", searchHistoryRoutes);
 app.use("/eu-connect/api", searchedUserRoutes);
 app.use("/eu-connect/api", internshipPostingRoutes);
+app.use("/eu-connect/api", supervisorRequestRoutes);
+app.use("/eu-connect/api", employerEvaluationsRoutes);
+app.use("/eu-connect/api", mapRoutes);
 
 // Socket.io Events
 io.on("connection", (socket) => {
@@ -88,7 +94,7 @@ cron.schedule("0 * * * *", () => {
 });
 
 // Port Configuration
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 7000;
 
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);

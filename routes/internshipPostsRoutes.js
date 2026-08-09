@@ -17,6 +17,7 @@ import {
 } from "../controllers/internshipPostsControllers.js";
 
 const internshipPostingRoutes = express.Router();
+const upload = multer();
 
 internshipPostingRoutes.get(
   "/internship-postings",
@@ -30,6 +31,7 @@ internshipPostingRoutes.post(
   "/internship-postings",
   verifyUser,
   verifyRole(["employer"]),
+  upload.none(),
   strictLimiter,
   createInternshipPosting,
 );
@@ -38,6 +40,7 @@ internshipPostingRoutes.put(
   "/internship-postings/:postingId",
   verifyUser,
   verifyRole(["employer"]),
+  upload.none(),
   mediumLimiter,
   updateInternshipPosting,
 );
@@ -51,7 +54,7 @@ internshipPostingRoutes.delete(
 );
 
 internshipPostingRoutes.post(
-  "/internship-postings/apply/:postingId",
+  "/internship-postings/toggle-favorite/:postingId",
   verifyUser,
   verifyRole(["student"]),
   strictLimiter,

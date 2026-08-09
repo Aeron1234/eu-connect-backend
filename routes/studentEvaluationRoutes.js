@@ -10,9 +10,14 @@ import {
 import {
   createStudentEvaluation,
   deleteStudentEvaluation,
+  getAllStudentEvaluations,
+  getDisputedStudentEvaluations,
   getPastStudentEvaluations,
   getStudentCompleteEvaluations,
   getStudentEvaluationCriteria,
+  respondToStudentEvaluation,
+  restoreDisputedEvaluation,
+  reviewDisputedEvaluation,
 } from "../controllers/studentEvaluationControllers.js";
 
 const studentEvaluationRoutes = express.Router();
@@ -55,6 +60,46 @@ studentEvaluationRoutes.delete(
   verifyRole(["employer", "admin"]),
   mediumLimiter,
   deleteStudentEvaluation,
+);
+
+studentEvaluationRoutes.patch(
+  "/evaluations/respond/:evaluationId",
+  verifyUser,
+  verifyRole(["student"]),
+  generalLimiter,
+  respondToStudentEvaluation,
+);
+
+studentEvaluationRoutes.patch(
+  "/evaluations/restore/:evaluationId",
+  verifyUser,
+  verifyRole(["student"]),
+  generalLimiter,
+  restoreDisputedEvaluation,
+);
+
+studentEvaluationRoutes.get(
+  "/evaluations/disputed",
+  verifyUser,
+  verifyRole(["student"]),
+  generalLimiter,
+  getDisputedStudentEvaluations,
+);
+
+studentEvaluationRoutes.get(
+  "/evaluations/all",
+  verifyUser,
+  verifyRole(["student"]),
+  generalLimiter,
+  getAllStudentEvaluations,
+);
+
+studentEvaluationRoutes.patch(
+  "/evaluations/:evaluationId/review",
+  verifyUser,
+  verifyRole(["department_head", "admin"]),
+  generalLimiter,
+  reviewDisputedEvaluation,
 );
 
 export default studentEvaluationRoutes;

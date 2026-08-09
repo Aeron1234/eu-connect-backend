@@ -54,7 +54,7 @@ searchedUserRoutes.get(
 searchedUserRoutes.get(
   "/searched-user/set-dtr-location/:searchedUserId",
   verifyUser,
-  verifyRole(["employer", "admin"]),
+  verifyRole(["employer", "department_head", "admin"]),
   generalLimiter,
   getSearchedStudentDtrLocation,
 );
@@ -62,9 +62,9 @@ searchedUserRoutes.get(
 searchedUserRoutes.put(
   "/searched-user/set-dtr-location/:searchedUserId",
   verifyUser,
-  verifyRole(["employer", "admin"]),
-  strictLimiter,
+  verifyRole(["employer", "department_head", "admin"]),
   upload.none(),
+  strictLimiter,
   setSearchedStudentDtrLocation,
 );
 
