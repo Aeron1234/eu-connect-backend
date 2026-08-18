@@ -421,8 +421,9 @@ export const markInternshipFinished = async (req, res) => {
 
     const [recordRows] = await connection.execute(
       `SELECT ir.user_id, ir.company_name, ir.company_address, ir.industry, ir.internship_position, ir.status,
-              ir.total_hours, ir.accumulated_hours, ir.date_started, ir.academic_year,
-              sai.department_id, sai.course_id
+              ir.total_hours, ir.accumulated_hours, ir.date_started, ir.academic_year, ir.employer_id,
+              sai.department_id, sai.course_id,
+              emp.first_name AS employer_first_name, emp.last_name AS employer_last_name
        FROM internship_records_with_ay ir
        INNER JOIN (
          SELECT sai1.*
@@ -433,6 +434,7 @@ export const markInternshipFinished = async (req, res) => {
            GROUP BY user_id
          ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
        ) AS sai ON ir.user_id = sai.user_id
+       LEFT JOIN user_profiles emp ON ir.employer_id = emp.user_id
        WHERE ir.id = ? FOR UPDATE`,
       [internshipId],
     );
@@ -455,7 +457,14 @@ export const markInternshipFinished = async (req, res) => {
       accumulated_hours: accumulatedHours,
       date_started: dateStarted,
       academic_year: academicYear,
+      employer_first_name: employerFirstName,
+      employer_last_name: employerLastName,
     } = recordRows[0];
+
+    const supervisorName =
+      employerFirstName && employerLastName
+        ? `${employerFirstName} ${employerLastName}`
+        : null;
 
     if (role === "department_head") {
       const [deptHeadRows] = await connection.execute(
@@ -519,7 +528,7 @@ export const markInternshipFinished = async (req, res) => {
            internship_position, course_id, batch_year, academic_year,
            total_hours, accumulated_hours, supervisor_name, notes,
            internship_record_id, source, department_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, 'system', ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 'system', ?)`,
         [
           newUUID(),
           userId,
@@ -533,6 +542,7 @@ export const markInternshipFinished = async (req, res) => {
           academicYear,
           totalHours,
           accumulatedHours,
+          supervisorName,
           internshipId,
           recordDeptId,
         ],
@@ -628,8 +638,12 @@ export const finishInternshipRecord = async (req, res) => {
     }
 
     const [recordRows] = await connection.execute(
-      `SELECT company_name, company_address, industry, internship_position, total_hours, accumulated_hours, date_started, academic_year
-       FROM internship_records_with_ay WHERE id = ?`,
+      `SELECT ir.company_name, ir.company_address, ir.industry, ir.internship_position,
+              ir.total_hours, ir.accumulated_hours, ir.date_started, ir.academic_year,
+              emp.first_name AS employer_first_name, emp.last_name AS employer_last_name
+       FROM internship_records_with_ay ir
+       LEFT JOIN user_profiles emp ON ir.employer_id = emp.user_id
+       WHERE ir.id = ?`,
       [internshipId],
     );
     const {
@@ -641,7 +655,14 @@ export const finishInternshipRecord = async (req, res) => {
       accumulated_hours,
       date_started: dateStarted,
       academic_year: academicYear,
+      employer_first_name: employerFirstName,
+      employer_last_name: employerLastName,
     } = recordRows[0];
+
+    const supervisorName =
+      employerFirstName && employerLastName
+        ? `${employerFirstName} ${employerLastName}`
+        : null;
 
     const [studentProfile] = await connection.execute(
       `SELECT first_name, last_name FROM user_profiles WHERE user_id = ?`,
@@ -674,7 +695,7 @@ export const finishInternshipRecord = async (req, res) => {
            internship_position, course_id, batch_year, academic_year,
            total_hours, accumulated_hours, supervisor_name, notes,
            internship_record_id, source, department_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, 'system', ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 'system', ?)`,
         [
           newUUID(),
           userId,
@@ -688,6 +709,7 @@ export const finishInternshipRecord = async (req, res) => {
           academicYear,
           total_hours,
           accumulated_hours,
+          supervisorName,
           internshipId,
           departmentId,
         ],
