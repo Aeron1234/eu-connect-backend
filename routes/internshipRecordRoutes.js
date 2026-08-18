@@ -82,20 +82,20 @@ internshipRecordRoutes.patch(
 );
 
 internshipRecordRoutes.patch(
+  "/internship-records/:internshipId/finish",
+  verifyUser,
+  verifyRole(["department_head", "admin"]),
+  generalLimiter,
+  markInternshipFinished,
+);
+
+internshipRecordRoutes.patch(
   "/internship/:internshipId",
   verifyUser,
   verifyRole(["department_head", "admin"]),
   upload.none(),
   mediumLimiter,
   approveInternshipRecord,
-);
-
-internshipRecordRoutes.patch(
-  "/internship-records/:internshipId/finish",
-  verifyUser,
-  verifyRole(["department_head", "admin"]),
-  generalLimiter,
-  markInternshipFinished,
 );
 
 internshipRecordRoutes.get(

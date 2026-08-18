@@ -185,7 +185,18 @@ export const updateAlumniInternshipRecord = async (req, res) => {
       [...setValues, recordId],
     );
 
-    res.status(200).json({ success: true, message: "Alumni record updated." });
+    // Re-select the full row so the response reflects exactly what's now in the DB —
+    // including any columns not touched by this request (e.g. created_at, department_id)
+    const [updated] = await connection.execute(
+      `SELECT * FROM alumni_internship_records WHERE id = ?`,
+      [recordId],
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Alumni record updated.",
+      record: updated[0],
+    });
   } catch (error) {
     console.error("Update alumni internship record error:", error);
     res.status(500).json({ error: "Failed to update alumni record." });

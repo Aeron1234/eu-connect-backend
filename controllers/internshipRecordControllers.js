@@ -420,9 +420,10 @@ export const markInternshipFinished = async (req, res) => {
     await connection.beginTransaction();
 
     const [recordRows] = await connection.execute(
-      `SELECT ir.user_id, ir.company_name, ir.status, ir.total_hours, ir.accumulated_hours,
+      `SELECT ir.user_id, ir.company_name, ir.company_address, ir.industry, ir.internship_position, ir.status,
+              ir.total_hours, ir.accumulated_hours, ir.date_started, ir.academic_year,
               sai.department_id, sai.course_id
-       FROM internship_records ir
+       FROM internship_records_with_ay ir
        INNER JOIN (
          SELECT sai1.*
          FROM student_academic_info AS sai1
@@ -444,11 +445,16 @@ export const markInternshipFinished = async (req, res) => {
     const {
       user_id: studentId,
       company_name,
+      company_address: companyAddress,
+      industry,
+      internship_position: internshipPosition,
       status: currentStatus,
       department_id: recordDeptId,
       course_id: courseId,
       total_hours: totalHours,
       accumulated_hours: accumulatedHours,
+      date_started: dateStarted,
+      academic_year: academicYear,
     } = recordRows[0];
 
     if (role === "department_head") {
@@ -499,14 +505,12 @@ export const markInternshipFinished = async (req, res) => {
         ? `${studentProfile[0].first_name} ${studentProfile[0].last_name}`
         : null;
 
-    const [studentSai] = await connection.execute(
-      `SELECT batch_year, academic_year FROM student_academic_info
-       WHERE user_id = ? ORDER BY id DESC LIMIT 1`,
-      [studentId],
-    );
-    const batchYear = studentSai.length > 0 ? studentSai[0].batch_year : null;
-    const academicYear =
-      studentSai.length > 0 ? studentSai[0].academic_year : null;
+    // batch_year isn't a tracked field anywhere in the schema — derived from the
+    // internship's start year as a stand-in. Confirm this matches what "batch year"
+    // is meant to represent before relying on it downstream.
+    const batchYear = dateStarted
+      ? new Date(dateStarted).getFullYear().toString()
+      : null;
 
     try {
       await connection.execute(
@@ -515,13 +519,15 @@ export const markInternshipFinished = async (req, res) => {
            internship_position, course_id, batch_year, academic_year,
            total_hours, accumulated_hours, supervisor_name, notes,
            internship_record_id, source, department_id)
-         VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, 'system', ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, 'system', ?)`,
         [
           newUUID(),
           userId,
           alumniName,
           company_name,
-          null, // internship_position — add ir.internship_position to the SELECT above if needed
+          companyAddress,
+          industry,
+          internshipPosition,
           courseId,
           batchYear,
           academicYear,
@@ -622,10 +628,20 @@ export const finishInternshipRecord = async (req, res) => {
     }
 
     const [recordRows] = await connection.execute(
-      `SELECT company_name, total_hours, accumulated_hours FROM internship_records WHERE id = ?`,
+      `SELECT company_name, company_address, industry, internship_position, total_hours, accumulated_hours, date_started, academic_year
+       FROM internship_records_with_ay WHERE id = ?`,
       [internshipId],
     );
-    const { company_name, total_hours, accumulated_hours } = recordRows[0];
+    const {
+      company_name,
+      company_address: companyAddress,
+      industry,
+      internship_position: internshipPosition,
+      total_hours,
+      accumulated_hours,
+      date_started: dateStarted,
+      academic_year: academicYear,
+    } = recordRows[0];
 
     const [studentProfile] = await connection.execute(
       `SELECT first_name, last_name FROM user_profiles WHERE user_id = ?`,
@@ -637,17 +653,19 @@ export const finishInternshipRecord = async (req, res) => {
         : null;
 
     const [studentSai] = await connection.execute(
-      `SELECT course_id, batch_year, academic_year, department_id
+      `SELECT course_id, department_id
        FROM student_academic_info
        WHERE user_id = ? ORDER BY id DESC LIMIT 1`,
       [userId],
     );
     const courseId = studentSai.length > 0 ? studentSai[0].course_id : null;
-    const batchYear = studentSai.length > 0 ? studentSai[0].batch_year : null;
-    const academicYear =
-      studentSai.length > 0 ? studentSai[0].academic_year : null;
     const departmentId =
       studentSai.length > 0 ? studentSai[0].department_id : null;
+
+    // Same batch_year caveat as markInternshipFinished — derived, not tracked.
+    const batchYear = dateStarted
+      ? new Date(dateStarted).getFullYear().toString()
+      : null;
 
     try {
       await connection.execute(
@@ -656,12 +674,15 @@ export const finishInternshipRecord = async (req, res) => {
            internship_position, course_id, batch_year, academic_year,
            total_hours, accumulated_hours, supervisor_name, notes,
            internship_record_id, source, department_id)
-         VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, NULL, NULL, ?, 'system', ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, 'system', ?)`,
         [
           newUUID(),
           userId,
           alumniName,
           company_name,
+          companyAddress,
+          industry,
+          internshipPosition,
           courseId,
           batchYear,
           academicYear,

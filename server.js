@@ -53,7 +53,7 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ limit: "10mb", extended: true }));
 
 app.set("socketio", io);
-app.set("trust proxy", 1);
+// app.set("trust proxy", 1);
 
 // Health check endpoint for Render
 app.get("/", (req, res) => {
