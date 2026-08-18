@@ -153,7 +153,6 @@ export const getStudentCompleteEvaluations = async (req, res) => {
 export const getPastStudentEvaluations = async (req, res) => {
   const { studentId } = req.params;
 
-  // 🛡️ Guard Clause: Validate request parameters immediately
   if (!studentId) {
     return res.status(400).json({
       success: false,
@@ -161,7 +160,6 @@ export const getPastStudentEvaluations = async (req, res) => {
     });
   }
 
-  // 🎯 Clean Constant: Every individual criterion item has a max value of 5 points
   const POINTS_PER_CRITERION = 5;
 
   let connection;
@@ -175,8 +173,12 @@ export const getPastStudentEvaluations = async (req, res) => {
         m.other_remarks AS comments,
         m.created_at AS submitted_date,
         m.evaluated_by AS evaluator_id,
+        m.reviewed_by,
+        m.reviewed_at,
+        m.review_notes,
         ir.company_name AS company,
         CONCAT(up.first_name, ' ', up.last_name) AS evaluator,
+        CONCAT(reviewer_up.first_name, ' ', reviewer_up.last_name) AS reviewer_name,
         c.category AS breakdown_label,
         s.score AS breakdown_score
       FROM student_evaluation_masters AS m
@@ -184,13 +186,13 @@ export const getPastStudentEvaluations = async (req, res) => {
       JOIN student_evaluation_scores AS s ON s.evaluation_master_id = m.id
       JOIN student_evaluation_criteria AS c ON s.criterion_id = c.id
       JOIN user_profiles AS up ON m.evaluated_by = up.user_id
+      LEFT JOIN user_profiles AS reviewer_up ON m.reviewed_by = reviewer_up.user_id
       WHERE ir.user_id = ?
       ORDER BY m.created_at DESC, c.category ASC
     `;
 
     const [rows] = await connection.execute(query, [studentId]);
 
-    // 🛡️ Guard Clause: If no history exists, return an empty list gracefully
     if (!rows || rows.length === 0) {
       return res.status(200).json({
         success: true,
@@ -203,7 +205,6 @@ export const getPastStudentEvaluations = async (req, res) => {
     rows.forEach((row) => {
       const evalId = row.evaluation_id;
 
-      // 1. If this evaluation instance hasn't been grouped yet, map its metadata
       if (!evaluationsGroup[evalId]) {
         const dateObj = new Date(row.submitted_date);
 
@@ -230,11 +231,14 @@ export const getPastStudentEvaluations = async (req, res) => {
           company: row.company,
           submittedDate: formattedDate,
           comments: row.comments || "",
+          reviewed_by: row.reviewed_by || null,
+          reviewer_name: row.reviewer_name || null,
+          reviewed_at: row.reviewed_at || null,
+          review_notes: row.review_notes || null,
           breakdown: [],
         };
       }
 
-      // 2. Accumulate criteria points dynamically into our summary categories
       let existingCategory = evaluationsGroup[evalId].breakdown.find(
         (b) => b.label === row.breakdown_label,
       );
@@ -242,11 +246,9 @@ export const getPastStudentEvaluations = async (req, res) => {
       const currentScore = Number(row.breakdown_score);
 
       if (existingCategory) {
-        // 🌟 FIXED: Add the score and increment the max by 5 for every sub-criterion row found
         existingCategory.score += currentScore;
         existingCategory.max += POINTS_PER_CRITERION;
       } else {
-        // Fresh category entry starts at 5 max points for its first item
         evaluationsGroup[evalId].breakdown.push({
           label: row.breakdown_label,
           score: currentScore,
@@ -255,7 +257,6 @@ export const getPastStudentEvaluations = async (req, res) => {
       }
     });
 
-    // Flatten our indexed tracking container directly into a sequential array list
     const evaluationsList = Object.values(evaluationsGroup);
 
     return res.status(200).json({
@@ -946,8 +947,12 @@ export const getAllStudentEvaluations = async (req, res) => {
         m.other_remarks AS comments,
         m.created_at AS submitted_date,
         m.evaluated_by AS actor_id,
+        m.reviewed_by,
+        m.reviewed_at,
+        m.review_notes,
         ir.company_name AS company,
         CONCAT(up.first_name, ' ', up.last_name) AS actor_name,
+        CONCAT(reviewer_up.first_name, ' ', reviewer_up.last_name) AS reviewer_name,
         c.category AS breakdown_label,
         s.score AS breakdown_score
       FROM student_evaluation_masters AS m
@@ -955,11 +960,13 @@ export const getAllStudentEvaluations = async (req, res) => {
       JOIN student_evaluation_scores AS s ON s.evaluation_master_id = m.id
       JOIN student_evaluation_criteria AS c ON s.criterion_id = c.id
       JOIN user_profiles AS up ON m.evaluated_by = up.user_id
+      LEFT JOIN user_profiles AS reviewer_up ON m.reviewed_by = reviewer_up.user_id
       WHERE ir.user_id = ? AND m.status = 'completed'
       ORDER BY m.created_at DESC, c.category ASC
     `;
 
-    // 2. Evaluations the student submitted ABOUT their supervisor
+    // 2. Evaluations the student submitted ABOUT their supervisor —
+    // this direction has no review step, so reviewer fields stay null
     const givenQuery = `
       SELECT 
         m.id AS evaluation_id,
@@ -1015,6 +1022,10 @@ export const getAllStudentEvaluations = async (req, res) => {
             company: row.company,
             submittedDate: formattedDate,
             comments: row.comments || "",
+            reviewed_by: row.reviewed_by || null,
+            reviewer_name: row.reviewer_name || null,
+            reviewed_at: row.reviewed_at || null,
+            review_notes: row.review_notes || null,
             breakdown: [],
           };
         }

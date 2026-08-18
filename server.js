@@ -21,6 +21,8 @@ import internshipPostingRoutes from "./routes/internshipPostsRoutes.js";
 import supervisorRequestRoutes from "./routes/supervisorRequestRoutes.js";
 import employerEvaluationsRoutes from "./routes/employerEvaluationsRoutes.js";
 import mapRoutes from "./routes/mapRoutes.js";
+import hteReportRoutes from "./routes/hteReportRoutes.js";
+import alumniRoutes from "./routes/alumniRecordRoutes.js";
 
 dotenv.config();
 
@@ -51,6 +53,7 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ limit: "10mb", extended: true }));
 
 app.set("socketio", io);
+app.set("trust proxy", 1);
 
 // Health check endpoint for Render
 app.get("/", (req, res) => {
@@ -73,6 +76,8 @@ app.use("/eu-connect/api", internshipPostingRoutes);
 app.use("/eu-connect/api", supervisorRequestRoutes);
 app.use("/eu-connect/api", employerEvaluationsRoutes);
 app.use("/eu-connect/api", mapRoutes);
+app.use("/eu-connect/api", hteReportRoutes);
+app.use("/eu-connect/api", alumniRoutes);
 
 // Socket.io Events
 io.on("connection", (socket) => {

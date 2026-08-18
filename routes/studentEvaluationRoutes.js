@@ -95,7 +95,7 @@ studentEvaluationRoutes.get(
 );
 
 studentEvaluationRoutes.patch(
-  "/evaluations/:evaluationId/review",
+  "/evaluations/review/:evaluationId",
   verifyUser,
   verifyRole(["department_head", "admin"]),
   generalLimiter,

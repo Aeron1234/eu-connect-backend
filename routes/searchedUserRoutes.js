@@ -104,8 +104,8 @@ searchedUserRoutes.post(
   "/searched-user/files/:searchedUserId",
   verifyUser,
   verifyRole(["employer", "admin"]),
-  strictLimiter,
   upload.single("file"),
+  strictLimiter,
   uploadFileToSearchedStudent,
 );
 
