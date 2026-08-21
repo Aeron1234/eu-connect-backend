@@ -46,11 +46,8 @@ export const addAlumniInternshipRecord = async (req, res) => {
     }
 
     connection = await db.getConnection();
+    await connection.beginTransaction();
 
-    // Department is derived from whoever is submitting the record.
-    // department_heads get their own department; admins (who have no
-    // dept_heads_background_info row) leave it NULL — a department-less
-    // record that only an admin can later manage.
     let departmentId = null;
     if (role === "department_head") {
       const [deptHeadRow] = await connection.execute(
@@ -87,8 +84,11 @@ export const addAlumniInternshipRecord = async (req, res) => {
       ],
     );
 
+    await connection.commit();
+
     res.status(201).json({ success: true, id: recordId });
   } catch (error) {
+    if (connection) await connection.rollback();
     console.error("Add alumni internship record error:", error);
     res.status(500).json({ error: "Failed to save alumni record." });
   } finally {
@@ -121,13 +121,15 @@ export const updateAlumniInternshipRecord = async (req, res) => {
     }
 
     connection = await db.getConnection();
+    await connection.beginTransaction();
 
     const [existing] = await connection.execute(
-      `SELECT id, department_id FROM alumni_internship_records WHERE id = ?`,
+      `SELECT id, department_id FROM alumni_internship_records WHERE id = ? FOR UPDATE`,
       [recordId],
     );
 
     if (existing.length === 0) {
+      await connection.rollback();
       return res.status(404).json({ error: "Alumni record not found." });
     }
 
@@ -144,6 +146,7 @@ export const updateAlumniInternshipRecord = async (req, res) => {
         recordDeptId === null ||
         deptHeadRows[0].department_id !== recordDeptId
       ) {
+        await connection.rollback();
         return res.status(403).json({
           error: "You can only edit records within your own department.",
         });
@@ -177,6 +180,7 @@ export const updateAlumniInternshipRecord = async (req, res) => {
     }
 
     if (setClauses.length === 0) {
+      await connection.rollback();
       return res.status(400).json({ error: "No fields provided to update." });
     }
 
@@ -185,12 +189,12 @@ export const updateAlumniInternshipRecord = async (req, res) => {
       [...setValues, recordId],
     );
 
-    // Re-select the full row so the response reflects exactly what's now in the DB —
-    // including any columns not touched by this request (e.g. created_at, department_id)
     const [updated] = await connection.execute(
       `SELECT * FROM alumni_internship_records WHERE id = ?`,
       [recordId],
     );
+
+    await connection.commit();
 
     res.status(200).json({
       success: true,
@@ -198,6 +202,7 @@ export const updateAlumniInternshipRecord = async (req, res) => {
       record: updated[0],
     });
   } catch (error) {
+    if (connection) await connection.rollback();
     console.error("Update alumni internship record error:", error);
     res.status(500).json({ error: "Failed to update alumni record." });
   } finally {
@@ -216,13 +221,15 @@ export const deleteAlumniInternshipRecord = async (req, res) => {
     }
 
     connection = await db.getConnection();
+    await connection.beginTransaction();
 
     const [existing] = await connection.execute(
-      `SELECT department_id FROM alumni_internship_records WHERE id = ?`,
+      `SELECT department_id FROM alumni_internship_records WHERE id = ? FOR UPDATE`,
       [recordId],
     );
 
     if (existing.length === 0) {
+      await connection.rollback();
       return res.status(404).json({ error: "Alumni record not found." });
     }
 
@@ -239,6 +246,7 @@ export const deleteAlumniInternshipRecord = async (req, res) => {
         recordDeptId === null ||
         deptHeadRows[0].department_id !== recordDeptId
       ) {
+        await connection.rollback();
         return res.status(403).json({
           error: "You can only delete records within your own department.",
         });
@@ -251,11 +259,15 @@ export const deleteAlumniInternshipRecord = async (req, res) => {
     );
 
     if (result.affectedRows === 0) {
+      await connection.rollback();
       return res.status(404).json({ error: "Alumni record not found." });
     }
 
+    await connection.commit();
+
     res.status(200).json({ success: true, message: "Alumni record deleted." });
   } catch (error) {
+    if (connection) await connection.rollback();
     console.error("Delete alumni internship record error:", error);
     res.status(500).json({ error: "Failed to delete alumni record." });
   } finally {
@@ -291,9 +303,6 @@ export const getAlumniInternships = async (req, res) => {
 
     connection = await db.getConnection();
 
-    // Distinct academic years available across ALL records — used to render
-    // filter tabs. Deliberately ignores the current academicYear/search
-    // filters so the tab list itself stays stable while the user filters.
     const [yearRows] = await connection.execute(
       `SELECT DISTINCT academic_year
        FROM alumni_internship_records
@@ -302,7 +311,6 @@ export const getAlumniInternships = async (req, res) => {
     );
     const academicYears = yearRows.map((r) => r.academic_year);
 
-    // Total distinct companies (case/whitespace-insensitive) for pagination metadata
     const [[{ total }]] = await connection.execute(
       `SELECT COUNT(DISTINCT LOWER(TRIM(air.company_name))) AS total
        FROM alumni_internship_records air
@@ -318,10 +326,6 @@ export const getAlumniInternships = async (req, res) => {
       });
     }
 
-    // Page of distinct companies, ordered by display name.
-    // Note: this SELECTs companies matching the WHERE clause (which now
-    // includes alumni_name), so a company page can include a company where
-    // ONLY one alumnus (not the company name) matched the search term.
     const [companyPage] = await connection.execute(
       `SELECT LOWER(TRIM(air.company_name)) AS normalized_name,
               MIN(air.company_name) AS company_name
@@ -336,14 +340,11 @@ export const getAlumniInternships = async (req, res) => {
     const normalizedNames = companyPage.map((c) => c.normalized_name);
     const placeholders = normalizedNames.map(() => "?").join(",");
 
-    // All alumni rows belonging to just this page's companies.
-    // Deliberately NOT re-applying the search filter here — once a company
-    // matches (by name or by having a matching alumnus), we want to show
-    // ALL of its alumni, not just the one(s) that matched the search term.
     const [rows] = await connection.execute(
-      `SELECT air.*, c.course_name
+      `SELECT air.*, c.course_name, d.id AS department_id, d.code AS department_code, d.name AS department_name
        FROM alumni_internship_records air
        LEFT JOIN courses c ON air.course_id = c.id
+       LEFT JOIN departments d ON air.department_id = d.id
        WHERE LOWER(TRIM(air.company_name)) IN (${placeholders})
        ORDER BY air.company_name ASC, air.alumni_name ASC`,
       normalizedNames,
@@ -355,7 +356,7 @@ export const getAlumniInternships = async (req, res) => {
       const normalized = row.company_name.trim().toLowerCase();
       if (!groups[normalized]) {
         groups[normalized] = {
-          company_name: row.company_name, // first-seen casing wins for display
+          company_name: row.company_name,
           company_address: row.company_address,
           industry: row.industry,
           alumni: [],
@@ -374,11 +375,12 @@ export const getAlumniInternships = async (req, res) => {
         academic_year: row.academic_year,
         notes: row.notes,
         source: row.source,
+        department_id: row.department_id,
+        department_code: row.department_code,
+        department_name: row.department_name,
       });
     });
 
-    // Preserve companyPage's ORDER BY — object key order from `groups`
-    // isn't guaranteed to match once you're mixing two separate queries
     const companies = companyPage.map((c) => {
       const group = groups[c.normalized_name];
       return { ...group, alumni_count: group.alumni.length };

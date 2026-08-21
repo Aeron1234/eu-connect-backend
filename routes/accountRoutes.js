@@ -25,7 +25,7 @@ const upload = multer({ storage: storage });
 accountRoutes.get(
   "/account/user",
   verifyUser,
-  verifyRole(["student", "employer", "department_head", "admin"]),
+  // verifyRole(["student", "employer", "department_head", "admin"]),
   generalLimiter,
   getUserProfile,
 );
