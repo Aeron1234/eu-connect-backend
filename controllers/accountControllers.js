@@ -409,19 +409,22 @@ export const createUser = async (req, res) => {
     const { id: userId } = req.verifiedUser;
     const userData = req.body;
 
-    const { email, password, first_name, last_name, course, department, role } =
-      userData;
+    const {
+      email,
+      username,
+      password,
+      first_name,
+      last_name,
+      course,
+      department,
+      gender,
+      role,
+    } = userData;
 
-    // ROLES : 1 = Student, 2 = Employer, 3 = Department Head, 4 = Admin
-    // id of each role in roles table in db
-    const roleId = Number(role);
-    const STUDENT = 1;
-    const EMPLOYER = 2;
-    const DEPARTMENT_HEAD = 3;
-    const ADMIN = 4;
-
+    // email is no longer part of authentication — username is — so email
+    // drops out of the required set and only gets validated when supplied.
     const requiredFields = [
-      "email",
+      "username",
       "first_name",
       "last_name",
       "password",
@@ -435,10 +438,28 @@ export const createUser = async (req, res) => {
       }
     }
 
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return res.status(400).json({
-        message: "Invalid email format.",
-      });
+    const roleId = Number(role);
+    if (Number.isNaN(roleId)) {
+      return res.status(400).json({ message: "Invalid role." });
+    }
+
+    // Resolved from the roles table instead of hardcoded id constants —
+    // reseeding, renumbering, or adding a role never silently breaks this.
+    const [roleRows] = await connection.execute(
+      `SELECT role FROM roles WHERE id = ?`,
+      [roleId],
+    );
+    if (roleRows.length === 0) {
+      return res.status(400).json({ message: "Invalid role." });
+    }
+    const roleName = roleRows[0].role;
+
+    if (email && email.trim() !== "") {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json({
+          message: "Invalid email format.",
+        });
+      }
     }
 
     if (password.length < 8) {
@@ -447,7 +468,7 @@ export const createUser = async (req, res) => {
       });
     }
 
-    if (roleId === STUDENT || roleId === DEPARTMENT_HEAD) {
+    if (roleName === "student" || roleName === "department_head") {
       if (!department) {
         return res.status(400).json({
           message: "Department is required for this role.",
@@ -455,34 +476,60 @@ export const createUser = async (req, res) => {
       }
     }
 
-    if (roleId === STUDENT) {
+    if (roleName === "student") {
       if (!course) {
         return res.status(400).json({
           message: "Course is required for this role.",
+        });
+      }
+
+      if (!gender || !["male", "female"].includes(gender)) {
+        return res.status(400).json({
+          message: "A valid gender is required for this role.",
         });
       }
     }
 
     await connection.beginTransaction();
 
-    // Check if exists
-    const [userExists] = await connection.execute(
-      `SELECT id FROM users WHERE email = ?`,
-      [email],
+    // Username must always be unique. Email is only checked when provided —
+    // an empty/omitted email should never collide with another empty one.
+    const [usernameExists] = await connection.execute(
+      `SELECT id FROM users WHERE username = ?`,
+      [username],
     );
-    if (userExists.length > 0) {
+    if (usernameExists.length > 0) {
       await connection.rollback();
       return res.status(400).json({
-        message: "User already exists.",
+        message: "Username is already taken.",
       });
+    }
+
+    if (email && email.trim() !== "") {
+      const [emailExists] = await connection.execute(
+        `SELECT id FROM users WHERE email = ?`,
+        [email],
+      );
+      if (emailExists.length > 0) {
+        await connection.rollback();
+        return res.status(400).json({
+          message: "User already exists.",
+        });
+      }
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const newId = newUUID();
 
     const [result] = await connection.execute(
-      `INSERT INTO users (id, email, password_hash, role_id) VALUES (?, ?, ?, ?)`,
-      [newId, email, hashedPassword, roleId],
+      `INSERT INTO users (id, email, username, password_hash, role_id) VALUES (?, ?, ?, ?, ?)`,
+      [
+        newId,
+        email && email.trim() !== "" ? email : null,
+        username,
+        hashedPassword,
+        roleId,
+      ],
     );
 
     if (result.affectedRows === 0) {
@@ -492,22 +539,36 @@ export const createUser = async (req, res) => {
       });
     }
 
+    // gender is only ever collected for students — every other role gets NULL,
+    // matching the nullable ENUM('male','female') column on user_profiles.
     await connection.execute(
-      `INSERT INTO user_profiles (user_id, first_name, last_name) VALUES (?, ?, ?)`,
-      [newId, first_name, last_name],
+      `INSERT INTO user_profiles (user_id, first_name, last_name, gender) VALUES (?, ?, ?, ?)`,
+      [newId, first_name, last_name, roleName === "student" ? gender : null],
     );
 
-    if (roleId === STUDENT) {
+    if (roleName === "student") {
       await connection.execute(
         `INSERT INTO student_academic_info (user_id, course_id, department_id) VALUES (?, ?, ?)`,
         [newId, Number(course), Number(department)],
       );
     }
 
-    if (roleId === DEPARTMENT_HEAD) {
+    if (roleName === "department_head") {
       await connection.execute(
         `INSERT INTO dept_heads_background_info (user_id, department_id) VALUES (?, ?)`,
         [newId, Number(department)],
+      );
+    }
+
+    // Employer accounts are created by the admin with auth info only — the
+    // employer fills in company_name/company_address/position/contact_number
+    // themselves later via the Account page. That page's update flow does an
+    // UPDATE ... WHERE user_id = ?, which requires a row to already exist,
+    // so we seed one here with everything but user_id left NULL.
+    if (roleName === "employer") {
+      await connection.execute(
+        `INSERT INTO employer_background_info (user_id) VALUES (?)`,
+        [newId],
       );
     }
 

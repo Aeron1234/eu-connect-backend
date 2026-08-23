@@ -11,6 +11,8 @@ import {
   getRoles,
   getUserProfile,
   reactivateAccount,
+  updatePassword,
+  updateUserInfo,
 } from "../controllers/accountControllers.js";
 import {
   generalLimiter,
@@ -28,6 +30,22 @@ accountRoutes.get(
   // verifyRole(["student", "employer", "department_head", "admin"]),
   generalLimiter,
   getUserProfile,
+);
+
+accountRoutes.put(
+  "/account/update",
+  verifyUser,
+  // verifyRole(["student", "employer", "department_head", "admin"]),
+  mediumLimiter,
+  updateUserInfo,
+);
+
+accountRoutes.put(
+  "/account/update-password",
+  verifyUser,
+  // verifyRole(["student", "employer", "department_head", "admin"]),
+  mediumLimiter,
+  updatePassword,
 );
 
 accountRoutes.get(

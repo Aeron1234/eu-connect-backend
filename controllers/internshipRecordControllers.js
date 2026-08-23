@@ -129,6 +129,7 @@ export const createInternshipRecord = async (req, res) => {
       "internship_position",
       "description",
       "date_started",
+      "date_ended",
       "total_hours",
       "lon",
       "lat",
@@ -187,8 +188,8 @@ export const createInternshipRecord = async (req, res) => {
 
     const [result] = await connection.execute(
       `
-      INSERT INTO internship_records (id, user_id, company_name, company_address, internship_position, description, lon, lat, date_started, total_hours, region_id, company_website, semester)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      INSERT INTO internship_records (id, user_id, company_name, company_address, internship_position, description, lon, lat, date_started, date_ended, total_hours, region_id, company_website, semester)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       FROM DUAL
       WHERE NOT EXISTS (
         SELECT 1 FROM internship_records WHERE user_id = ? AND status = 'ongoing'
@@ -204,6 +205,7 @@ export const createInternshipRecord = async (req, res) => {
         data.lon,
         data.lat,
         data.date_started,
+        data.date_ended,
         Number(data.total_hours),
         data.region_id,
         data.company_website || null,
