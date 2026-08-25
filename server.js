@@ -23,6 +23,7 @@ import employerEvaluationsRoutes from "./routes/employerEvaluationsRoutes.js";
 import mapRoutes from "./routes/mapRoutes.js";
 import hteReportRoutes from "./routes/hteReportRoutes.js";
 import alumniRoutes from "./routes/alumniRecordRoutes.js";
+import criteriaRoutes from "./routes/evaluationsCriteriaRoutes.js";
 
 dotenv.config();
 
@@ -78,6 +79,7 @@ app.use("/eu-connect/api", employerEvaluationsRoutes);
 app.use("/eu-connect/api", mapRoutes);
 app.use("/eu-connect/api", hteReportRoutes);
 app.use("/eu-connect/api", alumniRoutes);
+app.use("/eu-connect/api", criteriaRoutes);
 
 // Socket.io Events
 io.on("connection", (socket) => {

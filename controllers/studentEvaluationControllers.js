@@ -8,10 +8,11 @@ export const getStudentEvaluationCriteria = async (req, res) => {
 
     // Pull the clean schema rows directly from your database table
     const query = `
-      SELECT id, category, criterion_name 
-      FROM student_evaluation_criteria 
-      ORDER BY id ASC
-    `;
+        SELECT id, category, criterion_name 
+        FROM student_evaluation_criteria
+        WHERE is_active = 1
+        ORDER BY id ASC
+      `;
 
     const [rows] = await connection.execute(query);
 

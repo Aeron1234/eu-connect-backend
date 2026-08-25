@@ -216,10 +216,6 @@ export const deleteAlumniInternshipRecord = async (req, res) => {
     const { id: userId, role } = req.verifiedUser;
     const { recordId } = req.params;
 
-    if (!["department_head", "admin"].includes(role)) {
-      return res.status(403).json({ error: "Access denied." });
-    }
-
     connection = await db.getConnection();
     await connection.beginTransaction();
 

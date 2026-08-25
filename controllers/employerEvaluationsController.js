@@ -9,7 +9,8 @@ export const getEvaluationCriterias = async (req, res) => {
     // Pull the clean schema rows directly from your database table
     const query = `
       SELECT id, category, criterion_name 
-      FROM employer_evaluation_criteria 
+      FROM employer_evaluation_criteria
+      WHERE is_active = 1
       ORDER BY id ASC
     `;
 
@@ -354,5 +355,3 @@ export const getStudentSubmittedEvaluations = async (req, res) => {
     if (connection) connection.release();
   }
 };
-
-
