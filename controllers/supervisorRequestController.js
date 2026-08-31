@@ -105,8 +105,22 @@ export const requestSupervisor = async (req, res) => {
       });
     }
 
+    // Sender name for the notification sent to the employer
+    const [senderRows] = await connection.execute(
+      `SELECT first_name, last_name FROM user_profiles WHERE user_id = ?`,
+      [studentId],
+    );
+
+    if (senderRows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Student profile not found." });
+    }
+
+    const senderName = `${senderRows[0].first_name} ${senderRows[0].last_name}`;
+
     // A new request supersedes any still-pending one for this internship —
-    // only one active request at a time
+    // only one active request at a time. Superseding is silent (no notification),
+    // same as a student-initiated cancel.
     await connection.execute(
       `UPDATE supervisor_requests SET status = 'superseded' 
        WHERE internship_id = ? AND status = 'pending'`,
@@ -120,7 +134,54 @@ export const requestSupervisor = async (req, res) => {
       [requestId, internship.id, studentId, employerId],
     );
 
+    await connection.execute(
+      `INSERT INTO notifications (user_id, sender_id, type, title, message, link_uuid)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        employerId,
+        studentId,
+        "supervisor_request_submitted",
+        "New Supervisor Request",
+        `${senderName} requested you as their supervisor`,
+        requestId,
+      ],
+    );
+
+    // Activity log is supplementary — isolated so a logging failure can
+    // never roll back or fail the actual request.
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          studentId,
+          "student",
+          "supervisor_request_sent",
+          "supervisor_requests",
+          requestId,
+          `${senderName} requested a new supervisor for internship record ${internship.id}.`,
+          JSON.stringify({
+            internship_id: internship.id,
+            employer_id: employerId,
+            previous_employer_id: internship.employer_id,
+          }),
+        ],
+      );
+    } catch (logError) {
+      console.error(
+        "Activity log insert failed (supervisor request sent):",
+        logError,
+      );
+    }
+
     await connection.commit();
+
+    const io = req.app.get("socketio");
+    io.to(`user-${employerId}`).emit("new_notification", {
+      title: "New Supervisor Request",
+      message: `${senderName} requested you as their supervisor`,
+      type: "supervisor_request_submitted",
+      link_uuid: requestId,
+    });
 
     return res.status(201).json({
       message: "Supervisor request sent.",
@@ -176,6 +237,26 @@ export const cancelSupervisorRequest = async (req, res) => {
       [requestId],
     );
 
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          studentId,
+          "student",
+          "supervisor_request_cancelled",
+          "supervisor_requests",
+          requestId,
+          `Student cancelled their pending supervisor request.`,
+          null,
+        ],
+      );
+    } catch (logError) {
+      console.error(
+        "Activity log insert failed (supervisor request cancelled):",
+        logError,
+      );
+    }
+
     await connection.commit();
 
     return res
@@ -206,8 +287,10 @@ export const respondToSupervisorRequest = async (req, res) => {
     connection = await db.getConnection();
     await connection.beginTransaction();
 
+    // Added student_id — needed as the notification recipient below
     const [rows] = await connection.execute(
-      `SELECT id, internship_id, employer_id, status FROM supervisor_requests WHERE id = ? FOR UPDATE`,
+      `SELECT id, internship_id, student_id, employer_id, status 
+       FROM supervisor_requests WHERE id = ? FOR UPDATE`,
       [requestId],
     );
 
@@ -247,12 +330,71 @@ export const respondToSupervisorRequest = async (req, res) => {
       });
     }
 
+    // Sender name for the notification sent to the student
+    const [senderRows] = await connection.execute(
+      `SELECT first_name, last_name FROM user_profiles WHERE user_id = ?`,
+      [employerId],
+    );
+
+    if (senderRows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Employer profile not found." });
+    }
+
+    const senderName = `${senderRows[0].first_name} ${senderRows[0].last_name}`;
+
     if (decision === "reject") {
       await connection.execute(
         `UPDATE supervisor_requests SET status = 'rejected', responded_at = CURRENT_TIMESTAMP WHERE id = ?`,
         [requestId],
       );
+
+      await connection.execute(
+        `INSERT INTO notifications (user_id, sender_id, type, title, message, link_uuid)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          request.student_id,
+          employerId,
+          "supervisor_request_rejected",
+          "Supervisor Request Declined",
+          `${senderName} declined your supervisor request`,
+          requestId,
+        ],
+      );
+
+      try {
+        await connection.execute(
+          `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [
+            employerId,
+            "employer",
+            "supervisor_request_rejected",
+            "supervisor_requests",
+            requestId,
+            `${senderName} declined a supervisor request for internship record ${request.internship_id}.`,
+            JSON.stringify({
+              internship_id: request.internship_id,
+              student_id: request.student_id,
+            }),
+          ],
+        );
+      } catch (logError) {
+        console.error(
+          "Activity log insert failed (supervisor request rejected):",
+          logError,
+        );
+      }
+
       await connection.commit();
+
+      const io = req.app.get("socketio");
+      io.to(`user-${request.student_id}`).emit("new_notification", {
+        title: "Supervisor Request Declined",
+        message: `${senderName} declined your supervisor request`,
+        type: "supervisor_request_rejected",
+        link_uuid: requestId,
+      });
+
       return res
         .status(200)
         .json({ message: "Request rejected.", success: true });
@@ -269,7 +411,51 @@ export const respondToSupervisorRequest = async (req, res) => {
       [employerId, request.internship_id],
     );
 
+    await connection.execute(
+      `INSERT INTO notifications (user_id, sender_id, type, title, message, link_uuid)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        request.student_id,
+        employerId,
+        "supervisor_request_accepted",
+        "Supervisor Request Accepted",
+        `${senderName} accepted your supervisor request`,
+        requestId,
+      ],
+    );
+
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          employerId,
+          "employer",
+          "supervisor_request_accepted",
+          "supervisor_requests",
+          requestId,
+          `${senderName} accepted a supervisor request for internship record ${request.internship_id}.`,
+          JSON.stringify({
+            internship_id: request.internship_id,
+            student_id: request.student_id,
+          }),
+        ],
+      );
+    } catch (logError) {
+      console.error(
+        "Activity log insert failed (supervisor request accepted):",
+        logError,
+      );
+    }
+
     await connection.commit();
+
+    const io = req.app.get("socketio");
+    io.to(`user-${request.student_id}`).emit("new_notification", {
+      title: "Supervisor Request Accepted",
+      message: `${senderName} accepted your supervisor request`,
+      type: "supervisor_request_accepted",
+      link_uuid: requestId,
+    });
 
     return res
       .status(200)

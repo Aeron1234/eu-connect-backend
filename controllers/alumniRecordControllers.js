@@ -84,6 +84,36 @@ export const addAlumniInternshipRecord = async (req, res) => {
       ],
     );
 
+    // Activity log is supplementary — isolated so a logging failure can
+    // never roll back or fail the actual save.
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          enteredBy,
+          role,
+          "alumni_internship_record_created",
+          "alumni_internship_records",
+          recordId,
+          `${role === "admin" ? "Admin" : "Department head"} manually added an alumni record for ${alumni_name.trim()} (${company_name.trim()}).`,
+          JSON.stringify({
+            alumni_name: alumni_name.trim(),
+            company_name: company_name.trim(),
+            course_id,
+            batch_year,
+            academic_year,
+            department_id: departmentId,
+            source: "manual",
+          }),
+        ],
+      );
+    } catch (logError) {
+      console.error(
+        "Activity log insert failed (alumni record created):",
+        logError,
+      );
+    }
+
     await connection.commit();
 
     res.status(201).json({ success: true, id: recordId });
@@ -194,6 +224,34 @@ export const updateAlumniInternshipRecord = async (req, res) => {
       [recordId],
     );
 
+    // Activity log is supplementary — isolated so a logging failure can
+    // never roll back or fail the actual update. Only field names are
+    // recorded, not the values, since the current row is already the
+    // source of truth for "what it is now."
+    try {
+      const changedFields = Object.keys(fieldMap).filter(
+        (key) => fieldMap[key] !== undefined,
+      );
+
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          userId,
+          role,
+          "alumni_internship_record_updated",
+          "alumni_internship_records",
+          recordId,
+          `${role === "admin" ? "Admin" : "Department head"} updated alumni record ${recordId} (${changedFields.join(", ") || "no fields"}).`,
+          JSON.stringify({ changed_fields: changedFields }),
+        ],
+      );
+    } catch (logError) {
+      console.error(
+        "Activity log insert failed (alumni record updated):",
+        logError,
+      );
+    }
+
     await connection.commit();
 
     res.status(200).json({
@@ -257,6 +315,30 @@ export const deleteAlumniInternshipRecord = async (req, res) => {
     if (result.affectedRows === 0) {
       await connection.rollback();
       return res.status(404).json({ error: "Alumni record not found." });
+    }
+
+    // Activity log is supplementary — isolated so a logging failure can
+    // never roll back or fail the actual deletion. This is the most
+    // destructive action available on this table, so worth capturing
+    // the department scope at time of deletion.
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          userId,
+          role,
+          "alumni_internship_record_deleted",
+          "alumni_internship_records",
+          recordId,
+          `${role === "admin" ? "Admin" : "Department head"} deleted alumni record ${recordId}.`,
+          JSON.stringify({ department_id: existing[0].department_id }),
+        ],
+      );
+    } catch (logError) {
+      console.error(
+        "Activity log insert failed (alumni record deleted):",
+        logError,
+      );
     }
 
     await connection.commit();

@@ -319,3 +319,407 @@ export const getHteCompanyReport = async (req, res) => {
     if (connection) connection.release();
   }
 };
+
+export const getProgramAnnualReports = async (req, res) => {
+  let connection;
+  try {
+    const {
+      academicYear = getCurrentAcademicYear(),
+      search,
+      page = 1,
+      limit = 10,
+    } = req.query;
+
+    if (!/^\d{4}-\d{4}$/.test(academicYear)) {
+      return res.status(400).json({
+        error: "academicYear must be formatted as YYYY-YYYY (e.g. 2026-2027).",
+      });
+    }
+
+    connection = await db.getConnection();
+
+    const authorized = await isRegistrarHeadOrAdmin(
+      connection,
+      req.verifiedUser,
+    );
+    if (!authorized) {
+      return res.status(403).json({
+        error:
+          "Only the Registrar department head or admin can access this report.",
+      });
+    }
+
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const pageSize = Math.max(1, Math.min(50, parseInt(limit) || 10));
+    const offset = (pageNum - 1) * pageSize;
+
+    const conditions = ["academic_year = ?"];
+    const params = [academicYear];
+
+    if (search) {
+      conditions.push("degree_program LIKE ?");
+      params.push(`%${search}%`);
+    }
+
+    const whereClause = conditions.join(" AND ");
+
+    const [[{ total }]] = await connection.execute(
+      `SELECT COUNT(*) AS total FROM program_annual_reports WHERE ${whereClause}`,
+      params,
+    );
+
+    if (total === 0) {
+      return res.status(200).json({
+        academicYear,
+        reports: [],
+        pagination: { page: pageNum, limit: pageSize, total: 0, totalPages: 0 },
+      });
+    }
+
+    const [reports] = await connection.execute(
+      `SELECT id, academic_year, degree_program, status, prepared_by, certified_by, submitted_at, updated_at
+       FROM program_annual_reports
+       WHERE ${whereClause}
+       ORDER BY degree_program ASC
+       LIMIT ? OFFSET ?`,
+      [...params, pageSize, offset],
+    );
+
+    const reportIds = reports.map((r) => r.id);
+    const placeholders = reportIds.map(() => "?").join(",");
+
+    const [entryRows] = await connection.execute(
+      `SELECT report_id, issue, solution, recommendation
+       FROM program_annual_report_entries
+       WHERE report_id IN (${placeholders})
+       ORDER BY sort_order ASC`,
+      reportIds,
+    );
+
+    const entriesByReport = {};
+    entryRows.forEach((e) => {
+      if (!entriesByReport[e.report_id]) entriesByReport[e.report_id] = [];
+      entriesByReport[e.report_id].push({
+        issue: e.issue,
+        solution: e.solution,
+        recommendation: e.recommendation,
+      });
+    });
+
+    const reportsWithEntries = reports.map((r) => ({
+      ...r,
+      entries: entriesByReport[r.id] || [],
+    }));
+
+    res.status(200).json({
+      academicYear,
+      reports: reportsWithEntries,
+      pagination: {
+        page: pageNum,
+        limit: pageSize,
+        total,
+        totalPages: Math.ceil(total / pageSize),
+      },
+    });
+  } catch (error) {
+    console.error("Get program annual reports error:", error);
+    res.status(500).json({ error: "Failed to load program annual reports." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const getProgramAnnualReportById = async (req, res) => {
+  let connection;
+  try {
+    const { reportId } = req.params;
+
+    connection = await db.getConnection();
+
+    const authorized = await isRegistrarHeadOrAdmin(
+      connection,
+      req.verifiedUser,
+    );
+    if (!authorized) {
+      return res.status(403).json({
+        error:
+          "Only the Registrar department head or admin can access this report.",
+      });
+    }
+
+    const [reportRows] = await connection.execute(
+      `SELECT * FROM program_annual_reports WHERE id = ?`,
+      [reportId],
+    );
+
+    if (reportRows.length === 0) {
+      return res.status(404).json({ error: "Report not found." });
+    }
+
+    const [entries] = await connection.execute(
+      `SELECT issue, solution, recommendation FROM program_annual_report_entries 
+       WHERE report_id = ? ORDER BY sort_order ASC`,
+      [reportId],
+    );
+
+    res.status(200).json({ ...reportRows[0], entries });
+  } catch (error) {
+    console.error("Get program annual report error:", error);
+    res.status(500).json({ error: "Failed to load report." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const saveProgramAnnualReport = async (req, res) => {
+  let connection;
+  try {
+    const { id: userId, role } = req.verifiedUser;
+    const {
+      academicYear,
+      degreeProgram,
+      courseId,
+      entries,
+      preparedBy,
+      certifiedBy,
+      status,
+    } = req.body;
+
+    if (!academicYear || !/^\d{4}-\d{4}$/.test(academicYear)) {
+      return res.status(400).json({
+        error:
+          "academicYear is required, formatted as YYYY-YYYY (e.g. 2026-2027).",
+      });
+    }
+    if (!degreeProgram || !degreeProgram.trim()) {
+      return res.status(400).json({ error: "degreeProgram is required." });
+    }
+    if (!Array.isArray(entries)) {
+      return res.status(400).json({ error: "entries must be an array." });
+    }
+    if (!["draft", "submitted"].includes(status)) {
+      return res
+        .status(400)
+        .json({ error: "status must be 'draft' or 'submitted'." });
+    }
+    if (status === "submitted" && (!preparedBy || !preparedBy.trim())) {
+      return res
+        .status(400)
+        .json({ error: "preparedBy is required to submit." });
+    }
+
+    connection = await db.getConnection();
+
+    const authorized = await isRegistrarHeadOrAdmin(
+      connection,
+      req.verifiedUser,
+    );
+    if (!authorized) {
+      return res.status(403).json({
+        error:
+          "Only the Registrar department head or admin can manage this report.",
+      });
+    }
+
+    await connection.beginTransaction();
+
+    const [existing] = await connection.execute(
+      `SELECT id FROM program_annual_reports 
+       WHERE academic_year = ? AND degree_program = ? FOR UPDATE`,
+      [academicYear, degreeProgram.trim()],
+    );
+
+    const isNewReport = existing.length === 0;
+    let reportId;
+
+    if (!isNewReport) {
+      reportId = existing[0].id;
+      await connection.execute(
+        `UPDATE program_annual_reports 
+         SET course_id = ?, prepared_by = ?, certified_by = ?, status = ?, 
+             submitted_at = IF(? = 'submitted', NOW(), submitted_at)
+         WHERE id = ?`,
+        [
+          courseId || null,
+          preparedBy?.trim() || null,
+          certifiedBy?.trim() || null,
+          status,
+          status,
+          reportId,
+        ],
+      );
+      await connection.execute(
+        `DELETE FROM program_annual_report_entries WHERE report_id = ?`,
+        [reportId],
+      );
+    } else {
+      reportId = newUUID();
+      await connection.execute(
+        `INSERT INTO program_annual_reports 
+          (id, academic_year, course_id, degree_program, prepared_by, certified_by, status, created_by, submitted_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, IF(? = 'submitted', NOW(), NULL))`,
+        [
+          reportId,
+          academicYear,
+          courseId || null,
+          degreeProgram.trim(),
+          preparedBy?.trim() || null,
+          certifiedBy?.trim() || null,
+          status,
+          userId,
+          status,
+        ],
+      );
+    }
+
+    const meaningfulEntries = entries.filter(
+      (e) => e.issue || e.solution || e.recommendation,
+    );
+    if (meaningfulEntries.length > 0) {
+      const values = meaningfulEntries.map((e, i) => [
+        reportId,
+        e.issue || null,
+        e.solution || null,
+        e.recommendation || null,
+        i,
+      ]);
+      await connection.query(
+        `INSERT INTO program_annual_report_entries 
+          (report_id, issue, solution, recommendation, sort_order) VALUES ?`,
+        [values],
+      );
+    }
+
+    // Activity log is supplementary — isolated so a logging failure can
+    // never roll back or fail the actual save. Action name distinguishes
+    // a brand-new report from an edit to an existing one; status (draft vs
+    // submitted) is carried in the description/metadata either way, since
+    // "submitted" is the meaningful registrar-facing event either way.
+    try {
+      const action = isNewReport
+        ? "program_annual_report_created"
+        : "program_annual_report_updated";
+
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          userId,
+          role,
+          action,
+          "program_annual_reports",
+          reportId,
+          `${isNewReport ? "Created" : "Updated"} the ${degreeProgram.trim()} annual report for ${academicYear} (status: ${status}).`,
+          JSON.stringify({
+            academic_year: academicYear,
+            degree_program: degreeProgram.trim(),
+            status,
+            entry_count: meaningfulEntries.length,
+          }),
+        ],
+      );
+    } catch (logError) {
+      console.error(
+        "Activity log insert failed (program annual report saved):",
+        logError,
+      );
+    }
+
+    await connection.commit();
+
+    const [report] = await connection.execute(
+      `SELECT * FROM program_annual_reports WHERE id = ?`,
+      [reportId],
+    );
+    const [savedEntries] = await connection.execute(
+      `SELECT issue, solution, recommendation FROM program_annual_report_entries 
+       WHERE report_id = ? ORDER BY sort_order ASC`,
+      [reportId],
+    );
+
+    res.status(200).json({
+      success: true,
+      message: status === "submitted" ? "Report submitted." : "Draft saved.",
+      report: { ...report[0], entries: savedEntries },
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Save program annual report error:", error);
+    res.status(500).json({ error: "Failed to save program annual report." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const deleteProgramAnnualReport = async (req, res) => {
+  let connection;
+  try {
+    const { reportId } = req.params;
+
+    connection = await db.getConnection();
+
+    const authorized = await isRegistrarHeadOrAdmin(
+      connection,
+      req.verifiedUser,
+    );
+    if (!authorized) {
+      return res.status(403).json({
+        error:
+          "Only the Registrar department head or admin can manage this report.",
+      });
+    }
+
+    await connection.beginTransaction();
+
+    const [existing] = await connection.execute(
+      `SELECT id, academic_year, degree_program FROM program_annual_reports WHERE id = ? FOR UPDATE`,
+      [reportId],
+    );
+
+    if (existing.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Report not found." });
+    }
+
+    // entries cascade-delete automatically via ON DELETE CASCADE
+    await connection.execute(
+      `DELETE FROM program_annual_reports WHERE id = ?`,
+      [reportId],
+    );
+
+    // Activity log is supplementary — isolated so a logging failure can
+    // never roll back or fail the actual deletion.
+    try {
+      const { id: userId, role } = req.verifiedUser;
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          userId,
+          role,
+          "program_annual_report_deleted",
+          "program_annual_reports",
+          reportId,
+          `Deleted the ${existing[0].degree_program} annual report for ${existing[0].academic_year}.`,
+          JSON.stringify({
+            academic_year: existing[0].academic_year,
+            degree_program: existing[0].degree_program,
+          }),
+        ],
+      );
+    } catch (logError) {
+      console.error(
+        "Activity log insert failed (program annual report deleted):",
+        logError,
+      );
+    }
+
+    await connection.commit();
+
+    res.status(200).json({ success: true, message: "Report deleted." });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Delete program annual report error:", error);
+    res.status(500).json({ error: "Failed to delete report." });
+  } finally {
+    if (connection) connection.release();
+  }
+};

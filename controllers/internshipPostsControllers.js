@@ -245,6 +245,31 @@ export const createInternshipPosting = async (req, res) => {
       [courseValues],
     );
 
+    // Activity log is supplementary — isolated so a logging failure can
+    // never roll back or fail the actual posting creation.
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          employerId,
+          "employer",
+          "internship_posting_created",
+          "internship_postings",
+          postingId,
+          `Employer created a posting for ${position} at ${company_name}.`,
+          JSON.stringify({
+            company_name,
+            position,
+            vacancies: vacancyCount,
+            work_type,
+            course_ids,
+          }),
+        ],
+      );
+    } catch (logError) {
+      console.error("Activity log insert failed (posting created):", logError);
+    }
+
     await connection.commit();
 
     return res.status(201).json({
@@ -439,6 +464,31 @@ export const updateInternshipPosting = async (req, res) => {
       [postingId],
     );
 
+    // Activity log is supplementary — isolated so a logging failure can
+    // never roll back or fail the actual update. Only the fields actually
+    // sent are recorded (setClauses/course_ids), not the full row.
+    try {
+      const changedFields = Object.keys(fieldMap).filter(
+        (key) => fieldMap[key] !== undefined,
+      );
+      if (course_ids !== undefined) changedFields.push("course_ids");
+
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          requesterId,
+          "employer",
+          "internship_posting_updated",
+          "internship_postings",
+          postingId,
+          `Employer updated posting ${postingId} (${changedFields.join(", ") || "no fields"}).`,
+          JSON.stringify({ changed_fields: changedFields }),
+        ],
+      );
+    } catch (logError) {
+      console.error("Activity log insert failed (posting updated):", logError);
+    }
+
     await connection.commit();
 
     const responseData = {
@@ -510,6 +560,23 @@ export const deleteInternshipPosting = async (req, res) => {
       return res.status(404).json({ error: "Posting not found." });
     }
 
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          requesterId,
+          role,
+          "internship_posting_deleted",
+          "internship_postings",
+          postingId,
+          `Employer deleted posting ${postingId}.`,
+          null,
+        ],
+      );
+    } catch (logError) {
+      console.error("Activity log insert failed (posting deleted):", logError);
+    }
+
     await connection.commit();
 
     return res.status(200).json({
@@ -525,6 +592,13 @@ export const deleteInternshipPosting = async (req, res) => {
   }
 };
 
+// Note: toggleInternshipFavorite is intentionally NOT logged to activity_logs.
+// Same reasoning as skipping DTR clock-in/out: favoriting is a high-frequency,
+// personal preference action with no audit value for the school (nobody needs
+// to know a student liked/unliked a posting), and internship_favorites already
+// is its own source of truth for current favorite state. Logging every toggle
+// would just add volume without adding anything an admin/dept head would ever
+// want to review.
 export const toggleInternshipFavorite = async (req, res) => {
   let connection;
   try {

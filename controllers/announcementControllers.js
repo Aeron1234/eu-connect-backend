@@ -134,7 +134,7 @@ export const createAnnouncement = async (req, res) => {
   try {
     connection = await db.getConnection();
 
-    const { id: userId } = req.verifiedUser;
+    const { id: userId, role } = req.verifiedUser;
     const data = req.body;
 
     const { title, content } = data;
@@ -176,10 +176,44 @@ export const createAnnouncement = async (req, res) => {
       });
     }
 
-    const [recipients] = await connection.execute(
-      `SELECT id FROM users WHERE id != ?`,
-      [userId],
-    );
+    // Recipients depend on who posted:
+    // - admin posts -> everyone gets notified.
+    // - department head posts -> everyone EXCEPT students outside their own
+    //   department. Employers, other dept heads, and admin still get it
+    //   regardless of department, per the notification matrix.
+    let recipients;
+
+    if (role === "admin") {
+      [recipients] = await connection.execute(
+        `SELECT id FROM users WHERE id != ?`,
+        [userId],
+      );
+    } else {
+      const [deptHeadRows] = await connection.execute(
+        `SELECT department_id FROM dept_heads_background_info WHERE user_id = ? LIMIT 1`,
+        [userId],
+      );
+
+      const departmentId = deptHeadRows[0]?.department_id ?? null;
+
+      [recipients] = await connection.execute(
+        `SELECT u.id
+         FROM users u
+         INNER JOIN roles r ON r.id = u.role_id
+         LEFT JOIN (
+           SELECT sai1.*
+           FROM student_academic_info AS sai1
+           INNER JOIN (
+             SELECT user_id, MAX(id) AS max_id
+             FROM student_academic_info
+             GROUP BY user_id
+           ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
+         ) sai ON sai.user_id = u.id
+         WHERE u.id != ?
+           AND (r.role != 'student' OR sai.department_id = ?)`,
+        [userId, departmentId],
+      );
+    }
 
     if (recipients.length > 0) {
       const values = recipients.map((r) => [
@@ -197,6 +231,32 @@ export const createAnnouncement = async (req, res) => {
       );
     }
 
+    // Activity log is supplementary — isolated so a logging failure can
+    // never roll back or fail the actual announcement post.
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          userId,
+          role,
+          "announcement_created",
+          "announcements",
+          String(result.insertId),
+          `${senderName} posted an announcement: "${title}".`,
+          JSON.stringify({
+            category_id,
+            title,
+            recipient_count: recipients.length,
+          }),
+        ],
+      );
+    } catch (logError) {
+      console.error(
+        "Activity log insert failed (announcement created):",
+        logError,
+      );
+    }
+
     await connection.commit();
 
     const io = req.app.get("socketio");
@@ -204,7 +264,9 @@ export const createAnnouncement = async (req, res) => {
     recipients.forEach((recipient) => {
       io.to(`user-${recipient.id}`).emit("new_notification", {
         title: "New Announcement",
-        message: "A new announcement has been posted.",
+        // Matches the message actually stored in the notifications row —
+        // was previously a hardcoded generic string that disagreed with it.
+        message: `Posted by ${senderName}`,
         type: "announcement",
         link: result.insertId,
       });
@@ -213,7 +275,6 @@ export const createAnnouncement = async (req, res) => {
     res.status(201).json({
       message: "Announcement posted successfully!",
       success: true,
-      // data: newAnnouncement[0],
     });
   } catch (error) {
     if (connection) await connection.rollback();
@@ -273,6 +334,33 @@ export const updateAnnouncement = async (req, res) => {
       [announcementId],
     );
 
+    // Activity log is supplementary — isolated so a logging failure can
+    // never roll back or fail the actual update.
+    try {
+      const changedFields = [];
+      if (category_id !== undefined) changedFields.push("category_id");
+      if (title !== undefined) changedFields.push("title");
+      if (content !== undefined) changedFields.push("content");
+
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          userId,
+          role,
+          "announcement_updated",
+          "announcements",
+          String(announcementId),
+          `Author updated announcement ${announcementId} (${changedFields.join(", ") || "no fields"}).`,
+          JSON.stringify({ changed_fields: changedFields }),
+        ],
+      );
+    } catch (logError) {
+      console.error(
+        "Activity log insert failed (announcement updated):",
+        logError,
+      );
+    }
+
     await connection.commit();
 
     res.status(200).json({
@@ -284,6 +372,76 @@ export const updateAnnouncement = async (req, res) => {
     if (connection) await connection.rollback();
     console.error("Update Announcement Error:", error);
     res.status(500).json({ error: "Update failed" });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const deleteAnnouncement = async (req, res) => {
+  let connection;
+  try {
+    connection = await db.getConnection();
+
+    const { announcementId } = req.params;
+    const { id: userId, role } = req.verifiedUser;
+
+    // Security: Only the author or an Admin can delete
+    // You might want to check ownership first if not a Super Admin
+    if (!announcementId) {
+      return res.status(400).json({ error: "Announcement ID is required" });
+    }
+
+    await connection.beginTransaction();
+    const [result] = await connection.execute(
+      `DELETE FROM announcements WHERE id = ? AND (author_id = ? OR ? = 'admin')`,
+      [announcementId, userId, role],
+    );
+
+    if (result.affectedRows === 0) {
+      await connection.rollback();
+      return res
+        .status(404)
+        .json({ error: "Announcement not found or unauthorized." });
+    }
+
+    await connection.execute(`DELETE FROM notifications WHERE link = ?`, [
+      announcementId,
+    ]);
+
+    // Activity log is supplementary — isolated so a logging failure can
+    // never roll back or fail the actual deletion.
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          userId,
+          role,
+          "announcement_deleted",
+          "announcements",
+          String(announcementId),
+          `${role === "admin" ? "Admin" : "Author"} deleted announcement ${announcementId}.`,
+          null,
+        ],
+      );
+    } catch (logError) {
+      console.error(
+        "Activity log insert failed (announcement deleted):",
+        logError,
+      );
+    }
+
+    await connection.commit();
+
+    // io.emit("announcement-deleted", id);
+
+    res.status(200).json({
+      message: "Announcement Deleted successfully",
+      success: true,
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.log("Delete announcement error:", error);
+    res.status(500).json({ error: "Database query failed", success: false });
   } finally {
     if (connection) connection.release();
   }
@@ -329,54 +487,6 @@ export const togglePinAnnouncement = async (req, res) => {
     if (connection) await connection.rollback();
     console.error("Toggle Pin announcement error:", error);
     res.status(500).json({ error: "Failed to update pinned status." });
-  } finally {
-    if (connection) connection.release();
-  }
-};
-
-export const deleteAnnouncement = async (req, res) => {
-  let connection;
-  try {
-    connection = await db.getConnection();
-
-    const { announcementId } = req.params;
-    const { id: userId, role } = req.verifiedUser;
-
-    // Security: Only the author or an Admin can delete
-    // You might want to check ownership first if not a Super Admin
-    if (!announcementId) {
-      return res.status(400).json({ error: "Announcement ID is required" });
-    }
-
-    await connection.beginTransaction();
-    const [result] = await db.execute(
-      `DELETE FROM announcements WHERE id = ? AND (author_id = ? OR ? = 'admin')`,
-      [announcementId, userId, role],
-    );
-
-    if (result.affectedRows === 0) {
-      await connection.rollback();
-      return res
-        .status(404)
-        .json({ error: "Announcement not found or unauthorized." });
-    }
-
-    await connection.execute(`DELETE FROM notifications WHERE link = ?`, [
-      announcementId,
-    ]);
-
-    await connection.commit();
-
-    // io.emit("announcement-deleted", id);
-
-    res.status(200).json({
-      message: "Announcement Deleted successfully",
-      success: true,
-    });
-  } catch (error) {
-    if (connection) await connection.rollback();
-    console.log("Delete announcement error:", error);
-    res.status(500).json({ error: "Database query failed", success: false });
   } finally {
     if (connection) connection.release();
   }

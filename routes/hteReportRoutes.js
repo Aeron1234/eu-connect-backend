@@ -8,9 +8,13 @@ import {
   strictLimiter,
 } from "../middleware/rateLimiter.js";
 import {
+  deleteProgramAnnualReport,
   getAvailableAcademicYears,
   getHteCompanyList,
   getHteCompanyReport,
+  getProgramAnnualReportById,
+  getProgramAnnualReports,
+  saveProgramAnnualReport,
 } from "../controllers/hteReportControllers.js";
 
 const hteReportRoutes = express.Router();
@@ -39,5 +43,36 @@ hteReportRoutes.get(
   verifyRole(["department_head", "admin"]),
   generalLimiter,
   getHteCompanyReport,
+);
+
+hteReportRoutes.post(
+  "/reports/annex-c",
+  verifyUser,
+  verifyRole(["department_head", "admin"]),
+  generalLimiter,
+  saveProgramAnnualReport,
+);
+hteReportRoutes.get(
+  "/reports/annex-c",
+  verifyUser,
+  verifyRole(["department_head", "admin"]),
+  generalLimiter,
+  getProgramAnnualReports,
+);
+
+hteReportRoutes.get(
+  "/reports/annex-c/:reportId",
+  verifyUser,
+  verifyRole(["department_head", "admin"]),
+  generalLimiter,
+  getProgramAnnualReportById,
+);
+
+hteReportRoutes.delete(
+  "/reports/annex-c/:reportId",
+  verifyUser,
+  verifyRole(["department_head", "admin"]),
+  generalLimiter,
+  deleteProgramAnnualReport,
 );
 export default hteReportRoutes;

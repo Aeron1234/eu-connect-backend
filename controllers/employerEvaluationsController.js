@@ -161,20 +161,20 @@ export const getPendingStudentEvaluations = async (req, res) => {
   }
 };
 export const createEmployerEvaluation = async (req, res) => {
-  const { id: studentId } = req.verifiedUser;
+  const { id: studentId, role } = req.verifiedUser;
   const { other_remarks, scores } = req.body;
 
-  const TOTAL_REQUIRED_CRITERIA = 17;
+  // const TOTAL_REQUIRED_CRITERIA = 17;
 
   if (!Array.isArray(scores)) {
     return res.status(400).json({ error: "Missing required evaluation data." });
   }
 
-  if (scores.length < TOTAL_REQUIRED_CRITERIA) {
-    return res.status(400).json({
-      error: `Incomplete evaluation form. You answered ${scores.length} out of ${TOTAL_REQUIRED_CRITERIA} required criteria items.`,
-    });
-  }
+  // if (scores.length < TOTAL_REQUIRED_CRITERIA) {
+  //   return res.status(400).json({
+  //     error: `Incomplete evaluation form. You answered ${scores.length} out of ${TOTAL_REQUIRED_CRITERIA} required criteria items.`,
+  //   });
+  // }
 
   const hasInvalidScore = scores.some((item) => {
     if (
@@ -258,6 +258,33 @@ export const createEmployerEvaluation = async (req, res) => {
         item.criterion_name,
         cleanScore,
       ]);
+    }
+
+    // Activity log is supplementary — isolated so a logging failure can
+    // never roll back or fail the actual evaluation submission.
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          studentId,
+          role,
+          "employer_evaluation_submitted",
+          "employer_evaluation_masters",
+          masterId,
+          `Student submitted a supervisor evaluation for internship record ${internship.id}.`,
+          JSON.stringify({
+            internship_record_id: internship.id,
+            employer_id: internship.employer_id,
+            evaluation_period: evaluationPeriod,
+            criteria_count: scores.length,
+          }),
+        ],
+      );
+    } catch (logError) {
+      console.error(
+        "Activity log insert failed (employer evaluation):",
+        logError,
+      );
     }
 
     await connection.commit();

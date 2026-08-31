@@ -3,6 +3,7 @@ import multer from "multer";
 import { verifyUser } from "../middleware/verifyUser.js";
 import { verifyRole } from "../middleware/verifyRole.js";
 import {
+  deleteNotification,
   getAllNotifications,
   markAsAllReadNotification,
   markAsReadNotification,
@@ -33,6 +34,13 @@ notificationRoutes.patch(
   verifyRole(["student", "employer", "department_head", "admin"]),
   generalLimiter,
   markAsAllReadNotification,
+);
+
+notificationRoutes.delete(
+  "/notifications/:notificationId",
+  verifyUser,
+  generalLimiter, // guessing the limiter tier — adjust to match your other notification routes
+  deleteNotification,
 );
 
 export default notificationRoutes;

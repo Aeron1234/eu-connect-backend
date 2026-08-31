@@ -398,8 +398,9 @@ export const createStudentEvaluation = async (req, res) => {
     const notifTitle = "Verify Your Evaluation";
     const notifMessage = `${employerName} from ${companyName} has submitted your internship evaluation. Please confirm this was your actual supervisor to finalize your grade.`;
 
+    // in createStudentEvaluation
     await connection.execute(
-      `INSERT INTO notifications (user_id, sender_id, type, title, message, link, link_uuid) VALUES (?, ?, 'submission', ?, ?, ?, ?)`,
+      `INSERT INTO notifications (user_id, sender_id, type, title, message, link, link_uuid) VALUES (?, ?, 'evaluation_submitted', ?, ?, ?, ?)`,
       [
         student_id,
         evaluated_by,
@@ -410,15 +411,44 @@ export const createStudentEvaluation = async (req, res) => {
       ],
     );
 
+    // Activity log is supplementary — isolated so a logging failure can
+    // never roll back or fail the actual submission. No scores in metadata;
+    // this table already stores those, and this is still pending student
+    // verification, so it isn't final yet.
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          evaluated_by,
+          "employer",
+          "student_evaluation_submitted",
+          "student_evaluation_masters",
+          masterId,
+          `${employerName} submitted a pending performance evaluation for a student at ${companyName}.`,
+          JSON.stringify({
+            internship_record_id,
+            student_id,
+            status: "pending",
+          }),
+        ],
+      );
+    } catch (logError) {
+      console.error(
+        "Activity log insert failed (student evaluation submitted):",
+        logError,
+      );
+    }
+
     await connection.commit();
 
     // 4. Real-time Socket Event
     const io = req.app.get("socketio");
     if (io) {
+      // in the socket emit right after
       io.to(`user-${student_id}`).emit("new_notification", {
         title: notifTitle,
         message: notifMessage,
-        type: "submission",
+        type: "evaluation_submitted", // was "submission"
         link: internship_record_id,
         link_uuid: masterId,
       });
@@ -507,8 +537,9 @@ export const deleteStudentEvaluation = async (req, res) => {
     }
 
     // 2. Clean up the exact pending verification notification using the precise UUID
+    // in deleteStudentEvaluation, step 2
     const [deleteNotifResult] = await connection.execute(
-      `DELETE FROM notifications WHERE link_uuid = ? AND type = 'submission'`,
+      `DELETE FROM notifications WHERE link_uuid = ? AND type = 'evaluation_submitted'`,
       [evaluationId],
     );
 
@@ -561,6 +592,32 @@ export const deleteStudentEvaluation = async (req, res) => {
         success: false,
         error: "Failed to delete the primary evaluation master record.",
       });
+    }
+
+    // Activity log is supplementary — isolated so a logging failure can
+    // never roll back or fail the actual deletion.
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          currentUserId,
+          userRole,
+          "student_evaluation_deleted",
+          "student_evaluation_masters",
+          evaluationId,
+          `${isAdmin ? "Admin" : "Supervisor"} deleted a pending evaluation for internship record ${evaluation.internship_id}.`,
+          JSON.stringify({
+            internship_id: evaluation.internship_id,
+            student_id: evaluation.student_id,
+            employer_id: evaluation.employer_id,
+          }),
+        ],
+      );
+    } catch (logError) {
+      console.error(
+        "Activity log insert failed (student evaluation deleted):",
+        logError,
+      );
     }
 
     // 5. Build dynamic deletion notification payloads using the integer link
@@ -722,11 +779,37 @@ export const respondToStudentEvaluation = async (req, res) => {
     );
 
     // 3. Mark the verification notification as read either way —
-    // the student has acted on it, whether by confirming or disputing
+    // the student has acted on it, whether by confirming or disputing.
+    // evaluationId is the master's UUID, which was inserted into link_uuid
+    // (see createStudentEvaluation), and the type there is 'evaluation_submitted'.
     await connection.execute(
-      `UPDATE notifications SET is_read = 1 WHERE link = ? AND type = 'submission'`,
+      `UPDATE notifications SET is_read = 1 WHERE link_uuid = ? AND type = 'evaluation_submitted'`,
       [evaluationId],
     );
+
+    // Activity log is supplementary — isolated so a logging failure can
+    // never roll back or fail the actual response.
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          studentId,
+          "student",
+          decision === "completed"
+            ? "student_evaluation_completed"
+            : "student_evaluation_disputed",
+          "student_evaluation_masters",
+          evaluationId,
+          `Student ${decision === "completed" ? "confirmed" : "disputed"} their performance evaluation.`,
+          null,
+        ],
+      );
+    } catch (logError) {
+      console.error(
+        "Activity log insert failed (student evaluation response):",
+        logError,
+      );
+    }
 
     await connection.commit();
 
@@ -797,11 +880,34 @@ export const restoreDisputedEvaluation = async (req, res) => {
     );
 
     // 3. Re-open the original notification so it shows as unread/pending
-    // again in whatever inbox surfaces it
+    // again in whatever inbox surfaces it. Same fix as respondToStudentEvaluation:
+    // evaluationId belongs in link_uuid, and the type is 'evaluation_submitted'.
     await connection.execute(
-      `UPDATE notifications SET is_read = 0 WHERE link = ? AND type = 'submission'`,
+      `UPDATE notifications SET is_read = 0 WHERE link_uuid = ? AND type = 'evaluation_submitted'`,
       [evaluationId],
     );
+
+    // Activity log is supplementary — isolated so a logging failure can
+    // never roll back or fail the actual restore.
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          studentId,
+          "student",
+          "student_evaluation_restored",
+          "student_evaluation_masters",
+          evaluationId,
+          `Student restored their disputed evaluation back to pending.`,
+          null,
+        ],
+      );
+    } catch (logError) {
+      console.error(
+        "Activity log insert failed (student evaluation restored):",
+        logError,
+      );
+    }
 
     await connection.commit();
 
@@ -813,6 +919,101 @@ export const restoreDisputedEvaluation = async (req, res) => {
   } catch (error) {
     if (connection) await connection.rollback();
     console.error("Restore disputed evaluation error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Database transaction validation failed.",
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const reviewDisputedEvaluation = async (req, res) => {
+  const { id: reviewerId, role } = req.verifiedUser; // Security gate: only staff can review
+  const { evaluationId } = req.params;
+  const { review_notes } = req.body;
+
+  if (!evaluationId) {
+    return res.status(400).json({ error: "Evaluation ID is required." });
+  }
+
+  if (!["department_head", "admin"].includes(role)) {
+    return res.status(403).json({
+      error:
+        "Only a department head or admin can review a disputed evaluation.",
+    });
+  }
+
+  let connection;
+  try {
+    connection = await db.getConnection();
+
+    await connection.beginTransaction();
+
+    // 1. Verify the evaluation exists and is currently disputed —
+    // reviewing doesn't require ownership of the internship, since this
+    // is a staff-side action, not the student's own
+    const [evaluationCheck] = await connection.execute(
+      `SELECT status FROM student_evaluation_masters WHERE id = ? FOR UPDATE`,
+      [evaluationId],
+    );
+
+    if (evaluationCheck.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Evaluation record not found." });
+    }
+
+    if (evaluationCheck[0].status !== "disputed") {
+      await connection.rollback();
+      return res.status(400).json({
+        error: "Only a disputed evaluation can be marked as reviewed.",
+      });
+    }
+
+    // 2. Record who reviewed it, when, and any notes — this does NOT
+    // change `status`. Reviewing acknowledges the dispute was looked at;
+    // it doesn't overturn it. The student's dispute still stands unless
+    // they themselves restore it via restoreDisputedEvaluation.
+    await connection.execute(
+      `UPDATE student_evaluation_masters 
+       SET reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP, review_notes = ?
+       WHERE id = ?`,
+      [reviewerId, review_notes || null, evaluationId],
+    );
+
+    // Activity log is supplementary — isolated so a logging failure can
+    // never roll back or fail the actual review. review_notes is left out
+    // of metadata deliberately — it already lives on the row itself
+    // (reviewed_by/review_notes), no need to duplicate it here.
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          reviewerId,
+          role,
+          "student_evaluation_reviewed",
+          "student_evaluation_masters",
+          evaluationId,
+          `${role === "admin" ? "Admin" : "Department head"} marked disputed evaluation ${evaluationId} as reviewed.`,
+          JSON.stringify({ has_review_notes: Boolean(review_notes) }),
+        ],
+      );
+    } catch (logError) {
+      console.error(
+        "Activity log insert failed (student evaluation reviewed):",
+        logError,
+      );
+    }
+
+    await connection.commit();
+
+    res.status(200).json({
+      success: true,
+      message: "Disputed evaluation marked as reviewed.",
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Review disputed evaluation error:", error);
     res.status(500).json({
       success: false,
       error: "Database transaction validation failed.",
@@ -1073,77 +1274,6 @@ export const getAllStudentEvaluations = async (req, res) => {
       success: false,
       error: "Failed to compile evaluation history.",
       details: error.message,
-    });
-  } finally {
-    if (connection) connection.release();
-  }
-};
-
-export const reviewDisputedEvaluation = async (req, res) => {
-  const { id: reviewerId, role } = req.verifiedUser; // Security gate: only staff can review
-  const { evaluationId } = req.params;
-  const { review_notes } = req.body;
-
-  if (!evaluationId) {
-    return res.status(400).json({ error: "Evaluation ID is required." });
-  }
-
-  if (!["department_head", "admin"].includes(role)) {
-    return res.status(403).json({
-      error:
-        "Only a department head or admin can review a disputed evaluation.",
-    });
-  }
-
-  let connection;
-  try {
-    connection = await db.getConnection();
-
-    await connection.beginTransaction();
-
-    // 1. Verify the evaluation exists and is currently disputed —
-    // reviewing doesn't require ownership of the internship, since this
-    // is a staff-side action, not the student's own
-    const [evaluationCheck] = await connection.execute(
-      `SELECT status FROM student_evaluation_masters WHERE id = ? FOR UPDATE`,
-      [evaluationId],
-    );
-
-    if (evaluationCheck.length === 0) {
-      await connection.rollback();
-      return res.status(404).json({ error: "Evaluation record not found." });
-    }
-
-    if (evaluationCheck[0].status !== "disputed") {
-      await connection.rollback();
-      return res.status(400).json({
-        error: "Only a disputed evaluation can be marked as reviewed.",
-      });
-    }
-
-    // 2. Record who reviewed it, when, and any notes — this does NOT
-    // change `status`. Reviewing acknowledges the dispute was looked at;
-    // it doesn't overturn it. The student's dispute still stands unless
-    // they themselves restore it via restoreDisputedEvaluation.
-    await connection.execute(
-      `UPDATE student_evaluation_masters 
-       SET reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP, review_notes = ?
-       WHERE id = ?`,
-      [reviewerId, review_notes || null, evaluationId],
-    );
-
-    await connection.commit();
-
-    res.status(200).json({
-      success: true,
-      message: "Disputed evaluation marked as reviewed.",
-    });
-  } catch (error) {
-    if (connection) await connection.rollback();
-    console.error("Review disputed evaluation error:", error);
-    res.status(500).json({
-      success: false,
-      error: "Database transaction validation failed.",
     });
   } finally {
     if (connection) connection.release();

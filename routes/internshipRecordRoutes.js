@@ -67,7 +67,7 @@ internshipRecordRoutes.get(
 internshipRecordRoutes.post(
   "/internships/new",
   verifyUser,
-  verifyRole(["student", "admin"]),
+  verifyRole(["student"]),
   upload.none(),
   strictLimiter,
   createInternshipRecord,
@@ -76,7 +76,7 @@ internshipRecordRoutes.post(
 internshipRecordRoutes.patch(
   "/internships/finish/:internshipId",
   verifyUser,
-  verifyRole(["student", "admin"]),
+  verifyRole(["student"]),
   mediumLimiter,
   finishInternshipRecord,
 );

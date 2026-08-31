@@ -164,10 +164,10 @@ export const getSearchedStudentDTRs = async (req, res) => {
 
 export const getSearchedStudentDtrLocation = async (req, res) => {
   try {
-    const { searchedUserId } = req.params;
+    const { studentId } = req.params;
 
-    if (!searchedUserId) {
-      return res.status(400).json({ error: "searchedUserId is required." });
+    if (!studentId) {
+      return res.status(400).json({ error: "studentId is required." });
     }
 
     const [rows] = await db.execute(
@@ -187,7 +187,7 @@ export const getSearchedStudentDtrLocation = async (req, res) => {
        LEFT JOIN dtr_locations AS dl ON ir.id = dl.internship_id
        WHERE ir.user_id = ? AND ir.status = 'ongoing'
        LIMIT 1`,
-      [searchedUserId],
+      [studentId],
     );
 
     if (rows.length === 0) {
@@ -224,12 +224,20 @@ export const setSearchedStudentDtrLocation = async (req, res) => {
   const { searchedUserId } = req.params;
   const { internshipId } = req.query;
   const { id: setterId, role } = req.verifiedUser;
-  const { lat, lon, radius_meter, label } = req.body;
+  const { lat, lon, radius_meter, label, address } = req.body;
 
   let connection;
   try {
-    if (label.length > 1000) {
+    // Fixed: this used to run before checking whether label was even
+    // provided — label is optional everywhere else in this function
+    // (label ?? null), so an omitted label crashed here with
+    // "Cannot read properties of undefined (reading 'length')".
+    if (label && label.length > 1000) {
       return res.status(400).json({ error: "Label is too long." });
+    }
+
+    if (address && address.length > 255) {
+      return res.status(400).json({ error: "Address is too long." });
     }
 
     // 1. Validate required params/body
@@ -327,9 +335,17 @@ export const setSearchedStudentDtrLocation = async (req, res) => {
 
       const [updateResult] = await connection.execute(
         `UPDATE dtr_locations 
-         SET set_by = ?, lat = ?, lon = ?, radius_meters = ?, label = ?, updated_at = NOW()
+         SET set_by = ?, lat = ?, lon = ?, radius_meters = ?, label = ?, address = ?, updated_at = NOW()
          WHERE id = ?`,
-        [setterId, latNum, lonNum, radiusMeters, label ?? null, dtrLocationId],
+        [
+          setterId,
+          latNum,
+          lonNum,
+          radiusMeters,
+          label ?? null,
+          address ?? null,
+          dtrLocationId,
+        ],
       );
 
       if (updateResult.affectedRows === 0) {
@@ -340,9 +356,17 @@ export const setSearchedStudentDtrLocation = async (req, res) => {
       // 4b. Insert new custom location
       const [insertResult] = await connection.execute(
         `INSERT INTO dtr_locations 
-         (internship_id, set_by, lat, lon, radius_meters, label, created_at, updated_at) 
-         VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())`,
-        [internshipId, setterId, latNum, lonNum, radiusMeters, label ?? null],
+         (internship_id, set_by, lat, lon, radius_meters, label, address, created_at, updated_at) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+        [
+          internshipId,
+          setterId,
+          latNum,
+          lonNum,
+          radiusMeters,
+          label ?? null,
+          address ?? null,
+        ],
       );
 
       if (insertResult.affectedRows === 0) {
@@ -353,7 +377,48 @@ export const setSearchedStudentDtrLocation = async (req, res) => {
       dtrLocationId = insertResult.insertId;
     }
 
+    // Notify the student — the label they see this as is the same "note"
+    // the setter attached, folded straight into the notification message.
+    const [setterProfile] = await connection.execute(
+      `SELECT first_name, last_name FROM user_profiles WHERE user_id = ?`,
+      [setterId],
+    );
+    const setterName =
+      setterProfile.length > 0
+        ? `${setterProfile[0].first_name} ${setterProfile[0].last_name}`
+        : "Your supervisor";
+
+    const locationDescription = address ? ` at ${address}` : "";
+
+    const notifMessage = label
+      ? `${setterName} has set your DTR check-in location${locationDescription} with a ${radiusMeters}m radius.\nNote: "${label}"`
+      : `${setterName} has set your DTR check-in location${locationDescription} with a ${radiusMeters}m radius.`;
+
+    // internshipId is a char(36) UUID (internship_records.id) — goes under
+    // link_uuid, matching the convention used for every other internship-
+    // record-related notification (link is reserved for int/auto-increment
+    // ids, like announcements).
+    await connection.execute(
+      `INSERT INTO notifications (user_id, sender_id, type, title, message, link_uuid) VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        internship.user_id,
+        setterId,
+        "dtr_location_set",
+        "DTR Location Set",
+        notifMessage,
+        internshipId,
+      ],
+    );
+
     await connection.commit();
+
+    const io = req.app.get("socketio");
+    io.to(`user-${internship.user_id}`).emit("new_notification", {
+      title: "DTR Location Set",
+      message: notifMessage,
+      type: "dtr_location_set",
+      link_uuid: internshipId,
+    });
 
     res.status(200).json({
       message: "DTR location set successfully.",
@@ -366,6 +431,7 @@ export const setSearchedStudentDtrLocation = async (req, res) => {
         lon: lonNum,
         radius_meters: radiusMeters,
         label: label ?? null,
+        address: address ?? null,
       },
     });
   } catch (error) {
@@ -605,96 +671,6 @@ export const downloadSearchedStudentInternshipFile = async (req, res) => {
   }
 };
 
-export const deleteSearchedStudentFile = async (req, res) => {
-  let connection;
-  try {
-    const { id: requesterId, role } = req.verifiedUser;
-    const { searchedUserId, fileId } = req.params;
-
-    if (!searchedUserId || !fileId) {
-      return res
-        .status(400)
-        .json({ error: "searchedUserId and fileId are required." });
-    }
-
-    connection = await db.getConnection();
-    await connection.beginTransaction();
-
-    // Look up the record, and confirm it actually belongs to the student
-    // named in the route — never trust fileId alone, or a caller could
-    // delete an arbitrary file by guessing/reusing an id from another student
-    const [rows] = await connection.execute(
-      `SELECT id, user_id, path, uploaded_by_id, verification_status FROM internship_documents WHERE id = ? FOR UPDATE`,
-      [fileId],
-    );
-
-    if (rows.length === 0) {
-      await connection.rollback();
-      return res.status(404).json({ error: "File not found." });
-    }
-
-    const doc = rows[0];
-
-    if (doc.user_id !== searchedUserId) {
-      await connection.rollback();
-      // 404 rather than 403 here — don't reveal that a file with this id
-      // exists under a *different* student
-      return res.status(404).json({ error: "File not found." });
-    }
-
-    // Employers can only delete files they personally uploaded on a
-    // student's behalf — admins/department heads are not restricted this way
-    if (role === "employer" && doc.uploaded_by_id !== requesterId) {
-      await connection.rollback();
-      return res.status(403).json({
-        error: "You can only delete files you uploaded yourself.",
-      });
-    }
-
-    if (role === "employer" && doc.verification_status === "accepted") {
-      await connection.rollback();
-      return res.status(403).json({
-        error:
-          "This certificate has already been confirmed by the student and can no longer be deleted.",
-      });
-    }
-
-    const [result] = await connection.execute(
-      `DELETE FROM internship_documents WHERE id = ?`,
-      [fileId],
-    );
-
-    if (result.affectedRows === 0) {
-      await connection.rollback();
-      return res.status(404).json({ error: "File not found." });
-    }
-
-    await connection.commit();
-
-    // Delete from storage AFTER commit succeeds — same reasoning as deleteFile:
-    // DB is source of truth, an orphaned storage object is recoverable,
-    // an orphaned DB row isn't
-    const { error: storageError } = await supabase.storage
-      .from(BUCKET)
-      .remove([doc.path]);
-
-    if (storageError) {
-      console.error("Failed to delete from storage:", storageError.message);
-    }
-
-    res.status(200).json({
-      message: "File deleted successfully.",
-      success: true,
-    });
-  } catch (error) {
-    if (connection) await connection.rollback();
-    console.error("Delete searched student file error: ", error);
-    res.status(500).json({ error: "Database query failed", success: false });
-  } finally {
-    if (connection) connection.release();
-  }
-};
-
 export const getEmployerUploadedFiles = async (req, res) => {
   try {
     const { id: employerId } = req.verifiedUser;
@@ -807,6 +783,19 @@ export const uploadFileToSearchedStudent = async (req, res) => {
 
     const { id: requirementTypeId, category: catLower } = reqTypes[0];
 
+    // Sender name for the notification sent to the student
+    const [employerProfile] = await connection.execute(
+      `SELECT first_name, last_name FROM user_profiles WHERE user_id = ?`,
+      [employerId],
+    );
+
+    if (employerProfile.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Employer profile not found." });
+    }
+
+    const employerName = `${employerProfile[0].first_name} ${employerProfile[0].last_name}`;
+
     // 3. Upload to Supabase Storage — stored under the STUDENT's folder,
     // not the employer's, so it lands in the same place student-uploaded
     // files do and is reachable by the existing download/delete routes
@@ -849,7 +838,57 @@ export const uploadFileToSearchedStudent = async (req, res) => {
       return res.status(400).json({ error: "Uploading file failed." });
     }
 
+    // 5. Notify the student — this file is pending their review before it
+    // counts toward requirements (see reviewEmployerCertificate)
+    const notifTitle = "Certificate Uploaded";
+    const notifMessage = `${employerName} uploaded a Certificate of Completion on your behalf. Please review it to confirm.`;
+
+    await connection.execute(
+      `INSERT INTO notifications (user_id, sender_id, type, title, message, link) VALUES (?, ?, 'certificate_uploaded', ?, ?, ?)`,
+      [searchedUserId, employerId, notifTitle, notifMessage, result.insertId],
+    );
+
+    // Activity log is supplementary — isolated so a logging failure can
+    // never roll back or fail the actual upload. This one has real audit
+    // value: an employer is filing a document on a student's behalf, and
+    // it's still pending the student's own confirmation.
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          employerId,
+          role,
+          "internship_document_uploaded_on_behalf",
+          "internship_documents",
+          String(result.insertId),
+          `${employerName} uploaded a Certificate of Completion on behalf of student ${searchedUserId}, pending their confirmation.`,
+          JSON.stringify({
+            student_id: searchedUserId,
+            internship_id: internship.id,
+            company_name,
+            file_name: file_name || CERTIFICATE_OF_COMPLETION_NAME,
+            verification_status: "pending",
+          }),
+        ],
+      );
+    } catch (logError) {
+      console.error(
+        "Activity log insert failed (document uploaded on behalf):",
+        logError,
+      );
+    }
+
     await connection.commit();
+
+    const io = req.app.get("socketio");
+    if (io) {
+      io.to(`user-${searchedUserId}`).emit("new_notification", {
+        title: notifTitle,
+        message: notifMessage,
+        type: "certificate_uploaded",
+        link: result.insertId,
+      });
+    }
 
     return res.status(201).json({
       message: "Document uploaded successfully on behalf of the student.",
@@ -866,6 +905,123 @@ export const uploadFileToSearchedStudent = async (req, res) => {
     }
     console.error("Upload to searched user error:", error.message);
     return res.status(500).json({ error: "Server failed to process upload." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const deleteSearchedStudentFile = async (req, res) => {
+  let connection;
+  try {
+    const { id: requesterId, role } = req.verifiedUser;
+    const { searchedUserId, fileId } = req.params;
+
+    if (!searchedUserId || !fileId) {
+      return res
+        .status(400)
+        .json({ error: "searchedUserId and fileId are required." });
+    }
+
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    // Look up the record, and confirm it actually belongs to the student
+    // named in the route — never trust fileId alone, or a caller could
+    // delete an arbitrary file by guessing/reusing an id from another student
+    const [rows] = await connection.execute(
+      `SELECT id, user_id, path, uploaded_by_id, verification_status FROM internship_documents WHERE id = ? FOR UPDATE`,
+      [fileId],
+    );
+
+    if (rows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "File not found." });
+    }
+
+    const doc = rows[0];
+
+    if (doc.user_id !== searchedUserId) {
+      await connection.rollback();
+      // 404 rather than 403 here — don't reveal that a file with this id
+      // exists under a *different* student
+      return res.status(404).json({ error: "File not found." });
+    }
+
+    // Employers can only delete files they personally uploaded on a
+    // student's behalf — admins/department heads are not restricted this way
+    if (role === "employer" && doc.uploaded_by_id !== requesterId) {
+      await connection.rollback();
+      return res.status(403).json({
+        error: "You can only delete files you uploaded yourself.",
+      });
+    }
+
+    if (role === "employer" && doc.verification_status === "accepted") {
+      await connection.rollback();
+      return res.status(403).json({
+        error:
+          "This certificate has already been confirmed by the student and can no longer be deleted.",
+      });
+    }
+
+    const [result] = await connection.execute(
+      `DELETE FROM internship_documents WHERE id = ?`,
+      [fileId],
+    );
+
+    if (result.affectedRows === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "File not found." });
+    }
+
+    // Activity log is supplementary — isolated so a logging failure can
+    // never roll back or fail the actual deletion.
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          requesterId,
+          role,
+          "internship_document_deleted",
+          "internship_documents",
+          String(fileId),
+          `${role === "employer" ? "Employer" : role} deleted document ${fileId} belonging to student ${searchedUserId}.`,
+          JSON.stringify({
+            document_owner_id: searchedUserId,
+            uploaded_by_id: doc.uploaded_by_id,
+            verification_status: doc.verification_status,
+            path: doc.path,
+          }),
+        ],
+      );
+    } catch (logError) {
+      console.error(
+        "Activity log insert failed (searched student document deleted):",
+        logError,
+      );
+    }
+
+    await connection.commit();
+
+    // Delete from storage AFTER commit succeeds — same reasoning as deleteFile:
+    // DB is source of truth, an orphaned storage object is recoverable,
+    // an orphaned DB row isn't
+    const { error: storageError } = await supabase.storage
+      .from(BUCKET)
+      .remove([doc.path]);
+
+    if (storageError) {
+      console.error("Failed to delete from storage:", storageError.message);
+    }
+
+    res.status(200).json({
+      message: "File deleted successfully.",
+      success: true,
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Delete searched student file error: ", error);
+    res.status(500).json({ error: "Database query failed", success: false });
   } finally {
     if (connection) connection.release();
   }

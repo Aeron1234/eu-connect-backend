@@ -76,7 +76,7 @@ export const uploadInternshipFile = async (req, res) => {
   let connection;
   let uploadedStoragePath;
   try {
-    const { id: userId } = req.verifiedUser;
+    const { id: userId, role } = req.verifiedUser;
     const { file_name, company_name, requirement_type_id } = req.body;
     const file = req.file;
 
@@ -167,6 +167,32 @@ export const uploadInternshipFile = async (req, res) => {
       return res.status(400).json({ error: "Uploading file failed." });
     }
 
+    // Activity log is supplementary — a failure here must never roll back
+    // or fail the actual upload, so it's isolated in its own try/catch.
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          userId,
+          role,
+          "internship_document_uploaded",
+          "internship_documents",
+          String(result.insertId),
+          `Uploaded ${file_name} (${catLower}) for internship at ${company_name}.`,
+          JSON.stringify({
+            internship_id: internshipId,
+            file_name,
+            company_name,
+            category: catLower,
+            requirement_type_id,
+            file_type: file.mimetype,
+          }),
+        ],
+      );
+    } catch (logError) {
+      console.error("Activity log insert failed (document upload):", logError);
+    }
+
     await connection.commit();
 
     res.status(201).json({
@@ -185,52 +211,6 @@ export const uploadInternshipFile = async (req, res) => {
     res.status(500).json({ error: "Server failed to process upload." });
   } finally {
     if (connection) connection.release();
-  }
-};
-
-export const downloadInternshipFile = async (req, res) => {
-  try {
-    const { id: userId, role } = req.verifiedUser;
-    const { fileId } = req.params;
-
-    const [rows] = await db.execute(
-      `SELECT user_id, path, file_name, file_type FROM internship_documents WHERE id = ?`,
-      [fileId],
-    );
-
-    if (rows.length === 0) {
-      return res.status(404).json({ error: "File not found." });
-    }
-
-    const doc = rows[0];
-
-    const isOwner = doc.user_id === userId;
-    const isStaff = role === "admin" || role === "department_head";
-
-    if (!isOwner && !isStaff) {
-      return res
-        .status(403)
-        .json({ error: "You don't have access to this file." });
-    }
-
-    // Bumped from 60s to 120s to give some buffer for the
-    // Server Action round trip before the client actually uses the URL
-    const { data, error } = await supabase.storage
-      .from(BUCKET)
-      .createSignedUrl(doc.path, 120);
-
-    if (error) {
-      console.error("Signed URL error:", error.message);
-      return res.status(404).json({ error: "File not found on server." });
-    }
-
-    return res.status(200).json({
-      url: data.signedUrl,
-      fileName: doc.file_name,
-    });
-  } catch (error) {
-    console.error("Download Error:", error.message);
-    res.status(500).json({ error: "Failed to retrieve file." });
   }
 };
 
@@ -279,6 +259,28 @@ export const deleteFile = async (req, res) => {
       return res.status(404).json({ error: "File not found." });
     }
 
+    // Same isolation as upload — logging failure shouldn't affect the
+    // already-decided deletion.
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          userId,
+          role,
+          "internship_document_deleted",
+          "internship_documents",
+          String(fileId),
+          `${isAdmin && !isOwner ? "Admin" : "Owner"} deleted document ${fileId}.`,
+          JSON.stringify({
+            document_owner_id: doc.user_id,
+            path: doc.path,
+          }),
+        ],
+      );
+    } catch (logError) {
+      console.error("Activity log insert failed (document delete):", logError);
+    }
+
     await connection.commit();
 
     // Delete from storage AFTER commit succeeds — DB is source of truth,
@@ -301,5 +303,51 @@ export const deleteFile = async (req, res) => {
     res.status(500).json({ error: "Database query failed", success: false });
   } finally {
     if (connection) connection.release();
+  }
+};
+
+export const downloadInternshipFile = async (req, res) => {
+  try {
+    const { id: userId, role } = req.verifiedUser;
+    const { fileId } = req.params;
+
+    const [rows] = await db.execute(
+      `SELECT user_id, path, file_name, file_type FROM internship_documents WHERE id = ?`,
+      [fileId],
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "File not found." });
+    }
+
+    const doc = rows[0];
+
+    const isOwner = doc.user_id === userId;
+    const isStaff = role === "admin" || role === "department_head";
+
+    if (!isOwner && !isStaff) {
+      return res
+        .status(403)
+        .json({ error: "You don't have access to this file." });
+    }
+
+    // Bumped from 60s to 120s to give some buffer for the
+    // Server Action round trip before the client actually uses the URL
+    const { data, error } = await supabase.storage
+      .from(BUCKET)
+      .createSignedUrl(doc.path, 120);
+
+    if (error) {
+      console.error("Signed URL error:", error.message);
+      return res.status(404).json({ error: "File not found on server." });
+    }
+
+    return res.status(200).json({
+      url: data.signedUrl,
+      fileName: doc.file_name,
+    });
+  } catch (error) {
+    console.error("Download Error:", error.message);
+    res.status(500).json({ error: "Failed to retrieve file." });
   }
 };

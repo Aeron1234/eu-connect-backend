@@ -36,7 +36,7 @@ searchedUserRoutes.get(
 );
 
 searchedUserRoutes.get(
-  "/searched-user/dtrs/:searchedUserId",
+  "/searched-user/dtrs/:studentId",
   verifyUser,
   verifyRole(["employer", "department_head", "admin"]),
   generalLimiter,

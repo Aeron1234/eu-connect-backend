@@ -221,12 +221,14 @@ export const createInternshipRecord = async (req, res) => {
       });
     }
 
+    const requestMessage = `New request from ${studentName}`;
+
     const values = recipients.map((recipient) => [
       recipient.id,
       userId,
-      "submission",
+      "internship_record_request",
       "New Internship Request",
-      `New request from ${studentName}`,
+      requestMessage,
       newId,
     ]);
 
@@ -237,6 +239,23 @@ export const createInternshipRecord = async (req, res) => {
       );
     }
 
+    await connection.execute(
+      `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        userId,
+        role,
+        "internship_record_created",
+        "internship_records",
+        newId,
+        `${studentName} created an internship record for ${data.company_name}.`,
+        JSON.stringify({
+          company_name: data.company_name,
+          semester: data.semester,
+          department_id,
+        }),
+      ],
+    );
+
     await connection.commit();
 
     const io = req.app.get("socketio");
@@ -244,8 +263,9 @@ export const createInternshipRecord = async (req, res) => {
     recipients.forEach((admin) => {
       io.to(`user-${admin.id}`).emit("new_notification", {
         title: "New Internship Request",
-        message: "A new record is pending for your approval.",
-        type: "submission",
+        // Matches the message actually stored in the notifications row.
+        message: requestMessage,
+        type: "internship_record_request",
         link: newId,
       });
     });
@@ -366,23 +386,53 @@ export const approveInternshipRecord = async (req, res) => {
       });
     }
 
+    // The original request notification was inserted with link_uuid
+    // (see createInternshipRecord) — matching that here.
     await connection.execute(
       `UPDATE notifications 
       SET is_read = 1 
-      WHERE link = ? AND type = 'submission' AND user_id = ?`,
+      WHERE link_uuid = ? AND type = 'internship_record_request' AND user_id = ?`,
       [internshipId, userId],
     );
 
-    const notifMessage =
-      status === "ongoing"
-        ? `Your internship at ${company_name} has been approved by ${personInChargeName}!`
-        : `Your internship request for ${company_name} was rejected by ${personInChargeName}.`;
-    const notifType = status === "ongoing" ? "approved" : "rejected";
-    const notifTitle = `Internship Record ${notifType.charAt(0).toUpperCase() + notifType.slice(1)}`;
+    const isApproved = status === "ongoing";
+    const notifMessage = isApproved
+      ? `Your internship at ${company_name} has been approved by ${personInChargeName}!`
+      : `Your internship request for ${company_name} was rejected by ${personInChargeName}.`;
+    const notifType = isApproved
+      ? "internship_record_approved"
+      : "internship_record_rejected";
+    const notifTitle = isApproved
+      ? "Internship Record Approved"
+      : "Internship Record Rejected";
+
+    // internshipId is a char(36) UUID (internship_records.id) — belongs in
+    // link_uuid, matching the request notification above and the same
+    // convention link_uuid=UUID-based refs / link=int-based refs (e.g.
+    // announcements' auto-increment id) used elsewhere in this app.
+    await connection.execute(
+      `INSERT INTO notifications (user_id, sender_id, type, message, title, link_uuid) VALUES (?, ?, ?, ?, ?, ?)`,
+      [studentId, userId, notifType, notifMessage, notifTitle, internshipId],
+    );
 
     await connection.execute(
-      `INSERT INTO notifications (user_id, sender_id, type, message, title, link) VALUES (?, ?, ?, ?, ?, ?)`,
-      [studentId, userId, notifType, notifMessage, notifTitle, internshipId],
+      `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        userId,
+        role,
+        isApproved
+          ? "internship_record_approved"
+          : "internship_record_rejected",
+        "internship_records",
+        internshipId,
+        `${personInChargeName} ${isApproved ? "approved" : "rejected"} the internship record for ${company_name}.`,
+        JSON.stringify({
+          student_id: studentId,
+          company_name,
+          previous_status: currentStatus,
+          new_status: status,
+        }),
+      ],
     );
 
     await connection.commit();
@@ -392,7 +442,7 @@ export const approveInternshipRecord = async (req, res) => {
       title: notifTitle,
       message: notifMessage,
       type: notifType,
-      link: internshipId,
+      link_uuid: internshipId,
     });
 
     res.status(200).json({
@@ -560,10 +610,28 @@ export const markInternshipFinished = async (req, res) => {
       [
         studentId,
         userId,
-        "approved",
+        "internship_record_force_finished",
         notifMessage,
         "Internship Finished",
         internshipId,
+      ],
+    );
+
+    await connection.execute(
+      `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        userId,
+        role,
+        "internship_record_force_finished",
+        "internship_records",
+        internshipId,
+        `${personInChargeName} marked the internship record for ${company_name} (student: ${alumniName ?? studentId}) as finished.`,
+        JSON.stringify({
+          student_id: studentId,
+          company_name,
+          total_hours: totalHours,
+          accumulated_hours: accumulatedHours,
+        }),
       ],
     );
 
@@ -573,7 +641,7 @@ export const markInternshipFinished = async (req, res) => {
     io.to(`user-${studentId}`).emit("new_notification", {
       title: "Internship Finished",
       message: notifMessage,
-      type: "approved",
+      type: "internship_record_force_finished",
       link: internshipId,
     });
 
@@ -720,7 +788,61 @@ export const finishInternshipRecord = async (req, res) => {
       if (err.code !== "ER_DUP_ENTRY") throw err;
     }
 
+    const [recipients] = await connection.execute(
+      `SELECT u.id
+       FROM users u
+       INNER JOIN dept_heads_background_info dhbi ON dhbi.user_id = u.id
+       WHERE dhbi.department_id = ?`,
+      [departmentId],
+    );
+
+    const finishedMessage = `${alumniName ?? "A student"} has finished their internship at ${company_name}.`;
+
+    const notifValues = recipients.map((recipient) => [
+      recipient.id,
+      userId,
+      "internship_record_finished",
+      "Internship Record Finished",
+      finishedMessage,
+      internshipId,
+    ]);
+
+    if (notifValues.length > 0) {
+      await connection.query(
+        `INSERT INTO notifications (user_id, sender_id, type, title, message, link) VALUES ?`,
+        [notifValues],
+      );
+    }
+
+    await connection.execute(
+      `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        userId,
+        "student",
+        "internship_record_finished",
+        "internship_records",
+        internshipId,
+        `${alumniName ?? "A student"} finished their internship at ${company_name}.`,
+        JSON.stringify({
+          company_name,
+          total_hours,
+          accumulated_hours,
+          department_id: departmentId,
+        }),
+      ],
+    );
+
     await connection.commit();
+
+    const io = req.app.get("socketio");
+    recipients.forEach((recipient) => {
+      io.to(`user-${recipient.id}`).emit("new_notification", {
+        title: "Internship Record Finished",
+        message: finishedMessage,
+        type: "internship_record_finished",
+        link: internshipId,
+      });
+    });
 
     res.status(200).json({
       message: "Congrats on finishing your current internship!",

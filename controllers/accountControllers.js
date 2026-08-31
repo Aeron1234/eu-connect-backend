@@ -406,7 +406,7 @@ export const createUser = async (req, res) => {
   let connection;
   try {
     connection = await db.getConnection();
-    const { id: userId } = req.verifiedUser;
+    const { id: userId, role: actorRole } = req.verifiedUser;
     const userData = req.body;
 
     const {
@@ -572,6 +572,33 @@ export const createUser = async (req, res) => {
       );
     }
 
+    // Activity log is supplementary — isolated so a logging failure can
+    // never roll back or fail the actual account creation. Deliberately no
+    // password/hash in metadata — only identifying, non-sensitive fields.
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          userId,
+          actorRole,
+          "account_created",
+          "users",
+          newId,
+          `Admin created a new ${roleName} account for ${first_name} ${last_name} (${username}).`,
+          JSON.stringify({
+            username,
+            role: roleName,
+            first_name,
+            last_name,
+            department_id: department ? Number(department) : null,
+            course_id: course ? Number(course) : null,
+          }),
+        ],
+      );
+    } catch (logError) {
+      console.error("Activity log insert failed (account created):", logError);
+    }
+
     await connection.commit();
 
     res.status(201).json({
@@ -592,6 +619,7 @@ export const deactivateAccount = async (req, res) => {
 
   try {
     connection = await db.getConnection();
+    const { id: actorId, role: actorRole } = req.verifiedUser;
     const { accountId } = req.params;
 
     if (!accountId) {
@@ -610,6 +638,28 @@ export const deactivateAccount = async (req, res) => {
       return res.status(404).json({
         error: "Failed to deactivate account or can't find the account.",
       });
+    }
+
+    // Activity log is supplementary — isolated so a logging failure can
+    // never roll back or fail the actual deactivation.
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          actorId,
+          actorRole,
+          "account_deactivated",
+          "users",
+          accountId,
+          `Admin deactivated account ${accountId}.`,
+          null,
+        ],
+      );
+    } catch (logError) {
+      console.error(
+        "Activity log insert failed (account deactivated):",
+        logError,
+      );
     }
 
     await connection.commit();
@@ -632,6 +682,7 @@ export const reactivateAccount = async (req, res) => {
 
   try {
     connection = await db.getConnection();
+    const { id: actorId, role: actorRole } = req.verifiedUser;
     const { accountId } = req.params;
 
     if (!accountId) {
@@ -650,6 +701,28 @@ export const reactivateAccount = async (req, res) => {
       return res.status(404).json({
         error: "Failed to reactivate account or can't find the account.",
       });
+    }
+
+    // Activity log is supplementary — isolated so a logging failure can
+    // never roll back or fail the actual reactivation.
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          actorId,
+          actorRole,
+          "account_reactivated",
+          "users",
+          accountId,
+          `Admin reactivated account ${accountId}.`,
+          null,
+        ],
+      );
+    } catch (logError) {
+      console.error(
+        "Activity log insert failed (account reactivated):",
+        logError,
+      );
     }
 
     await connection.commit();
