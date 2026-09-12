@@ -8,6 +8,7 @@ import {
   uploadInternshipFile,
   downloadInternshipFile,
   getFileRequirementTypes,
+  approveInternshipDocument,
 } from "../controllers/fileControllers.js";
 import {
   generalLimiter,
@@ -33,6 +34,14 @@ fileRoutes.get(
   verifyRole(["student", "department_head", "admin"]),
   generalLimiter,
   getInternshipFiles,
+);
+
+fileRoutes.patch(
+  "/files/:fileId/accept",
+  verifyUser,
+  verifyRole(["student"]),
+  generalLimiter,
+  approveInternshipDocument,
 );
 
 fileRoutes.post(

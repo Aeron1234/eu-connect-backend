@@ -54,3 +54,11 @@ export const authLimiter = rateLimit({
       "Too many login attempts. For security, please try again in 15 minutes.",
   },
 });
+
+export const refreshLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30, // generous — it's called automatically, not by user clicks
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many refresh attempts, please try again shortly." },
+});

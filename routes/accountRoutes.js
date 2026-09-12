@@ -6,8 +6,6 @@ import {
   createUser,
   deactivateAccount,
   getAllAccounts,
-  getCourses,
-  getDepartments,
   getRoles,
   getUserProfile,
   reactivateAccount,
@@ -62,22 +60,6 @@ accountRoutes.get(
   verifyRole(["admin"]),
   generalLimiter,
   getRoles,
-);
-
-accountRoutes.get(
-  "/courses",
-  verifyUser,
-  verifyRole(["student", "employer", "department_head", "admin"]),
-  generalLimiter,
-  getCourses,
-);
-
-accountRoutes.get(
-  "/departments",
-  verifyUser,
-  verifyRole(["student", "department_head", "admin"]),
-  generalLimiter,
-  getDepartments,
 );
 
 accountRoutes.post(

@@ -35,6 +35,30 @@ export const getActiveInternship = async (req, res) => {
   }
 };
 
+export const getMyPastInternshipRecords = async (req, res) => {
+  try {
+    const { id: userId } = req.verifiedUser;
+
+    const [rows] = await db.execute(
+      `SELECT 
+         ir.id, ir.company_name, ir.internship_position, ir.status,
+         ir.date_started, ir.date_ended,
+         COUNT(doc.id) AS file_count
+       FROM internship_records ir
+       LEFT JOIN internship_documents doc ON doc.internship_id = ir.id
+       WHERE ir.user_id = ? AND ir.status != 'ongoing'
+       GROUP BY ir.id
+       ORDER BY ir.date_ended DESC, ir.created_at DESC`,
+      [userId],
+    );
+
+    res.status(200).json(rows);
+  } catch (error) {
+    console.error("Get my past internship records error: ", error);
+    res.status(500).json({ error: "Database query failed", success: false });
+  }
+};
+
 export const getAllActiveInternships = async (req, res) => {
   try {
     const [rows] = await db.execute(
@@ -1161,7 +1185,7 @@ export const getInternshipRecordOverview = async (req, res) => {
 
     const [rows] = await connection.execute(
       `SELECT 
-         ir.company_name, ir.internship_position, ir.status,
+         ir.user_id AS student_id, ir.company_name, ir.internship_position, ir.status,
          ir.date_started, ir.date_ended, ir.created_at,
          ir.total_hours, ir.accumulated_hours, ir.created_at,
          up.first_name, up.last_name,
@@ -1206,6 +1230,7 @@ export const getInternshipRecordOverview = async (req, res) => {
 
     res.status(200).json({
       created_at: data.created_at,
+      student_id: data.student_id,
       student_name: `${data.first_name} ${data.last_name}`,
       student_number: data.student_number,
       course_name: data.course_name,

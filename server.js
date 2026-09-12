@@ -1,9 +1,13 @@
+import "dotenv/config";
+
 import express from "express";
-import dotenv from "dotenv";
 import cors from "cors";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import cron from "node-cron";
+import cookieParser from "cookie-parser";
+import { autoCloseStaleShifts } from "./config/autoCloseStaleShifts.js";
+import { refreshTokensCleanUp } from "./config/refreshTokensCleanUp.js";
 
 import announcementRoutes from "./routes/announcementRoutes.js";
 import accountRoutes from "./routes/accountRoutes.js";
@@ -13,10 +17,9 @@ import narrativeRoutes from "./routes/narrativeRoutes.js";
 import fileRoutes from "./routes/fileRoutes.js";
 import notificationRoutes from "./routes/notificationRoutes.js";
 import studentEvaluationRoutes from "./routes/studentEvaluationRoutes.js";
-import dashboardStatsRoutes from "./routes/dashboardStatsRoutes.js";
 import searchHistoryRoutes from "./routes/searchhistoryRoutes.js";
 import searchedUserRoutes from "./routes/searchedUserRoutes.js";
-import { autoCloseStaleShifts } from "./config/autoCloseStaleShifts.js";
+
 import internshipPostingRoutes from "./routes/internshipPostsRoutes.js";
 import supervisorRequestRoutes from "./routes/supervisorRequestRoutes.js";
 import employerEvaluationsRoutes from "./routes/employerEvaluationsRoutes.js";
@@ -24,8 +27,12 @@ import mapRoutes from "./routes/mapRoutes.js";
 import hteReportRoutes from "./routes/hteReportRoutes.js";
 import alumniRoutes from "./routes/alumniRecordRoutes.js";
 import criteriaRoutes from "./routes/evaluationsCriteriaRoutes.js";
+import authRoutes from "./routes/authRoutes.js";
+import activityLogRoutes from "./routes/activityLogsRoutes.js";
+import departmentAndCoursesRoutes from "./routes/departmentsAndCoursesRoutes.js";
+import dashboardRoutes from "./routes/dashboardRoutes.js";
 
-dotenv.config();
+// dotenv.config();
 
 const app = express();
 const httpServer = createServer(app);
@@ -51,6 +58,7 @@ app.use(
 );
 
 app.use(express.json({ limit: "10mb" }));
+app.use(cookieParser());
 app.use(express.urlencoded({ limit: "10mb", extended: true }));
 
 app.set("socketio", io);
@@ -62,6 +70,7 @@ app.get("/", (req, res) => {
 });
 
 // Routes
+app.use("/eu-connect/api", authRoutes);
 app.use("/eu-connect/api", announcementRoutes);
 app.use("/eu-connect/api", accountRoutes);
 app.use("/eu-connect/api", internshipRecordRoutes);
@@ -70,7 +79,7 @@ app.use("/eu-connect/api", narrativeRoutes);
 app.use("/eu-connect/api", fileRoutes);
 app.use("/eu-connect/api", notificationRoutes);
 app.use("/eu-connect/api", studentEvaluationRoutes);
-app.use("/eu-connect/api", dashboardStatsRoutes);
+app.use("/eu-connect/api", dashboardRoutes);
 app.use("/eu-connect/api", searchHistoryRoutes);
 app.use("/eu-connect/api", searchedUserRoutes);
 app.use("/eu-connect/api", internshipPostingRoutes);
@@ -80,6 +89,8 @@ app.use("/eu-connect/api", mapRoutes);
 app.use("/eu-connect/api", hteReportRoutes);
 app.use("/eu-connect/api", alumniRoutes);
 app.use("/eu-connect/api", criteriaRoutes);
+app.use("/eu-connect/api", activityLogRoutes);
+app.use("/eu-connect/api", departmentAndCoursesRoutes);
 
 // Socket.io Events
 io.on("connection", (socket) => {
@@ -98,6 +109,11 @@ io.on("connection", (socket) => {
 cron.schedule("0 * * * *", () => {
   console.log("Running autoCloseStaleShifts job...");
   autoCloseStaleShifts();
+});
+
+cron.schedule("0 3 * * *", () => {
+  console.log("Running refreshTokensCleanUp...");
+  refreshTokensCleanUp();
 });
 
 // Port Configuration

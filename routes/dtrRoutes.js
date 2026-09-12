@@ -7,6 +7,7 @@ import {
   deleteDTR,
   getAllDTRs,
   getLatestDtrStatus,
+  getMySettedDtrLocation,
   getTodayDTR,
 } from "../controllers/dtrControllers.js";
 import {
@@ -64,6 +65,14 @@ dtrRoutes.delete(
   verifyRole(["student", "admin"]),
   mediumLimiter,
   deleteDTR,
+);
+
+dtrRoutes.get(
+  "/dtr/setted-location",
+  verifyUser,
+  verifyRole(["student"]),
+  generalLimiter,
+  getMySettedDtrLocation,
 );
 
 export default dtrRoutes;

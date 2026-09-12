@@ -17,6 +17,7 @@ import {
   getInternshipRecordEvaluations,
   getInternshipRecordNarratives,
   getInternshipRecordOverview,
+  getMyPastInternshipRecords,
   getRegions,
   markInternshipFinished,
   restoreInternshipRecord,
@@ -46,6 +47,14 @@ internshipRecordRoutes.get(
   verifyRole(["student"]),
   generalLimiter,
   getActiveInternship,
+);
+
+internshipRecordRoutes.get(
+  "/internships/my-past-internships",
+  verifyUser,
+  verifyRole(["student", "department_head", "admin"]),
+  generalLimiter,
+  getMyPastInternshipRecords,
 );
 
 internshipRecordRoutes.get(

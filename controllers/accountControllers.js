@@ -286,78 +286,88 @@ export const getAllAccounts = async (req, res) => {
   let connection;
   try {
     connection = await db.getConnection();
+    const { filter = "all", search = "" } = req.query;
+    const page = parseInt(req.query.page) || 1;
+    const limit = 20;
+    const offset = (page - 1) * limit;
 
-    // 1. Students (role_id = 1) - fetches course and department details
-    const [students] = await connection.execute(
-      `
-      SELECT 
-        u.id, u.email, u.created_at, u.status, 
-        up.first_name, up.last_name, 
-        r.role, 
-        c.course_name, 
-        d.code AS department_code, 
-        d.name AS department_name
-      FROM users AS u
-      INNER JOIN user_profiles AS up ON u.id = up.user_id
-      INNER JOIN roles AS r ON u.role_id = r.id
-      LEFT JOIN student_academic_info AS sai ON u.id = sai.user_id
-      LEFT JOIN courses AS c ON c.id = sai.course_id
-      LEFT JOIN departments AS d ON d.id = sai.department_id
-      WHERE u.role_id = 1
-      `,
+    const unionQuery = `
+      SELECT u.id, u.email, u.created_at, u.status, up.first_name, up.last_name,
+             r.role, c.course_name, d.code AS department_code, d.name AS department_name,
+             NULL AS employee_number, NULL AS company_name
+      FROM users u
+      INNER JOIN user_profiles up ON u.id = up.user_id
+      INNER JOIN roles r ON u.role_id = r.id
+      LEFT JOIN student_academic_info sai ON u.id = sai.user_id
+      LEFT JOIN courses c ON c.id = sai.course_id
+      LEFT JOIN departments d ON d.id = sai.department_id
+      WHERE r.role = 'student'
+
+      UNION ALL
+
+      SELECT u.id, u.email, u.created_at, u.status, up.first_name, up.last_name,
+             r.role, NULL AS course_name, d.code AS department_code, d.name AS department_name,
+             dhbi.employee_number, NULL AS company_name
+      FROM users u
+      INNER JOIN user_profiles up ON u.id = up.user_id
+      INNER JOIN roles r ON u.role_id = r.id
+      LEFT JOIN dept_heads_background_info dhbi ON u.id = dhbi.user_id
+      LEFT JOIN departments d ON d.id = dhbi.department_id
+      WHERE r.role = 'department_head'
+
+      UNION ALL
+
+      SELECT u.id, u.email, u.created_at, u.status, up.first_name, up.last_name,
+             r.role, NULL AS course_name, NULL AS department_code, NULL AS department_name,
+             NULL AS employee_number, ebi.company_name
+      FROM users u
+      INNER JOIN user_profiles up ON u.id = up.user_id
+      INNER JOIN roles r ON u.role_id = r.id
+      LEFT JOIN employer_background_info ebi ON u.id = ebi.user_id
+      WHERE r.role = 'employer'
+    `;
+
+    let filterClauses = [];
+    let params = [];
+
+    if (filter && filter !== "all") {
+      filterClauses.push("(role = ? OR status = ?)");
+      params.push(filter, filter);
+    }
+
+    if (search) {
+      filterClauses.push(
+        "(first_name LIKE ? OR last_name LIKE ? OR email LIKE ?)",
+      );
+      const searchParam = `%${search}%`;
+      params.push(searchParam, searchParam, searchParam);
+    }
+
+    const whereString =
+      filterClauses.length > 0 ? `WHERE ${filterClauses.join(" AND ")}` : "";
+
+    const [rows] = await connection.execute(
+      `SELECT * FROM (${unionQuery}) AS accounts
+       ${whereString}
+       ORDER BY status ASC, last_name ASC
+       LIMIT ? OFFSET ?`,
+      [...params, limit, offset],
     );
 
-    // 2. Department Heads (role_id = 3) - fetches department details & employee_number
-    const [deptHeads] = await connection.execute(
-      `
-      SELECT 
-        u.id, u.email, u.created_at, u.status, 
-        up.first_name, up.last_name, 
-        r.role, 
-        NULL AS course_name, 
-        d.code AS department_code, 
-        d.name AS department_name,
-        dhbi.employee_number
-      FROM users AS u
-      INNER JOIN user_profiles AS up ON u.id = up.user_id
-      INNER JOIN roles AS r ON u.role_id = r.id
-      LEFT JOIN dept_heads_background_info AS dhbi ON u.id = dhbi.user_id
-      LEFT JOIN departments AS d ON d.id = dhbi.department_id
-      WHERE u.role_id = 3
-      `,
+    const [countResult] = await connection.execute(
+      `SELECT COUNT(*) AS total FROM (${unionQuery}) AS accounts ${whereString}`,
+      params,
     );
 
-    // 3. Employers (role_id = 2)
-    const [employers] = await connection.execute(
-      `
-      SELECT 
-        u.id, u.email, u.created_at, u.status, 
-        up.first_name, up.last_name, 
-        r.role,
-        NULL AS course_name,
-        NULL AS department_code,
-        NULL AS department_name
-      FROM users AS u
-      INNER JOIN user_profiles AS up ON u.id = up.user_id
-      INNER JOIN roles AS r ON u.role_id = r.id
-      WHERE u.role_id = 2
-      `,
-    );
+    const totalRecords = countResult[0].total;
+    const totalPages = Math.ceil(totalRecords / limit);
 
-    const allUserAccounts = [
-      ...(students || []),
-      ...(deptHeads || []),
-      ...(employers || []),
-    ].sort((a, b) => {
-      // Primary sort by status, secondary sort by last_name
-      const statusCompare = a.status.localeCompare(b.status);
-      if (statusCompare !== 0) return statusCompare;
-      return a.last_name.localeCompare(b.last_name);
+    res.status(200).json({
+      accounts: rows,
+      totalPages,
+      totalRecords,
+      currentPage: page,
     });
-
-    const records = allUserAccounts.length > 0 ? allUserAccounts : null;
-
-    res.status(200).json(records);
   } catch (error) {
     console.error("Get all accounts error: ", error);
     res.status(500).json({ error: "Database query failed", success: false });
@@ -374,30 +384,6 @@ export const getRoles = async (req, res) => {
     return res.status(200).json(records);
   } catch (error) {
     console.log("Get roles error: ", error);
-    res.status(500).json({ error: "Database query failed", success: false });
-  }
-};
-
-export const getCourses = async (req, res) => {
-  try {
-    const [rows] = await db.execute(`SELECT * FROM courses`);
-
-    const records = rows.length > 0 ? rows : [];
-    return res.status(200).json(records);
-  } catch (error) {
-    console.log("Get courses error: ", error);
-    res.status(500).json({ error: "Database query failed", success: false });
-  }
-};
-
-export const getDepartments = async (req, res) => {
-  try {
-    const [rows] = await db.execute(`SELECT * FROM departments`);
-
-    const records = rows.length > 0 ? rows : [];
-    return res.status(200).json(records);
-  } catch (error) {
-    console.log("Get departments error: ", error);
     res.status(500).json({ error: "Database query failed", success: false });
   }
 };
@@ -421,8 +407,6 @@ export const createUser = async (req, res) => {
       role,
     } = userData;
 
-    // email is no longer part of authentication — username is — so email
-    // drops out of the required set and only gets validated when supplied.
     const requiredFields = [
       "username",
       "first_name",
@@ -443,8 +427,6 @@ export const createUser = async (req, res) => {
       return res.status(400).json({ message: "Invalid role." });
     }
 
-    // Resolved from the roles table instead of hardcoded id constants —
-    // reseeding, renumbering, or adding a role never silently breaks this.
     const [roleRows] = await connection.execute(
       `SELECT role FROM roles WHERE id = ?`,
       [roleId],
@@ -468,13 +450,18 @@ export const createUser = async (req, res) => {
       });
     }
 
-    if (roleName === "student" || roleName === "department_head") {
+    // Department is only ever collected directly from the form for
+    // department_head accounts now — a student's department is derived
+    // from their selected course's own department_id below.
+    if (roleName === "department_head") {
       if (!department) {
         return res.status(400).json({
           message: "Department is required for this role.",
         });
       }
     }
+
+    let studentDepartmentId = null;
 
     if (roleName === "student") {
       if (!course) {
@@ -488,12 +475,19 @@ export const createUser = async (req, res) => {
           message: "A valid gender is required for this role.",
         });
       }
+
+      const [courseRows] = await connection.execute(
+        `SELECT department_id FROM courses WHERE id = ? AND is_active = 1`,
+        [Number(course)],
+      );
+      if (courseRows.length === 0) {
+        return res.status(400).json({ message: "Invalid course selected." });
+      }
+      studentDepartmentId = courseRows[0].department_id;
     }
 
     await connection.beginTransaction();
 
-    // Username must always be unique. Email is only checked when provided —
-    // an empty/omitted email should never collide with another empty one.
     const [usernameExists] = await connection.execute(
       `SELECT id FROM users WHERE username = ?`,
       [username],
@@ -539,17 +533,16 @@ export const createUser = async (req, res) => {
       });
     }
 
-    // gender is only ever collected for students — every other role gets NULL,
-    // matching the nullable ENUM('male','female') column on user_profiles.
     await connection.execute(
       `INSERT INTO user_profiles (user_id, first_name, last_name, gender) VALUES (?, ?, ?, ?)`,
       [newId, first_name, last_name, roleName === "student" ? gender : null],
     );
 
     if (roleName === "student") {
+      // department_id comes from the selected course, not a form field
       await connection.execute(
         `INSERT INTO student_academic_info (user_id, course_id, department_id) VALUES (?, ?, ?)`,
-        [newId, Number(course), Number(department)],
+        [newId, Number(course), studentDepartmentId],
       );
     }
 
@@ -560,11 +553,6 @@ export const createUser = async (req, res) => {
       );
     }
 
-    // Employer accounts are created by the admin with auth info only — the
-    // employer fills in company_name/company_address/position/contact_number
-    // themselves later via the Account page. That page's update flow does an
-    // UPDATE ... WHERE user_id = ?, which requires a row to already exist,
-    // so we seed one here with everything but user_id left NULL.
     if (roleName === "employer") {
       await connection.execute(
         `INSERT INTO employer_background_info (user_id) VALUES (?)`,
@@ -572,9 +560,6 @@ export const createUser = async (req, res) => {
       );
     }
 
-    // Activity log is supplementary — isolated so a logging failure can
-    // never roll back or fail the actual account creation. Deliberately no
-    // password/hash in metadata — only identifying, non-sensitive fields.
     try {
       await connection.execute(
         `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -590,7 +575,12 @@ export const createUser = async (req, res) => {
             role: roleName,
             first_name,
             last_name,
-            department_id: department ? Number(department) : null,
+            department_id:
+              roleName === "student"
+                ? studentDepartmentId
+                : department
+                  ? Number(department)
+                  : null,
             course_id: course ? Number(course) : null,
           }),
         ],

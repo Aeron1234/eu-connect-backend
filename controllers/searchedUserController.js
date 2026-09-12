@@ -18,29 +18,47 @@ export const getSearchedUser = async (req, res) => {
   try {
     connection = await db.getConnection();
 
+    // Joins are role-scoped (AND r.role = '...') rather than unconditional —
+    // a department_head's department lives in dept_heads_background_info,
+    // not student_academic_info, and an employer's company details live in
+    // employer_background_info.
     const query = `
       SELECT 
-        u.id AS user_id, 
-        up.first_name, 
-        up.last_name, 
+        u.id AS user_id,
+        up.first_name, up.last_name, up.contact_number, up.full_address, up.gender,
         r.role AS role_name,
-        c.course_name AS course, 
-        d.name AS department_name,
-        CASE 
-          WHEN r.role = 'student' THEN ir.company_name
-          WHEN r.role = 'employer' THEN ebi.company_name
-          ELSE NULL
-        END AS company_name,
+
+        -- student-only
+        c.course_name AS course,
+        sd.name AS student_department_name,
         IFNULL(ir.accumulated_hours, 0) AS hours_rendered,
-        IFNULL(ir.total_hours, 0) AS total_hours
+        IFNULL(ir.total_hours, 0) AS total_hours,
+        ir.company_name AS student_company_name,
+
+        -- department_head-only
+        dd.name AS dept_head_department_name,
+        dhbi.employee_number,
+
+        -- employer-only
+        ebi.company_name AS employer_company_name,
+        ebi.position AS employer_position,
+        ebi.company_address AS employer_company_address,
+        ebi.contact_number AS employer_contact_number
+
       FROM users u
-      INNER JOIN user_profiles up ON u.id = up.user_id 
+      INNER JOIN user_profiles up ON u.id = up.user_id
       INNER JOIN roles r ON u.role_id = r.id
-      LEFT JOIN student_academic_info sai ON u.id = sai.user_id
+
+      LEFT JOIN student_academic_info sai ON u.id = sai.user_id AND r.role = 'student'
       LEFT JOIN courses c ON sai.course_id = c.id
-      LEFT JOIN departments d ON sai.department_id = d.id
-      LEFT JOIN internship_records ir ON u.id = ir.user_id AND ir.status = 'ongoing'
-      LEFT JOIN employer_background_info ebi ON u.id = ebi.user_id
+      LEFT JOIN departments sd ON sai.department_id = sd.id
+      LEFT JOIN internship_records ir ON u.id = ir.user_id AND ir.status = 'ongoing' AND r.role = 'student'
+
+      LEFT JOIN dept_heads_background_info dhbi ON u.id = dhbi.user_id AND r.role = 'department_head'
+      LEFT JOIN departments dd ON dhbi.department_id = dd.id
+
+      LEFT JOIN employer_background_info ebi ON u.id = ebi.user_id AND r.role = 'employer'
+
       WHERE u.id = ? AND u.deleted_at IS NULL
       LIMIT 1;
     `;
@@ -55,18 +73,60 @@ export const getSearchedUser = async (req, res) => {
       });
     }
 
+    const role = user.role_name.toLowerCase();
+
+    // ---- HEADER: exactly what <SearchedUserHeader> renders, nothing more ----
+    const header = {
+      first_name: user.first_name,
+      last_name: user.last_name,
+      role,
+      ...(role === "student" && {
+        course: user.course,
+        department: user.student_department_name,
+        hours_rendered: Number(user.hours_rendered),
+        total_hours: Number(user.total_hours),
+      }),
+      ...(role === "department_head" && {
+        department: user.dept_head_department_name,
+      }),
+      ...(role === "employer" && {
+        company_name: user.employer_company_name,
+      }),
+    };
+
+    // ---- INFO: everything else, for the info tab / detail view ----
+    // Admin gets nothing beyond the shared contact fields, per your instruction.
+    const roleSpecificInfo =
+      role === "student"
+        ? {
+            company_name: user.student_company_name,
+          }
+        : role === "department_head"
+          ? {
+              employee_number: user.employee_number,
+            }
+          : role === "employer"
+            ? {
+                position: user.employer_position,
+                company_address: user.employer_company_address,
+                contact_number: user.employer_contact_number,
+              }
+            : {};
+
+    const info = {
+      id: user.user_id,
+      contact_number: user.contact_number,
+      full_address: user.full_address,
+      gender: user.gender,
+      role,
+      ...roleSpecificInfo,
+    };
+
     return res.status(200).json({
       success: true,
       user: {
-        id: user.user_id,
-        first_name: user.first_name,
-        last_name: user.last_name,
-        role: user.role_name.toLowerCase(),
-        course: user.course,
-        department: user.department_name,
-        company_name: user.company_name,
-        hours_rendered: Number(user.hours_rendered),
-        total_hours: Number(user.total_hours),
+        header,
+        info,
       },
     });
   } catch (error) {
@@ -79,7 +139,6 @@ export const getSearchedUser = async (req, res) => {
     if (connection) connection.release();
   }
 };
-
 export const getSearchedStudentDTRs = async (req, res) => {
   // 🛡️ GUARD CLAUSE: Validate searched user route parameter
   const { searchedUserId } = req.params;
@@ -180,6 +239,7 @@ export const getSearchedStudentDtrLocation = async (req, res) => {
          dl.lat AS dtr_lat,
          dl.lon AS dtr_lon,
          dl.radius_meters,
+         dl.address,
          dl.label,
          dl.created_at AS dtr_created_at,
          dl.updated_at AS dtr_updated_at
@@ -209,6 +269,7 @@ export const getSearchedStudentDtrLocation = async (req, res) => {
         lon: isCustom ? record.dtr_lon : record.company_lon,
         radius_meters: isCustom ? record.radius_meters : 150, // keep in sync with your default elsewhere
         label: isCustom ? record.label : "Company address (default)",
+        address: isCustom ? record.address : null,
         set_by: isCustom ? record.set_by : null,
         created_at: isCustom ? record.dtr_created_at : null,
         updated_at: isCustom ? record.dtr_updated_at : null,
@@ -737,7 +798,6 @@ export const uploadFileToSearchedStudent = async (req, res) => {
     connection = await db.getConnection();
     await connection.beginTransaction();
 
-    // 1. Confirm the target student has an ONGOING internship
     const [internships] = await connection.execute(
       `SELECT id, employer_id FROM internship_records WHERE user_id = ? AND status = 'ongoing' LIMIT 1 FOR UPDATE`,
       [searchedUserId],
@@ -752,8 +812,6 @@ export const uploadFileToSearchedStudent = async (req, res) => {
 
     const internship = internships[0];
 
-    // Only the accepted supervisor for this internship can upload on the
-    // student's behalf — a request must have been sent and accepted first
     if (internship.employer_id !== employerId) {
       await connection.rollback();
       return res.status(403).json({
@@ -762,10 +820,6 @@ export const uploadFileToSearchedStudent = async (req, res) => {
       });
     }
 
-    // 2. This endpoint only ever files a Certificate of Completion — the
-    // requirement type is looked up server-side, never trusted from the
-    // client, so an employer can't submit a file against an arbitrary
-    // requirement type via this route
     const [reqTypes] = await connection.execute(
       `SELECT id, category FROM requirement_types WHERE name = ? LIMIT 1`,
       [CERTIFICATE_OF_COMPLETION_NAME],
@@ -783,7 +837,8 @@ export const uploadFileToSearchedStudent = async (req, res) => {
 
     const { id: requirementTypeId, category: catLower } = reqTypes[0];
 
-    // Sender name for the notification sent to the student
+    // Need both names now — employer's (for the notification/log "from"),
+    // and the student's (so the activity log reads a name, not a raw uuid).
     const [employerProfile] = await connection.execute(
       `SELECT first_name, last_name FROM user_profiles WHERE user_id = ?`,
       [employerId],
@@ -794,11 +849,19 @@ export const uploadFileToSearchedStudent = async (req, res) => {
       return res.status(404).json({ error: "Employer profile not found." });
     }
 
-    const employerName = `${employerProfile[0].first_name} ${employerProfile[0].last_name}`;
+    const [studentProfile] = await connection.execute(
+      `SELECT first_name, last_name FROM user_profiles WHERE user_id = ?`,
+      [searchedUserId],
+    );
 
-    // 3. Upload to Supabase Storage — stored under the STUDENT's folder,
-    // not the employer's, so it lands in the same place student-uploaded
-    // files do and is reachable by the existing download/delete routes
+    if (studentProfile.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Student profile not found." });
+    }
+
+    const employerName = `${employerProfile[0].first_name} ${employerProfile[0].last_name}`;
+    const studentName = `${studentProfile[0].first_name} ${studentProfile[0].last_name}`;
+
     const fileExt = file.originalname.split(".").pop();
     uploadedStoragePath = `requirements/${searchedUserId}/${Date.now()}.${fileExt}`;
 
@@ -810,10 +873,6 @@ export const uploadFileToSearchedStudent = async (req, res) => {
 
     if (uploadError) throw uploadError;
 
-    // 4. Save to DB — file belongs to the student (user_id), but track who
-    // actually submitted it (uploaded_by_id / uploaded_by_role). Starts as
-    // 'pending' — it doesn't count toward requirements or appear in the
-    // student's file list until they accept it via reviewEmployerCertificate.
     const [result] = await connection.execute(
       `INSERT INTO internship_documents 
         (user_id, internship_id, file_name, company_name, category, requirement_type_id, file_type, path, uploaded_by_id, uploaded_by_role, verification_status)
@@ -838,8 +897,6 @@ export const uploadFileToSearchedStudent = async (req, res) => {
       return res.status(400).json({ error: "Uploading file failed." });
     }
 
-    // 5. Notify the student — this file is pending their review before it
-    // counts toward requirements (see reviewEmployerCertificate)
     const notifTitle = "Certificate Uploaded";
     const notifMessage = `${employerName} uploaded a Certificate of Completion on your behalf. Please review it to confirm.`;
 
@@ -848,10 +905,6 @@ export const uploadFileToSearchedStudent = async (req, res) => {
       [searchedUserId, employerId, notifTitle, notifMessage, result.insertId],
     );
 
-    // Activity log is supplementary — isolated so a logging failure can
-    // never roll back or fail the actual upload. This one has real audit
-    // value: an employer is filing a document on a student's behalf, and
-    // it's still pending the student's own confirmation.
     try {
       await connection.execute(
         `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -861,7 +914,7 @@ export const uploadFileToSearchedStudent = async (req, res) => {
           "internship_document_uploaded_on_behalf",
           "internship_documents",
           String(result.insertId),
-          `${employerName} uploaded a Certificate of Completion on behalf of student ${searchedUserId}, pending their confirmation.`,
+          `${employerName} uploaded a Certificate of Completion on behalf of ${studentName}, pending their confirmation.`,
           JSON.stringify({
             student_id: searchedUserId,
             internship_id: internship.id,
@@ -925,9 +978,6 @@ export const deleteSearchedStudentFile = async (req, res) => {
     connection = await db.getConnection();
     await connection.beginTransaction();
 
-    // Look up the record, and confirm it actually belongs to the student
-    // named in the route — never trust fileId alone, or a caller could
-    // delete an arbitrary file by guessing/reusing an id from another student
     const [rows] = await connection.execute(
       `SELECT id, user_id, path, uploaded_by_id, verification_status FROM internship_documents WHERE id = ? FOR UPDATE`,
       [fileId],
@@ -942,13 +992,9 @@ export const deleteSearchedStudentFile = async (req, res) => {
 
     if (doc.user_id !== searchedUserId) {
       await connection.rollback();
-      // 404 rather than 403 here — don't reveal that a file with this id
-      // exists under a *different* student
       return res.status(404).json({ error: "File not found." });
     }
 
-    // Employers can only delete files they personally uploaded on a
-    // student's behalf — admins/department heads are not restricted this way
     if (role === "employer" && doc.uploaded_by_id !== requesterId) {
       await connection.rollback();
       return res.status(403).json({
@@ -964,6 +1010,17 @@ export const deleteSearchedStudentFile = async (req, res) => {
       });
     }
 
+    // Needed for the activity log description below — fetched before the
+    // delete so it's still available even after the row is gone.
+    const [studentProfile] = await connection.execute(
+      `SELECT first_name, last_name FROM user_profiles WHERE user_id = ?`,
+      [searchedUserId],
+    );
+    const studentName =
+      studentProfile.length > 0
+        ? `${studentProfile[0].first_name} ${studentProfile[0].last_name}`
+        : "Unknown Student";
+
     const [result] = await connection.execute(
       `DELETE FROM internship_documents WHERE id = ?`,
       [fileId],
@@ -974,8 +1031,6 @@ export const deleteSearchedStudentFile = async (req, res) => {
       return res.status(404).json({ error: "File not found." });
     }
 
-    // Activity log is supplementary — isolated so a logging failure can
-    // never roll back or fail the actual deletion.
     try {
       await connection.execute(
         `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -985,7 +1040,7 @@ export const deleteSearchedStudentFile = async (req, res) => {
           "internship_document_deleted",
           "internship_documents",
           String(fileId),
-          `${role === "employer" ? "Employer" : role} deleted document ${fileId} belonging to student ${searchedUserId}.`,
+          `${role === "employer" ? "Employer" : role} deleted document ${fileId} belonging to ${studentName}.`,
           JSON.stringify({
             document_owner_id: searchedUserId,
             uploaded_by_id: doc.uploaded_by_id,
@@ -1003,9 +1058,6 @@ export const deleteSearchedStudentFile = async (req, res) => {
 
     await connection.commit();
 
-    // Delete from storage AFTER commit succeeds — same reasoning as deleteFile:
-    // DB is source of truth, an orphaned storage object is recoverable,
-    // an orphaned DB row isn't
     const { error: storageError } = await supabase.storage
       .from(BUCKET)
       .remove([doc.path]);

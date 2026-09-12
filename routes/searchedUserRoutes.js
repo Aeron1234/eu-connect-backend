@@ -52,7 +52,7 @@ searchedUserRoutes.get(
 );
 
 searchedUserRoutes.get(
-  "/searched-user/set-dtr-location/:searchedUserId",
+  "/searched-user/set-dtr-location/:studentId",
   verifyUser,
   verifyRole(["employer", "department_head", "admin"]),
   generalLimiter,

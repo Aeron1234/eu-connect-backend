@@ -35,6 +35,7 @@ export const getFileRequirementTypes = async (req, res) => {
   }
 };
 
+// Existing function — one line added, nothing else changed
 export const getInternshipFiles = async (req, res) => {
   try {
     const { id: userId } = req.verifiedUser;
@@ -57,6 +58,7 @@ export const getInternshipFiles = async (req, res) => {
       `SELECT 
          doc.id, doc.internship_id, doc.file_name, doc.company_name, 
          doc.category, doc.requirement_type_id, doc.file_type, doc.created_at,
+         doc.verification_status,
          rt.name AS requirement_name, rt.requires_notarization, rt.copies_needed
        FROM internship_documents doc
        LEFT JOIN requirement_types rt ON doc.requirement_type_id = rt.id
@@ -65,12 +67,93 @@ export const getInternshipFiles = async (req, res) => {
       params,
     );
 
-    res.status(200).json(rows); // always an array, even when empty
+    res.status(200).json(rows);
   } catch (error) {
     console.error("Get internship files error: ", error);
     res.status(500).json({ error: "Database query failed", success: false });
   }
 };
+
+export const approveInternshipDocument = async (req, res) => {
+  let connection;
+  try {
+    const { id: userId, role } = req.verifiedUser;
+    const { fileId } = req.params;
+
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    const [rows] = await connection.execute(
+      `SELECT id, user_id, uploaded_by_id, uploaded_by_role, verification_status 
+       FROM internship_documents WHERE id = ? FOR UPDATE`,
+      [fileId],
+    );
+
+    if (rows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "File not found." });
+    }
+
+    const doc = rows[0];
+    const isOwner = doc.user_id === userId;
+
+    if (!isOwner && role !== "admin") {
+      await connection.rollback();
+      return res.status(403).json({
+        error: "Only the student this document belongs to can approve it.",
+      });
+    }
+
+    if (doc.uploaded_by_role !== "employer") {
+      await connection.rollback();
+      return res.status(400).json({
+        error: "Only employer-uploaded documents require approval.",
+      });
+    }
+
+    if (doc.verification_status !== "pending") {
+      await connection.rollback();
+      return res.status(400).json({
+        error: `This document is already ${doc.verification_status}.`,
+      });
+    }
+
+    await connection.execute(
+      `UPDATE internship_documents SET verification_status = 'accepted' WHERE id = ?`,
+      [fileId],
+    );
+
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          userId,
+          role,
+          "internship_document_accepted",
+          "internship_documents",
+          String(fileId),
+          `${role === "admin" && !isOwner ? "Admin" : "Student"} accepted document ${fileId} uploaded by employer.`,
+          JSON.stringify({ uploaded_by_id: doc.uploaded_by_id }),
+        ],
+      );
+    } catch (logError) {
+      console.error("Activity log insert failed (document accept):", logError);
+    }
+
+    await connection.commit();
+
+    res.status(200).json({ success: true, message: "Document accepted." });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Accept document error:", error);
+    res.status(500).json({ error: "Failed to accept document." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+// New — student's own current (ongoing) internship, so Storage knows
+// which internshipId's documents to show in the top section
 
 export const uploadInternshipFile = async (req, res) => {
   let connection;

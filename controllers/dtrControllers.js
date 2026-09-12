@@ -404,3 +404,64 @@ export const deleteDTR = async (req, res) => {
     if (connection) connection.release();
   }
 };
+
+export const getMySettedDtrLocation = async (req, res) => {
+  try {
+    const { id: studentId } = req.verifiedUser;
+    const { internshipId } = req.query;
+
+    if (!studentId) {
+      return res.status(400).json({ error: "studentId is required." });
+    }
+
+    const [rows] = await db.execute(
+      `SELECT 
+         ir.id AS internship_id,
+         ir.lat AS company_lat,
+         ir.lon AS company_lon,
+         dl.id AS dtr_location_id,
+         dl.set_by,
+         dl.lat AS dtr_lat,
+         dl.lon AS dtr_lon,
+         dl.radius_meters,
+         dl.address,
+         dl.label,
+         dl.created_at AS dtr_created_at,
+         dl.updated_at AS dtr_updated_at
+       FROM internship_records AS ir
+       LEFT JOIN dtr_locations AS dl ON ir.id = dl.internship_id
+       WHERE ir.user_id = ? AND ir.status = 'ongoing' AND ir.id = ?
+       LIMIT 1`,
+      [studentId, internshipId],
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        error: "No ongoing internship found for this student.",
+        success: false,
+      });
+    }
+
+    const record = rows[0];
+    const isCustom = record.dtr_location_id !== null;
+
+    res.status(200).json({
+      success: true,
+      internship_id: record.internship_id,
+      is_custom_location: isCustom,
+      location: {
+        lat: isCustom ? record.dtr_lat : record.company_lat,
+        lon: isCustom ? record.dtr_lon : record.company_lon,
+        radius_meters: isCustom ? record.radius_meters : 150, // keep in sync with your default elsewhere
+        label: isCustom ? record.label : "Company address (default)",
+        address: isCustom ? record.address : null,
+        set_by: isCustom ? record.set_by : null,
+        created_at: isCustom ? record.dtr_created_at : null,
+        updated_at: isCustom ? record.dtr_updated_at : null,
+      },
+    });
+  } catch (error) {
+    console.error("Get DTR location error:", error);
+    res.status(500).json({ error: "Database query failed.", success: false });
+  }
+};

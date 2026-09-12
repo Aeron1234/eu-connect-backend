@@ -12,58 +12,59 @@ export const getAnnouncementCategories = async (req, res) => {
   }
 };
 
-// export const getAllAnnouncements = async (req, res) => {
-//   try {
-//     const [rows] = await db.execute(
-//       `SELECT a.id, a.author_id, a.title, a.content, a.is_pinned, a.created_at, a.updated_at, r.role, up.first_name, up.last_name,
-//        ac.id AS category_id, ac.name AS category, ac.color, ac.text_color
-//        FROM announcements AS a
-//        INNER JOIN users AS u ON a.author_id = u.id
-//        INNER JOIN roles AS r ON u.role_id = r.id
-//        INNER JOIN user_profiles AS up ON a.author_id = up.user_id
-//        INNER JOIN announcement_categories AS ac ON a.category_id = ac.id
-//        ORDER BY created_at DESC
-//        `,
-//     );
-
-//     const records = rows.length > 0 ? rows : null;
-
-//     res.status(200).json(records);
-//   } catch (error) {
-//     console.error(error);
-//     res.status(500).json({ error: "Database query failed", success: false });
-//   }
-// };
-
 export const getAllAnnouncements = async (req, res) => {
   try {
+    const {
+      id: userId,
+      role,
+      department_id: viewerDepartmentId,
+    } = req.verifiedUser;
     const { category, search } = req.query;
     const page = parseInt(req.query.page) || 1;
     const limit = 10;
     const offset = (page - 1) * limit;
 
-    // 1. Build Dynamic Filter Clauses
     let filterClauses = [];
     let params = [];
 
-    // Category Filter (Checks against the category name)
     if (category && category !== "all") {
       filterClauses.push("ac.name = ?");
       params.push(category);
     }
 
-    // Search Filter (Checks title and content)
     if (search) {
       filterClauses.push("(a.title LIKE ? OR a.content LIKE ?)");
       const searchParam = `%${search}%`;
       params.push(searchParam, searchParam);
     }
 
-    const whereString =
-      filterClauses.length > 0 ? `AND ${filterClauses.join(" AND ")}` : "";
+    // Department-scoped visibility, applied unconditionally regardless of
+    // the `category` filter:
+    // - Non-department posts are always visible to everyone.
+    // - Department posts are NEVER visible to employers, full stop — this
+    //   is explicit rather than relying on employers having a null
+    //   department_id (which happened to produce the same result via the
+    //   join, but silently and fragile to future schema changes).
+    // - For everyone else (student, department_head, admin), a department
+    //   post is visible only to admin or to viewers sharing the post
+    //   author's department.
+    filterClauses.push(
+      `(
+        ac.name != 'Department'
+        OR (
+          ? != 'employer'
+          AND (? = 'admin' OR authorDept.department_id = ?)
+        )
+      )`,
+    );
+    params.push(role, role, viewerDepartmentId);
 
-    // 2. Query A: Fetch ALL Pinned (No Pagination)
-    // We use your exact JOIN structure here
+    const whereString = `AND ${filterClauses.join(" AND ")}`;
+
+    // Joins back to the POST'S AUTHOR's department, not the viewer's —
+    // there's no department column on announcements itself.
+    const departmentJoin = `LEFT JOIN dept_heads_background_info authorDept ON authorDept.user_id = a.author_id`;
+
     const pinnedQuery = `
       SELECT a.id, a.author_id, a.title, a.content, a.is_pinned, a.created_at, a.updated_at, 
              r.role, up.first_name, up.last_name,
@@ -73,11 +74,11 @@ export const getAllAnnouncements = async (req, res) => {
       INNER JOIN roles AS r ON u.role_id = r.id
       INNER JOIN user_profiles AS up ON a.author_id = up.user_id
       INNER JOIN announcement_categories AS ac ON a.category_id = ac.id
+      ${departmentJoin}
       WHERE a.is_pinned = 1 ${whereString}
       ORDER BY a.created_at DESC
     `;
 
-    // 3. Query B: Fetch Paginated Regular Announcements
     const regularQuery = `
       SELECT a.id, a.author_id, a.title, a.content, a.is_pinned, a.created_at, a.updated_at, 
              r.role, up.first_name, up.last_name,
@@ -87,12 +88,12 @@ export const getAllAnnouncements = async (req, res) => {
       INNER JOIN roles AS r ON u.role_id = r.id
       INNER JOIN user_profiles AS up ON a.author_id = up.user_id
       INNER JOIN announcement_categories AS ac ON a.category_id = ac.id
+      ${departmentJoin}
       WHERE a.is_pinned = 0 ${whereString}
       ORDER BY a.created_at DESC
       LIMIT ? OFFSET ?
     `;
 
-    // Execute queries
     const [pinnedRows] = await db.execute(pinnedQuery, params);
     const [regularRows] = await db.execute(regularQuery, [
       ...params,
@@ -100,24 +101,21 @@ export const getAllAnnouncements = async (req, res) => {
       offset,
     ]);
 
-    // 4. Calculate total records for pagination
-    // We need the same JOINS here so that whereString (which uses 'ac' and 'a') works
     const countQuery = `
       SELECT COUNT(*) AS total 
       FROM announcements AS a
       INNER JOIN announcement_categories AS ac ON a.category_id = ac.id
+      ${departmentJoin}
       WHERE a.is_pinned = 0 ${whereString}
     `;
-
-    // Pass the same filter params used in the other queries
     const [countResult] = await db.execute(countQuery, params);
 
     const totalRecords = countResult[0].total;
     const totalPages = Math.ceil(totalRecords / limit);
 
     res.status(200).json({
-      pinned: pinnedRows.length > 0 ? pinnedRows : [],
-      regular: regularRows.length > 0 ? regularRows : [],
+      pinned: pinnedRows,
+      regular: regularRows,
       totalPages,
       totalRecords,
       currentPage: Math.floor(offset / limit) + 1,
@@ -146,7 +144,6 @@ export const createAnnouncement = async (req, res) => {
       });
     }
 
-    // 2. Atomic Check & Insert
     await connection.beginTransaction();
 
     const [senderRows] = await connection.execute(
@@ -160,6 +157,26 @@ export const createAnnouncement = async (req, res) => {
     }
 
     const senderName = `${senderRows[0].first_name} ${senderRows[0].last_name}`;
+
+    const [categoryRows] = await connection.execute(
+      `SELECT name FROM announcement_categories WHERE id = ?`,
+      [category_id],
+    );
+
+    if (categoryRows.length === 0) {
+      await connection.rollback();
+      return res.status(400).json({ error: "Invalid category." });
+    }
+
+    const isDepartmentCategory = categoryRows[0].name === "Department";
+
+    if (isDepartmentCategory && role === "admin") {
+      await connection.rollback();
+      return res.status(400).json({
+        error:
+          "Admin accounts don't belong to a department and can't post Department-category announcements.",
+      });
+    }
 
     const [result] = await connection.execute(
       `
@@ -176,14 +193,26 @@ export const createAnnouncement = async (req, res) => {
       });
     }
 
-    // Recipients depend on who posted:
-    // - admin posts -> everyone gets notified.
-    // - department head posts -> everyone EXCEPT students outside their own
-    //   department. Employers, other dept heads, and admin still get it
-    //   regardless of department, per the notification matrix.
+    // Recipients depend on who posted AND the category:
+    // - admin posts -> everyone gets notified. (Department-category is
+    //   already blocked above, so admin's post is always effectively
+    //   General here, and reaches everyone including employers.)
+    // - department head posts, General category -> everyone except the
+    //   poster gets notified, regardless of department, INCLUDING
+    //   employers.
+    // - department head posts, Department category -> students and other
+    //   department heads are scoped to the poster's own department;
+    //   admin still sees it regardless; employers are excluded entirely.
     let recipients;
 
     if (role === "admin") {
+      [recipients] = await connection.execute(
+        `SELECT id FROM users WHERE id != ?`,
+        [userId],
+      );
+    } else if (!isDepartmentCategory) {
+      // General category from a department head — no scoping at all,
+      // reaches every user except the poster, employers included.
       [recipients] = await connection.execute(
         `SELECT id FROM users WHERE id != ?`,
         [userId],
@@ -209,9 +238,15 @@ export const createAnnouncement = async (req, res) => {
              GROUP BY user_id
            ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
          ) sai ON sai.user_id = u.id
+         LEFT JOIN dept_heads_background_info dhbi ON dhbi.user_id = u.id
          WHERE u.id != ?
-           AND (r.role != 'student' OR sai.department_id = ?)`,
-        [userId, departmentId],
+           AND r.role != 'employer'
+           AND (
+             r.role NOT IN ('student', 'department_head')
+             OR (r.role = 'student' AND sai.department_id = ?)
+             OR (r.role = 'department_head' AND dhbi.department_id = ?)
+           )`,
+        [userId, departmentId, departmentId],
       );
     }
 
@@ -231,8 +266,6 @@ export const createAnnouncement = async (req, res) => {
       );
     }
 
-    // Activity log is supplementary — isolated so a logging failure can
-    // never roll back or fail the actual announcement post.
     try {
       await connection.execute(
         `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -264,8 +297,6 @@ export const createAnnouncement = async (req, res) => {
     recipients.forEach((recipient) => {
       io.to(`user-${recipient.id}`).emit("new_notification", {
         title: "New Announcement",
-        // Matches the message actually stored in the notifications row —
-        // was previously a hardcoded generic string that disagreed with it.
         message: `Posted by ${senderName}`,
         type: "announcement",
         link: result.insertId,
@@ -292,9 +323,7 @@ export const updateAnnouncement = async (req, res) => {
     const { announcementId } = req.params;
     const { id: userId, role } = req.verifiedUser;
 
-    // Destructure the possible updates from the body
     const { category_id, title, content } = req.body;
-
     const finalCategoryId = category_id ? Number(category_id) : null;
 
     if (!announcementId) {
@@ -302,6 +331,59 @@ export const updateAnnouncement = async (req, res) => {
     }
 
     await connection.beginTransaction();
+
+    // Need the CURRENT category before updating, to detect a General -> Department
+    // transition. Locked with FOR UPDATE since we're about to write to this row.
+    const [existingRows] = await connection.execute(
+      `SELECT a.category_id, ac.name AS category_name, a.title
+       FROM announcements a
+       JOIN announcement_categories ac ON a.category_id = ac.id
+       WHERE a.id = ? AND a.author_id = ?
+       FOR UPDATE`,
+      [announcementId, userId],
+    );
+
+    if (existingRows.length === 0) {
+      await connection.rollback();
+      return res.status(403).json({
+        error: "Announcement not found or unauthorized to edit.",
+      });
+    }
+
+    const wasDepartmentCategory =
+      existingRows[0].category_name === "Department";
+
+    // Resolve what the NEW category will actually be (COALESCE semantics —
+    // if category_id wasn't sent, it stays whatever it currently is).
+    let newCategoryName = existingRows[0].category_name;
+    if (finalCategoryId !== null) {
+      const [newCategoryRows] = await connection.execute(
+        `SELECT name FROM announcement_categories WHERE id = ?`,
+        [finalCategoryId],
+      );
+      if (newCategoryRows.length === 0) {
+        await connection.rollback();
+        return res.status(400).json({ error: "Invalid category." });
+      }
+      newCategoryName = newCategoryRows[0].name;
+    }
+
+    const willBeDepartmentCategory = newCategoryName === "Department";
+
+    // Admin has no department_id — same reasoning as createAnnouncement.
+    // Only the author can reach this endpoint at all (WHERE author_id = ?
+    // above), so in practice an admin can only ever be editing their own
+    // post, which is already guaranteed General by createAnnouncement's
+    // own guard. This check exists so that guarantee isn't the ONLY thing
+    // preventing an admin Department post — if either endpoint changes
+    // independently later, this still holds on its own.
+    if (willBeDepartmentCategory && role === "admin") {
+      await connection.rollback();
+      return res.status(400).json({
+        error:
+          "Admin accounts don't belong to a department and can't set announcements to Department category.",
+      });
+    }
 
     const [result] = await connection.execute(
       `UPDATE announcements 
@@ -321,7 +403,6 @@ export const updateAnnouncement = async (req, res) => {
       });
     }
 
-    // Fetch fresh data so the UI and Sockets get the labels/colors
     const [updatedData] = await connection.execute(
       `SELECT a.*, ac.name AS category, ac.color AS category_bg, ac.text_color AS category_fg, 
               up.first_name, up.last_name, r.role
@@ -334,8 +415,63 @@ export const updateAnnouncement = async (req, res) => {
       [announcementId],
     );
 
-    // Activity log is supplementary — isolated so a logging failure can
-    // never roll back or fail the actual update.
+    // Updates don't normally notify anyone — EXCEPT this one case: a post
+    // that was previously General (visible to everyone) just became
+    // Department-scoped, meaning people who could see it a moment ago now
+    // can't. Notifying same-department students/dept-heads mirrors what
+    // createAnnouncement would have sent had this post been created as
+    // Department from the start.
+    let recipients = [];
+
+    if (!wasDepartmentCategory && willBeDepartmentCategory) {
+      const [deptHeadRows] = await connection.execute(
+        `SELECT department_id FROM dept_heads_background_info WHERE user_id = ? LIMIT 1`,
+        [userId],
+      );
+      const departmentId = deptHeadRows[0]?.department_id ?? null;
+
+      [recipients] = await connection.execute(
+        `SELECT u.id
+         FROM users u
+         INNER JOIN roles r ON r.id = u.role_id
+         LEFT JOIN (
+           SELECT sai1.*
+           FROM student_academic_info AS sai1
+           INNER JOIN (
+             SELECT user_id, MAX(id) AS max_id
+             FROM student_academic_info
+             GROUP BY user_id
+           ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
+         ) sai ON sai.user_id = u.id
+         LEFT JOIN dept_heads_background_info dhbi ON dhbi.user_id = u.id
+         WHERE u.id != ?
+           AND r.role != 'employer'
+           AND (
+             r.role NOT IN ('student', 'department_head')
+             OR (r.role = 'student' AND sai.department_id = ?)
+             OR (r.role = 'department_head' AND dhbi.department_id = ?)
+           )`,
+        [userId, departmentId, departmentId],
+      );
+
+      if (recipients.length > 0) {
+        const senderName = `${updatedData[0].first_name} ${updatedData[0].last_name}`;
+        const values = recipients.map((r) => [
+          r.id,
+          userId,
+          "announcement",
+          "New Announcement",
+          `Posted by ${senderName}`,
+          announcementId,
+        ]);
+
+        await connection.query(
+          `INSERT INTO notifications (user_id, sender_id, type, title, message, link) VALUES ?`,
+          [values],
+        );
+      }
+    }
+
     try {
       const changedFields = [];
       if (category_id !== undefined) changedFields.push("category_id");
@@ -351,7 +487,12 @@ export const updateAnnouncement = async (req, res) => {
           "announcements",
           String(announcementId),
           `Author updated announcement ${announcementId} (${changedFields.join(", ") || "no fields"}).`,
-          JSON.stringify({ changed_fields: changedFields }),
+          JSON.stringify({
+            changed_fields: changedFields,
+            became_department_category:
+              !wasDepartmentCategory && willBeDepartmentCategory,
+            recipient_count: recipients.length,
+          }),
         ],
       );
     } catch (logError) {
@@ -362,6 +503,20 @@ export const updateAnnouncement = async (req, res) => {
     }
 
     await connection.commit();
+
+    if (recipients.length > 0) {
+      const io = req.app.get("socketio");
+      const senderName = `${updatedData[0].first_name} ${updatedData[0].last_name}`;
+
+      recipients.forEach((recipient) => {
+        io.to(`user-${recipient.id}`).emit("new_notification", {
+          title: "New Announcement",
+          message: `Posted by ${senderName}`,
+          type: "announcement",
+          link: announcementId,
+        });
+      });
+    }
 
     res.status(200).json({
       message: "Announcement updated successfully!",
