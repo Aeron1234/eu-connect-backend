@@ -540,10 +540,12 @@ export const deleteInternshipPosting = async (req, res) => {
 
     const posting = rows[0];
 
-    // Only the employer who created the posting can delete it —
-    // admins are not given a moderation override here, per the requirement
-    // that posting ownership is exclusive to the original poster
-    if (posting.employer_id !== requesterId) {
+    // The original poster can always delete their own posting. Admins get
+    // a moderation override on top of that — everyone else is blocked.
+    const isOwner = posting.employer_id === requesterId;
+    const isAdmin = role === "admin";
+
+    if (!isOwner && !isAdmin) {
       await connection.rollback();
       return res.status(403).json({
         error: "You can only delete postings you created yourself.",
@@ -569,7 +571,9 @@ export const deleteInternshipPosting = async (req, res) => {
           "internship_posting_deleted",
           "internship_postings",
           postingId,
-          `Employer deleted posting ${postingId}.`,
+          isAdmin && !isOwner
+            ? `Admin deleted posting ${postingId} (created by employer ${posting.employer_id}).`
+            : `Employer deleted posting ${postingId}.`,
           null,
         ],
       );

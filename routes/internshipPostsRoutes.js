@@ -48,7 +48,7 @@ internshipPostingRoutes.put(
 internshipPostingRoutes.delete(
   "/internship-postings/:postingId",
   verifyUser,
-  verifyRole(["employer"]),
+  verifyRole(["employer", "admin"]),
   mediumLimiter,
   deleteInternshipPosting,
 );

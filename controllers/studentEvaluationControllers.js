@@ -287,7 +287,10 @@ export const createStudentEvaluation = async (req, res) => {
   }
 
   // 2. COUNTER GUARD CLAUSE
+  // This could change in the future.
+  // I kept this as the required number of scores per criteria that the server needs to receive so an unanswer criterion/criteria wouldn't be saved.
   const TOTAL_REQUIRED_CRITERIA = 29;
+
   if (scores.length < TOTAL_REQUIRED_CRITERIA) {
     return res.status(400).json({
       error: `Incomplete evaluation form. You answered ${scores.length} out of ${TOTAL_REQUIRED_CRITERIA} required criteria items.`,
