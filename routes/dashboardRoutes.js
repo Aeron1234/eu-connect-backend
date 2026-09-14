@@ -13,11 +13,14 @@ import {
   getAverageShiftHoursByWeek,
   getDepartmentHeadDashboardStats,
   getEmployerDashboardStats,
+  getEmployerEvaluationAveragesByCategory,
   getOngoingInternshipsByDepartment,
   getOngoingInternshipsPerCourse,
   getPostedJobs,
   getRecentSystemActivity,
   getStudentDashboardStats,
+  getStudentEvaluationAveragesByCategory,
+  getStudentHoursTracker,
   getSupervisedInterns,
   getUserGrowthOverTime,
   getUsersByRole,
@@ -96,6 +99,30 @@ dashboardRoutes.get(
   verifyRole(["department_head"]),
   generalLimiter,
   getAvailableShiftHoursMonths,
+);
+
+dashboardRoutes.get(
+  "/student-evaluation-averages",
+  verifyUser,
+  verifyRole(["department_head"]),
+  generalLimiter,
+  getStudentEvaluationAveragesByCategory,
+);
+
+dashboardRoutes.get(
+  "/employer-evaluation-averages",
+  verifyUser,
+  verifyRole(["department_head"]),
+  generalLimiter,
+  getEmployerEvaluationAveragesByCategory,
+);
+
+dashboardRoutes.get(
+  "/student-hours-tracker",
+  verifyUser,
+  verifyRole(["department_head"]),
+  generalLimiter,
+  getStudentHoursTracker,
 );
 
 ///////////////////

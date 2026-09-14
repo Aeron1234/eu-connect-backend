@@ -544,6 +544,184 @@ export const getAvailableShiftHoursMonths = async (req, res) => {
   }
 };
 
+export const getStudentEvaluationAveragesByCategory = async (req, res) => {
+  let connection;
+  try {
+    connection = await db.getConnection();
+    const { department_id: departmentId } = req.verifiedUser;
+
+    if (!departmentId) {
+      return res
+        .status(400)
+        .json({ error: "No department associated with this account." });
+    }
+
+    const [rows] = await connection.execute(
+      `SELECT
+         sec.category,
+         AVG(ses.score) AS avg_score
+       FROM student_evaluation_scores ses
+       INNER JOIN student_evaluation_criteria sec ON sec.id = ses.criterion_id
+       INNER JOIN student_evaluation_masters sem ON sem.id = ses.evaluation_master_id
+       INNER JOIN internship_records ir ON ir.id = sem.internship_record_id
+       INNER JOIN (
+         SELECT sai1.*
+         FROM student_academic_info AS sai1
+         INNER JOIN (
+           SELECT user_id, MAX(id) AS max_id
+           FROM student_academic_info
+           GROUP BY user_id
+         ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
+       ) AS sai ON ir.user_id = sai.user_id
+       WHERE sai.department_id = ? AND sem.status = 'completed'
+       GROUP BY sec.category
+       ORDER BY sec.category ASC`,
+      [departmentId],
+    );
+
+    const categories = rows.map((r) => ({
+      category: r.category,
+      score: Number(Number(r.avg_score).toFixed(2)),
+    }));
+
+    return res.status(200).json({ categories });
+  } catch (error) {
+    console.error("Get student evaluation averages error:", error);
+    return res
+      .status(500)
+      .json({ error: "Failed to get student evaluation averages." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const getEmployerEvaluationAveragesByCategory = async (req, res) => {
+  let connection;
+  try {
+    connection = await db.getConnection();
+    const { department_id: departmentId } = req.verifiedUser;
+
+    if (!departmentId) {
+      return res
+        .status(400)
+        .json({ error: "No department associated with this account." });
+    }
+
+    const [rows] = await connection.execute(
+      `SELECT
+         eec.category,
+         AVG(ees.score) AS avg_score
+       FROM employer_evaluation_scores ees
+       INNER JOIN employer_evaluation_criteria eec ON eec.id = ees.criterion_id
+       INNER JOIN employer_evaluation_masters eem ON eem.id = ees.evaluation_master_id
+       INNER JOIN (
+         SELECT sai1.*
+         FROM student_academic_info AS sai1
+         INNER JOIN (
+           SELECT user_id, MAX(id) AS max_id
+           FROM student_academic_info
+           GROUP BY user_id
+         ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
+       ) AS sai ON eem.student_id = sai.user_id
+       WHERE sai.department_id = ?
+       GROUP BY eec.category
+       ORDER BY eec.category ASC`,
+      [departmentId],
+    );
+
+    const categories = rows.map((r) => ({
+      category: r.category,
+      score: Number(Number(r.avg_score).toFixed(2)),
+    }));
+
+    return res.status(200).json({ categories });
+  } catch (error) {
+    console.error("Get employer evaluation averages error:", error);
+    return res
+      .status(500)
+      .json({ error: "Failed to get employer evaluation averages." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const getStudentHoursTracker = async (req, res) => {
+  let connection;
+  try {
+    connection = await db.getConnection();
+    const { department_id: departmentId } = req.verifiedUser;
+
+    if (!departmentId) {
+      return res
+        .status(400)
+        .json({ error: "No department associated with this account." });
+    }
+
+    const [studentRows] = await connection.execute(
+      `SELECT
+         ir.id AS internship_id,
+         ir.user_id AS student_id,
+         ir.company_name,
+         ir.accumulated_hours,
+         ir.total_hours,
+         ir.date_started,
+         ir.date_ended,
+         up.first_name,
+         up.last_name,
+         c.short_name AS course
+       FROM internship_records ir
+       INNER JOIN (
+         SELECT sai1.*
+         FROM student_academic_info AS sai1
+         INNER JOIN (
+           SELECT user_id, MAX(id) AS max_id
+           FROM student_academic_info
+           GROUP BY user_id
+         ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
+       ) AS sai ON ir.user_id = sai.user_id
+       INNER JOIN courses c ON c.id = sai.course_id
+       LEFT JOIN user_profiles up ON up.user_id = ir.user_id
+       WHERE sai.department_id = ? AND ir.status = 'ongoing'
+       ORDER BY ir.date_started DESC`,
+      [departmentId],
+    );
+
+    const [courseRows] = await connection.execute(
+      `SELECT id, course_name, short_name
+       FROM courses
+       WHERE department_id = ? AND is_active = 1
+       ORDER BY short_name ASC`,
+      [departmentId],
+    );
+
+    const students = studentRows.map((r) => ({
+      id: r.internship_id,
+      name: `${r.first_name || ""} ${r.last_name || ""}`.trim() || "Unknown",
+      course: r.course,
+      company: r.company_name,
+      accumulated_hours: Number(r.accumulated_hours) || 0,
+      total_hours: Number(r.total_hours) || 0,
+      date_started: r.date_started,
+      date_ended: r.date_ended,
+    }));
+
+    const courses = courseRows.map((c) => ({
+      id: c.id,
+      course_name: c.course_name,
+      short_name: c.short_name,
+    }));
+
+    return res.status(200).json({ students, courses });
+  } catch (error) {
+    console.error("Get student hours tracker error:", error);
+    return res
+      .status(500)
+      .json({ error: "Failed to get student hours tracker." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
 ///////////////////
 //ADMIN
 //////////////////
