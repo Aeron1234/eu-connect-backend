@@ -3,8 +3,11 @@ import bcrypt from "bcryptjs";
 import { newUUID } from "../config/helpers.js";
 
 export const getUserProfile = async (req, res) => {
+  let connection;
   try {
     const { id, role } = req.verifiedUser;
+
+    connection = await db.getConnection();
 
     let query;
     switch (role) {
@@ -79,7 +82,7 @@ export const getUserProfile = async (req, res) => {
         return res.status(403).json({ error: "Unrecognized role." });
     }
 
-    const [rows] = await db.execute(query, [id]);
+    const [rows] = await connection.execute(query, [id]);
     const record = rows.length > 0 ? rows[0] : null;
 
     if (!record) {
@@ -90,6 +93,8 @@ export const getUserProfile = async (req, res) => {
   } catch (error) {
     console.log("Get user profile error: ", error);
     res.status(500).json({ error: "Database query failed", success: false });
+  } finally {
+    if (connection) connection.release();
   }
 };
 
