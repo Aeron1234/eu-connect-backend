@@ -8,22 +8,15 @@ import {
   strictLimiter,
 } from "../middleware/rateLimiter.js";
 import {
+  getAdminDashboardData,
   getAdminDashboardStats,
-  getAvailableShiftHoursMonths,
   getAverageShiftHoursByWeek,
+  getDepartmentHeadDashboardData,
   getDepartmentHeadDashboardStats,
+  getEmployerDashboardData,
   getEmployerDashboardStats,
-  getEmployerEvaluationAveragesByCategory,
-  getOngoingInternshipsByDepartment,
-  getOngoingInternshipsPerCourse,
   getPostedJobs,
-  getRecentSystemActivity,
   getStudentDashboardStats,
-  getStudentEvaluationAveragesByCategory,
-  getStudentHoursTracker,
-  getSupervisedInterns,
-  getUserGrowthOverTime,
-  getUsersByRole,
 } from "../controllers/dashboardController.js";
 
 const dashboardRoutes = express.Router();
@@ -40,8 +33,9 @@ dashboardRoutes.get(
 );
 
 ///////////////////
-//EMPLOYER
-//////////////////
+// EMPLOYER
+///////////////////
+
 dashboardRoutes.get(
   "/employer-dashboard-stats",
   verifyUser,
@@ -51,11 +45,11 @@ dashboardRoutes.get(
 );
 
 dashboardRoutes.get(
-  "/supervised-interns",
+  "/employer-dashboard-data",
   verifyUser,
   verifyRole(["employer"]),
   generalLimiter,
-  getSupervisedInterns,
+  getEmployerDashboardData,
 );
 
 dashboardRoutes.get(
@@ -67,8 +61,9 @@ dashboardRoutes.get(
 );
 
 ///////////////////
-//DEPARTMENT HEAD
-//////////////////
+// DEPARTMENT HEAD
+///////////////////
+
 dashboardRoutes.get(
   "/department-head-dashboard-stats",
   verifyUser,
@@ -78,11 +73,11 @@ dashboardRoutes.get(
 );
 
 dashboardRoutes.get(
-  "/ongoing-internships-per-course",
+  "/department-head-dashboard-data",
   verifyUser,
   verifyRole(["department_head"]),
   generalLimiter,
-  getOngoingInternshipsPerCourse,
+  getDepartmentHeadDashboardData,
 );
 
 dashboardRoutes.get(
@@ -93,41 +88,10 @@ dashboardRoutes.get(
   getAverageShiftHoursByWeek,
 );
 
-dashboardRoutes.get(
-  "/available-shift-hours-months",
-  verifyUser,
-  verifyRole(["department_head"]),
-  generalLimiter,
-  getAvailableShiftHoursMonths,
-);
-
-dashboardRoutes.get(
-  "/student-evaluation-averages",
-  verifyUser,
-  verifyRole(["department_head"]),
-  generalLimiter,
-  getStudentEvaluationAveragesByCategory,
-);
-
-dashboardRoutes.get(
-  "/employer-evaluation-averages",
-  verifyUser,
-  verifyRole(["department_head"]),
-  generalLimiter,
-  getEmployerEvaluationAveragesByCategory,
-);
-
-dashboardRoutes.get(
-  "/student-hours-tracker",
-  verifyUser,
-  verifyRole(["department_head"]),
-  generalLimiter,
-  getStudentHoursTracker,
-);
-
 ///////////////////
-//ADMIN
-//////////////////
+// ADMIN
+///////////////////
+
 dashboardRoutes.get(
   "/admin-dashboard-stats",
   verifyUser,
@@ -137,35 +101,11 @@ dashboardRoutes.get(
 );
 
 dashboardRoutes.get(
-  "/user-growth",
+  "/admin-dashboard-data",
   verifyUser,
   verifyRole(["admin"]),
   generalLimiter,
-  getUserGrowthOverTime,
-);
-
-dashboardRoutes.get(
-  "/users-by-role",
-  verifyUser,
-  verifyRole(["admin"]),
-  generalLimiter,
-  getUsersByRole,
-);
-
-dashboardRoutes.get(
-  "/internships-by-department",
-  verifyUser,
-  verifyRole(["admin"]),
-  generalLimiter,
-  getOngoingInternshipsByDepartment,
-);
-
-dashboardRoutes.get(
-  "/admin-recent-activity",
-  verifyUser,
-  verifyRole(["admin"]),
-  generalLimiter,
-  getRecentSystemActivity,
+  getAdminDashboardData,
 );
 
 export default dashboardRoutes;

@@ -75,6 +75,7 @@ export const getStudentDashboardStats = async (req, res) => {
 ///////////////////
 //EMPLOYER
 //////////////////
+// Keep standalone — feeds @stats independently
 export const getEmployerDashboardStats = async (req, res) => {
   let connection;
   try {
@@ -88,39 +89,30 @@ export const getEmployerDashboardStats = async (req, res) => {
       [pastInternsResult],
       [documentResult],
     ] = await Promise.all([
-      // Internship Posts Count
       connection.execute(
         `SELECT COUNT(*) AS count 
          FROM internship_postings 
          WHERE employer_id = ? AND deleted_at IS NULL`,
         [employerId],
       ),
-
-      // Unread Announcements Count
       connection.execute(
         `SELECT COUNT(*) AS count 
          FROM notifications 
          WHERE user_id = ? AND type = 'announcement' AND is_read = 0`,
         [employerId],
       ),
-
-      // Interns Handled — current (ongoing)
       connection.execute(
         `SELECT COUNT(*) AS count 
          FROM internship_records 
          WHERE employer_id = ? AND status = 'ongoing'`,
         [employerId],
       ),
-
-      // Interns Handled — past (finished)
       connection.execute(
         `SELECT COUNT(*) AS count 
          FROM internship_records 
          WHERE employer_id = ? AND status = 'finished'`,
         [employerId],
       ),
-
-      // Documents Uploaded — only ones this employer uploaded themselves
       connection.execute(
         `SELECT COUNT(*) AS count 
          FROM internship_documents 
@@ -152,49 +144,94 @@ export const getEmployerDashboardStats = async (req, res) => {
   }
 };
 
-export const getSupervisedInterns = async (req, res) => {
+// Consolidated — everything else for the employer dashboard's main page.js,
+// in one round trip. Stats deliberately excluded (see getEmployerDashboardStats).
+export const getEmployerDashboardData = async (req, res) => {
   let connection;
   try {
+    connection = await db.getConnection();
     const { id: employerId } = req.verifiedUser;
 
-    connection = await db.getConnection();
+    // Interns list is the only remaining piece — wrapped defensively so a
+    // bad join here doesn't 500 the whole dashboard.
+    let interns = [];
+    try {
+      const [internRows] = await connection.execute(
+        `SELECT
+           ir.id AS internship_id,
+           ir.user_id AS student_id,
+           ir.status,
+           ir.internship_position,
+           ir.date_started,
+           ir.date_ended,
+           ir.total_hours,
+           ir.accumulated_hours,
+           u.email,
+           up.first_name,
+           up.last_name,
+           c.course_name,
+           c.short_name
+         FROM internship_records ir
+         JOIN users u ON u.id = ir.user_id
+         LEFT JOIN user_profiles up ON up.user_id = ir.user_id
+         LEFT JOIN student_academic_info sai ON sai.user_id = ir.user_id
+         LEFT JOIN courses c ON c.id = sai.course_id
+         WHERE ir.employer_id = ?
+         ORDER BY ir.date_started DESC`,
+        [employerId],
+      );
+      interns = internRows;
+    } catch (err) {
+      console.error("getEmployerDashboardData: interns query failed:", err);
+    }
 
-    const [interns] = await connection.execute(
-      `SELECT
-         ir.id AS internship_id,
-         ir.user_id AS student_id,
-         ir.status,
-         ir.internship_position,
-         ir.date_started,
-         ir.date_ended,
-         ir.total_hours,
-         ir.accumulated_hours,
-         u.email,
-         up.first_name,
-         up.last_name,
-         c.course_name,
-         c.short_name
-       FROM internship_records ir
-       JOIN users u ON u.id = ir.user_id
-       LEFT JOIN user_profiles up ON up.user_id = ir.user_id
-       LEFT JOIN student_academic_info sai ON sai.user_id = ir.user_id
-       LEFT JOIN courses c ON c.id = sai.course_id
-       WHERE ir.employer_id = ?
-       ORDER BY ir.date_started DESC`,
-      [employerId],
-    );
+    // Posted jobs — first page only, matches getPostedJobs' original
+    // defaults; pagination for subsequent pages stays on its own endpoint.
+    let postedJobs = [];
+    let postedJobsTotalPages = 1;
+    try {
+      const limit = 5;
+      const [jobRows] = await connection.execute(
+        `SELECT id, position, location, work_type, vacancies, status, created_at
+         FROM internship_postings
+         WHERE employer_id = ? AND deleted_at IS NULL
+         ORDER BY created_at DESC
+         LIMIT ?`,
+        [employerId, limit],
+      );
+      const [[countRow]] = await connection.execute(
+        `SELECT COUNT(*) AS total
+         FROM internship_postings
+         WHERE employer_id = ? AND deleted_at IS NULL`,
+        [employerId],
+      );
+      postedJobs = jobRows;
+      postedJobsTotalPages = Math.ceil((countRow.total || 0) / limit);
+    } catch (err) {
+      console.error("getEmployerDashboardData: posted jobs query failed:", err);
+    }
 
-    return res.status(200).json({ interns });
+    return res.status(200).json({
+      success: true,
+      interns,
+      postedJobs: {
+        jobs: postedJobs,
+        totalPages: postedJobsTotalPages,
+        currentPage: 1,
+      },
+    });
   } catch (error) {
-    console.error("Get supervised interns error:", error);
-    return res.status(500).json({ error: "Failed to get supervised interns." });
+    console.error("Failed to retrieve employer dashboard data:", error);
+    res.status(500).json({
+      error: "Database metrics aggregation failed",
+      success: false,
+    });
   } finally {
     if (connection) connection.release();
   }
 };
 
-// wherever your employer controllers live, e.g. controllers/employerController.js
-
+// Keep separate — paginated, refetched on "page 2, 3..." after initial load
 export const getPostedJobs = async (req, res) => {
   let connection;
   try {
@@ -244,10 +281,10 @@ export const getPostedJobs = async (req, res) => {
     if (connection) connection.release();
   }
 };
-
 ///////////////////
 //DEPARTMENT HEAD
 //////////////////
+// Keep standalone — feeds @stats independently
 export const getDepartmentHeadDashboardStats = async (req, res) => {
   let connection;
   try {
@@ -267,8 +304,6 @@ export const getDepartmentHeadDashboardStats = async (req, res) => {
       [manualAlumniResult],
       [announcementResult],
     ] = await Promise.all([
-      // Ongoing Internships — dept-scoped via each student's latest
-      // student_academic_info row
       connection.execute(
         `SELECT COUNT(*) AS count
          FROM internship_records ir
@@ -284,8 +319,6 @@ export const getDepartmentHeadDashboardStats = async (req, res) => {
          WHERE sai.department_id = ? AND ir.status = 'ongoing'`,
         [departmentId],
       ),
-
-      // Pending Responses — same scoping, status = 'pending'
       connection.execute(
         `SELECT COUNT(*) AS count
          FROM internship_records ir
@@ -301,9 +334,6 @@ export const getDepartmentHeadDashboardStats = async (req, res) => {
          WHERE sai.department_id = ? AND ir.status = 'pending'`,
         [departmentId],
       ),
-
-      // Internship Records, part 1 — every internship_records row for this
-      // department, regardless of status
       connection.execute(
         `SELECT COUNT(*) AS count
          FROM internship_records ir
@@ -319,18 +349,12 @@ export const getDepartmentHeadDashboardStats = async (req, res) => {
          WHERE sai.department_id = ?`,
         [departmentId],
       ),
-
-      // Internship Records, part 2 — alumni rows with NO internship_record_id,
-      // meaning they were never counted in internship_records at all
-      // (manually posted, not derived from a finished record)
       connection.execute(
         `SELECT COUNT(*) AS count
          FROM alumni_internship_records
          WHERE department_id = ? AND internship_record_id IS NULL`,
         [departmentId],
       ),
-
-      // Unread Announcements
       connection.execute(
         `SELECT COUNT(*) AS count 
          FROM notifications 
@@ -366,7 +390,9 @@ export const getDepartmentHeadDashboardStats = async (req, res) => {
   }
 };
 
-export const getOngoingInternshipsPerCourse = async (req, res) => {
+// Consolidated — everything except stats, in one round trip. Each section
+// wrapped independently so one bad query doesn't take down the rest.
+export const getDepartmentHeadDashboardData = async (req, res) => {
   let connection;
   try {
     connection = await db.getConnection();
@@ -378,47 +404,225 @@ export const getOngoingInternshipsPerCourse = async (req, res) => {
         .json({ error: "No department associated with this account." });
     }
 
-    const [rows] = await connection.execute(
-      `SELECT
-         c.id AS course_id,
-         c.course_name,
-         c.short_name,
-         COUNT(ir.id) AS interns
-       FROM internship_records ir
-       INNER JOIN (
-         SELECT sai1.*
-         FROM student_academic_info AS sai1
+    let ongoingPerCourse = [];
+    try {
+      const [rows] = await connection.execute(
+        `SELECT
+           c.id AS course_id,
+           c.course_name,
+           c.short_name,
+           COUNT(ir.id) AS interns
+         FROM internship_records ir
          INNER JOIN (
-           SELECT user_id, MAX(id) AS max_id
-           FROM student_academic_info
-           GROUP BY user_id
-         ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
-       ) AS sai ON ir.user_id = sai.user_id
-       INNER JOIN courses c ON c.id = sai.course_id
-       WHERE sai.department_id = ? AND ir.status = 'ongoing'
-       GROUP BY c.id, c.course_name, c.short_name
-       ORDER BY interns DESC`,
-      [departmentId],
-    );
+           SELECT sai1.*
+           FROM student_academic_info AS sai1
+           INNER JOIN (
+             SELECT user_id, MAX(id) AS max_id
+             FROM student_academic_info
+             GROUP BY user_id
+           ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
+         ) AS sai ON ir.user_id = sai.user_id
+         INNER JOIN courses c ON c.id = sai.course_id
+         WHERE sai.department_id = ? AND ir.status = 'ongoing'
+         GROUP BY c.id, c.course_name, c.short_name
+         ORDER BY interns DESC`,
+        [departmentId],
+      );
+      ongoingPerCourse = rows;
+    } catch (err) {
+      console.error(
+        "getDepartmentHeadDashboardData: per-course query failed:",
+        err,
+      );
+    }
 
-    return res.status(200).json({ courses: rows });
+    let studentEvaluationAverages = [];
+    try {
+      const [rows] = await connection.execute(
+        `SELECT
+           sec.category,
+           AVG(ses.score) AS avg_score
+         FROM student_evaluation_scores ses
+         INNER JOIN student_evaluation_criteria sec ON sec.id = ses.criterion_id
+         INNER JOIN student_evaluation_masters sem ON sem.id = ses.evaluation_master_id
+         INNER JOIN internship_records ir ON ir.id = sem.internship_record_id
+         INNER JOIN (
+           SELECT sai1.*
+           FROM student_academic_info AS sai1
+           INNER JOIN (
+             SELECT user_id, MAX(id) AS max_id
+             FROM student_academic_info
+             GROUP BY user_id
+           ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
+         ) AS sai ON ir.user_id = sai.user_id
+         WHERE sai.department_id = ? AND sem.status = 'completed'
+         GROUP BY sec.category
+         ORDER BY sec.category ASC`,
+        [departmentId],
+      );
+      studentEvaluationAverages = rows.map((r) => ({
+        category: r.category,
+        score: Number(Number(r.avg_score).toFixed(2)),
+      }));
+    } catch (err) {
+      console.error(
+        "getDepartmentHeadDashboardData: student evaluation averages query failed:",
+        err,
+      );
+    }
+
+    let employerEvaluationAverages = [];
+    try {
+      const [rows] = await connection.execute(
+        `SELECT
+           eec.category,
+           AVG(ees.score) AS avg_score
+         FROM employer_evaluation_scores ees
+         INNER JOIN employer_evaluation_criteria eec ON eec.id = ees.criterion_id
+         INNER JOIN employer_evaluation_masters eem ON eem.id = ees.evaluation_master_id
+         INNER JOIN (
+           SELECT sai1.*
+           FROM student_academic_info AS sai1
+           INNER JOIN (
+             SELECT user_id, MAX(id) AS max_id
+             FROM student_academic_info
+             GROUP BY user_id
+           ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
+         ) AS sai ON eem.student_id = sai.user_id
+         WHERE sai.department_id = ?
+         GROUP BY eec.category
+         ORDER BY eec.category ASC`,
+        [departmentId],
+      );
+      employerEvaluationAverages = rows.map((r) => ({
+        category: r.category,
+        score: Number(Number(r.avg_score).toFixed(2)),
+      }));
+    } catch (err) {
+      console.error(
+        "getDepartmentHeadDashboardData: employer evaluation averages query failed:",
+        err,
+      );
+    }
+
+    let hoursTracker = { students: [], courses: [] };
+    try {
+      const [studentRows] = await connection.execute(
+        `SELECT
+           ir.id AS internship_id,
+           ir.user_id AS student_id,
+           ir.company_name,
+           ir.accumulated_hours,
+           ir.total_hours,
+           ir.date_started,
+           ir.date_ended,
+           up.first_name,
+           up.last_name,
+           c.short_name AS course
+         FROM internship_records ir
+         INNER JOIN (
+           SELECT sai1.*
+           FROM student_academic_info AS sai1
+           INNER JOIN (
+             SELECT user_id, MAX(id) AS max_id
+             FROM student_academic_info
+             GROUP BY user_id
+           ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
+         ) AS sai ON ir.user_id = sai.user_id
+         INNER JOIN courses c ON c.id = sai.course_id
+         LEFT JOIN user_profiles up ON up.user_id = ir.user_id
+         WHERE sai.department_id = ? AND ir.status = 'ongoing'
+         ORDER BY ir.date_started DESC`,
+        [departmentId],
+      );
+      const [courseRows] = await connection.execute(
+        `SELECT id, course_name, short_name
+         FROM courses
+         WHERE department_id = ? AND is_active = 1
+         ORDER BY short_name ASC`,
+        [departmentId],
+      );
+      hoursTracker = {
+        students: studentRows.map((r) => ({
+          id: r.internship_id,
+          name:
+            `${r.first_name || ""} ${r.last_name || ""}`.trim() || "Unknown",
+          course: r.course,
+          company: r.company_name,
+          accumulated_hours: Number(r.accumulated_hours) || 0,
+          total_hours: Number(r.total_hours) || 0,
+          date_started: r.date_started,
+          date_ended: r.date_ended,
+        })),
+        courses: courseRows.map((c) => ({
+          id: c.id,
+          course_name: c.course_name,
+          short_name: c.short_name,
+        })),
+      };
+    } catch (err) {
+      console.error(
+        "getDepartmentHeadDashboardData: hours tracker query failed:",
+        err,
+      );
+    }
+
+    let availableShiftHoursMonths = [];
+    try {
+      const [rows] = await connection.execute(
+        `SELECT DISTINCT YEAR(dtr.clock_in) AS year, MONTH(dtr.clock_in) AS month
+         FROM daily_time_records dtr
+         INNER JOIN (
+           SELECT sai1.*
+           FROM student_academic_info AS sai1
+           INNER JOIN (
+             SELECT user_id, MAX(id) AS max_id
+             FROM student_academic_info
+             GROUP BY user_id
+           ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
+         ) AS sai ON dtr.user_id = sai.user_id
+         WHERE sai.department_id = ?
+           AND dtr.status IN ('present', 'invalid')
+           AND dtr.clock_out IS NOT NULL
+         ORDER BY year DESC, month DESC
+         LIMIT 12`,
+        [departmentId],
+      );
+      availableShiftHoursMonths = rows;
+    } catch (err) {
+      console.error(
+        "getDepartmentHeadDashboardData: available months query failed:",
+        err,
+      );
+    }
+
+    res.status(200).json({
+      success: true,
+      ongoingPerCourse,
+      studentEvaluationAverages,
+      employerEvaluationAverages,
+      hoursTracker,
+      availableShiftHoursMonths,
+    });
   } catch (error) {
-    console.error("Get ongoing internships per course error:", error);
-    return res
-      .status(500)
-      .json({ error: "Failed to get internships per course." });
+    console.error("Failed to retrieve department head dashboard data:", error);
+    res.status(500).json({
+      error: "Database metrics aggregation failed",
+      success: false,
+    });
   } finally {
     if (connection) connection.release();
   }
 };
 
+// Keep separate — interactive, refetched every time the month picker changes
 export const getAverageShiftHoursByWeek = async (req, res) => {
   let connection;
   try {
     connection = await db.getConnection();
     const { department_id: departmentId } = req.verifiedUser;
     const now = new Date();
-    const month = parseInt(req.query.month) || now.getMonth() + 1; // 1-12
+    const month = parseInt(req.query.month) || now.getMonth() + 1;
     const year = parseInt(req.query.year) || now.getFullYear();
 
     if (!departmentId) {
@@ -430,7 +634,7 @@ export const getAverageShiftHoursByWeek = async (req, res) => {
     const firstOfMonth = new Date(Date.UTC(year, month - 1, 1));
     const lastOfMonth = new Date(Date.UTC(year, month, 0));
 
-    const isoDay = (d) => ((d.getUTCDay() + 6) % 7) + 1; // Mon=1 ... Sun=7
+    const isoDay = (d) => ((d.getUTCDay() + 6) % 7) + 1;
 
     const rangeStart = new Date(firstOfMonth);
     rangeStart.setUTCDate(rangeStart.getUTCDate() - (isoDay(firstOfMonth) - 1));
@@ -503,229 +707,11 @@ export const getAverageShiftHoursByWeek = async (req, res) => {
   }
 };
 
-export const getAvailableShiftHoursMonths = async (req, res) => {
-  let connection;
-  try {
-    connection = await db.getConnection();
-    const { department_id: departmentId } = req.verifiedUser;
-
-    if (!departmentId) {
-      return res
-        .status(400)
-        .json({ error: "No department associated with this account." });
-    }
-
-    const [rows] = await connection.execute(
-      `SELECT DISTINCT YEAR(dtr.clock_in) AS year, MONTH(dtr.clock_in) AS month
-       FROM daily_time_records dtr
-       INNER JOIN (
-         SELECT sai1.*
-         FROM student_academic_info AS sai1
-         INNER JOIN (
-           SELECT user_id, MAX(id) AS max_id
-           FROM student_academic_info
-           GROUP BY user_id
-         ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
-       ) AS sai ON dtr.user_id = sai.user_id
-       WHERE sai.department_id = ?
-         AND dtr.status IN ('present', 'invalid')
-         AND dtr.clock_out IS NOT NULL
-       ORDER BY year DESC, month DESC
-       LIMIT 12`,
-      [departmentId],
-    );
-
-    return res.status(200).json({ months: rows });
-  } catch (error) {
-    console.error("Get available shift hours months error:", error);
-    return res.status(500).json({ error: "Failed to get available months." });
-  } finally {
-    if (connection) connection.release();
-  }
-};
-
-export const getStudentEvaluationAveragesByCategory = async (req, res) => {
-  let connection;
-  try {
-    connection = await db.getConnection();
-    const { department_id: departmentId } = req.verifiedUser;
-
-    if (!departmentId) {
-      return res
-        .status(400)
-        .json({ error: "No department associated with this account." });
-    }
-
-    const [rows] = await connection.execute(
-      `SELECT
-         sec.category,
-         AVG(ses.score) AS avg_score
-       FROM student_evaluation_scores ses
-       INNER JOIN student_evaluation_criteria sec ON sec.id = ses.criterion_id
-       INNER JOIN student_evaluation_masters sem ON sem.id = ses.evaluation_master_id
-       INNER JOIN internship_records ir ON ir.id = sem.internship_record_id
-       INNER JOIN (
-         SELECT sai1.*
-         FROM student_academic_info AS sai1
-         INNER JOIN (
-           SELECT user_id, MAX(id) AS max_id
-           FROM student_academic_info
-           GROUP BY user_id
-         ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
-       ) AS sai ON ir.user_id = sai.user_id
-       WHERE sai.department_id = ? AND sem.status = 'completed'
-       GROUP BY sec.category
-       ORDER BY sec.category ASC`,
-      [departmentId],
-    );
-
-    const categories = rows.map((r) => ({
-      category: r.category,
-      score: Number(Number(r.avg_score).toFixed(2)),
-    }));
-
-    return res.status(200).json({ categories });
-  } catch (error) {
-    console.error("Get student evaluation averages error:", error);
-    return res
-      .status(500)
-      .json({ error: "Failed to get student evaluation averages." });
-  } finally {
-    if (connection) connection.release();
-  }
-};
-
-export const getEmployerEvaluationAveragesByCategory = async (req, res) => {
-  let connection;
-  try {
-    connection = await db.getConnection();
-    const { department_id: departmentId } = req.verifiedUser;
-
-    if (!departmentId) {
-      return res
-        .status(400)
-        .json({ error: "No department associated with this account." });
-    }
-
-    const [rows] = await connection.execute(
-      `SELECT
-         eec.category,
-         AVG(ees.score) AS avg_score
-       FROM employer_evaluation_scores ees
-       INNER JOIN employer_evaluation_criteria eec ON eec.id = ees.criterion_id
-       INNER JOIN employer_evaluation_masters eem ON eem.id = ees.evaluation_master_id
-       INNER JOIN (
-         SELECT sai1.*
-         FROM student_academic_info AS sai1
-         INNER JOIN (
-           SELECT user_id, MAX(id) AS max_id
-           FROM student_academic_info
-           GROUP BY user_id
-         ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
-       ) AS sai ON eem.student_id = sai.user_id
-       WHERE sai.department_id = ?
-       GROUP BY eec.category
-       ORDER BY eec.category ASC`,
-      [departmentId],
-    );
-
-    const categories = rows.map((r) => ({
-      category: r.category,
-      score: Number(Number(r.avg_score).toFixed(2)),
-    }));
-
-    return res.status(200).json({ categories });
-  } catch (error) {
-    console.error("Get employer evaluation averages error:", error);
-    return res
-      .status(500)
-      .json({ error: "Failed to get employer evaluation averages." });
-  } finally {
-    if (connection) connection.release();
-  }
-};
-
-export const getStudentHoursTracker = async (req, res) => {
-  let connection;
-  try {
-    connection = await db.getConnection();
-    const { department_id: departmentId } = req.verifiedUser;
-
-    if (!departmentId) {
-      return res
-        .status(400)
-        .json({ error: "No department associated with this account." });
-    }
-
-    const [studentRows] = await connection.execute(
-      `SELECT
-         ir.id AS internship_id,
-         ir.user_id AS student_id,
-         ir.company_name,
-         ir.accumulated_hours,
-         ir.total_hours,
-         ir.date_started,
-         ir.date_ended,
-         up.first_name,
-         up.last_name,
-         c.short_name AS course
-       FROM internship_records ir
-       INNER JOIN (
-         SELECT sai1.*
-         FROM student_academic_info AS sai1
-         INNER JOIN (
-           SELECT user_id, MAX(id) AS max_id
-           FROM student_academic_info
-           GROUP BY user_id
-         ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
-       ) AS sai ON ir.user_id = sai.user_id
-       INNER JOIN courses c ON c.id = sai.course_id
-       LEFT JOIN user_profiles up ON up.user_id = ir.user_id
-       WHERE sai.department_id = ? AND ir.status = 'ongoing'
-       ORDER BY ir.date_started DESC`,
-      [departmentId],
-    );
-
-    const [courseRows] = await connection.execute(
-      `SELECT id, course_name, short_name
-       FROM courses
-       WHERE department_id = ? AND is_active = 1
-       ORDER BY short_name ASC`,
-      [departmentId],
-    );
-
-    const students = studentRows.map((r) => ({
-      id: r.internship_id,
-      name: `${r.first_name || ""} ${r.last_name || ""}`.trim() || "Unknown",
-      course: r.course,
-      company: r.company_name,
-      accumulated_hours: Number(r.accumulated_hours) || 0,
-      total_hours: Number(r.total_hours) || 0,
-      date_started: r.date_started,
-      date_ended: r.date_ended,
-    }));
-
-    const courses = courseRows.map((c) => ({
-      id: c.id,
-      course_name: c.course_name,
-      short_name: c.short_name,
-    }));
-
-    return res.status(200).json({ students, courses });
-  } catch (error) {
-    console.error("Get student hours tracker error:", error);
-    return res
-      .status(500)
-      .json({ error: "Failed to get student hours tracker." });
-  } finally {
-    if (connection) connection.release();
-  }
-};
-
 ///////////////////
 //ADMIN
 //////////////////
 
+// Keep standalone — feeds @stats independently
 export const getAdminDashboardStats = async (req, res) => {
   let connection;
   try {
@@ -737,28 +723,21 @@ export const getAdminDashboardStats = async (req, res) => {
       [studentsResult],
       [inactiveSuspendedResult],
     ] = await Promise.all([
-      // Ongoing Internships — system-wide, no department scoping
       connection.execute(
         `SELECT COUNT(*) AS count FROM internship_records WHERE status = 'ongoing'`,
       ),
-
-      // Employers
       connection.execute(
         `SELECT COUNT(*) AS count 
          FROM users u
          INNER JOIN roles r ON r.id = u.role_id
          WHERE r.role = 'employer'`,
       ),
-
-      // Students
       connection.execute(
         `SELECT COUNT(*) AS count 
          FROM users u
          INNER JOIN roles r ON r.id = u.role_id
          WHERE r.role = 'student'`,
       ),
-
-      // Inactive / Suspended accounts, any role
       connection.execute(
         `SELECT COUNT(*) AS count 
          FROM users 
@@ -786,148 +765,143 @@ export const getAdminDashboardStats = async (req, res) => {
   }
 };
 
-export const getUserGrowthOverTime = async (req, res) => {
+// Consolidated — everything except stats, in one round trip. Each section
+// wrapped independently so one bad query doesn't take down the rest.
+export const getAdminDashboardData = async (req, res) => {
   let connection;
   try {
     connection = await db.getConnection();
-    const monthsBack = 7; // 7 + current month = 8 months total, matches mockup
 
-    const rangeStart = new Date();
-    rangeStart.setDate(1);
-    rangeStart.setMonth(rangeStart.getMonth() - monthsBack);
-    rangeStart.setHours(0, 0, 0, 0);
+    let userGrowth = [];
+    try {
+      const monthsBack = 7;
+      const rangeStart = new Date();
+      rangeStart.setDate(1);
+      rangeStart.setMonth(rangeStart.getMonth() - monthsBack);
+      rangeStart.setHours(0, 0, 0, 0);
 
-    const [rows] = await connection.execute(
-      `SELECT
-         DATE_FORMAT(u.created_at, '%Y-%m') AS month_key,
-         r.role,
-         COUNT(*) AS count
-       FROM users u
-       INNER JOIN roles r ON r.id = u.role_id
-       WHERE u.created_at >= ?
-       GROUP BY month_key, r.role
-       ORDER BY month_key ASC`,
-      [rangeStart],
-    );
+      const [rows] = await connection.execute(
+        `SELECT
+           DATE_FORMAT(u.created_at, '%Y-%m') AS month_key,
+           r.role,
+           COUNT(*) AS count
+         FROM users u
+         INNER JOIN roles r ON r.id = u.role_id
+         WHERE u.created_at >= ?
+         GROUP BY month_key, r.role
+         ORDER BY month_key ASC`,
+        [rangeStart],
+      );
 
-    // Build the full list of months in range so empty months still show as 0
-    const months = [];
-    const cursor = new Date(rangeStart);
-    const now = new Date();
-    while (
-      cursor.getFullYear() < now.getFullYear() ||
-      (cursor.getFullYear() === now.getFullYear() &&
-        cursor.getMonth() <= now.getMonth())
-    ) {
-      const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
-      months.push({
-        key,
-        label: cursor.toLocaleString("en-US", { month: "short" }),
-      });
-      cursor.setMonth(cursor.getMonth() + 1);
+      const months = [];
+      const cursor = new Date(rangeStart);
+      const now = new Date();
+      while (
+        cursor.getFullYear() < now.getFullYear() ||
+        (cursor.getFullYear() === now.getFullYear() &&
+          cursor.getMonth() <= now.getMonth())
+      ) {
+        const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
+        months.push({
+          key,
+          label: cursor.toLocaleString("en-US", { month: "short" }),
+        });
+        cursor.setMonth(cursor.getMonth() + 1);
+      }
+
+      const dataByMonth = new Map(
+        months.map((m) => [
+          m.key,
+          { month: m.label, students: 0, employers: 0, deptHeads: 0 },
+        ]),
+      );
+
+      for (const row of rows) {
+        const entry = dataByMonth.get(row.month_key);
+        if (!entry) continue;
+        if (row.role === "student") entry.students = row.count;
+        if (row.role === "employer") entry.employers = row.count;
+        if (row.role === "department_head") entry.deptHeads = row.count;
+      }
+
+      userGrowth = Array.from(dataByMonth.values());
+    } catch (err) {
+      console.error("getAdminDashboardData: user growth query failed:", err);
     }
 
-    const dataByMonth = new Map(
-      months.map((m) => [
-        m.key,
-        { month: m.label, students: 0, employers: 0, deptHeads: 0 },
-      ]),
-    );
-
-    for (const row of rows) {
-      const entry = dataByMonth.get(row.month_key);
-      if (!entry) continue;
-      if (row.role === "student") entry.students = row.count;
-      if (row.role === "employer") entry.employers = row.count;
-      if (row.role === "department_head") entry.deptHeads = row.count;
+    let usersByRole = [];
+    try {
+      const [rows] = await connection.execute(
+        `SELECT r.role, COUNT(*) AS count
+         FROM users u
+         INNER JOIN roles r ON r.id = u.role_id
+         GROUP BY r.role`,
+      );
+      usersByRole = rows;
+    } catch (err) {
+      console.error("getAdminDashboardData: users by role query failed:", err);
     }
 
-    return res.status(200).json({ growth: Array.from(dataByMonth.values()) });
-  } catch (error) {
-    console.error("Get user growth over time error:", error);
-    return res.status(500).json({ error: "Failed to get user growth data." });
-  } finally {
-    if (connection) connection.release();
-  }
-};
-
-export const getUsersByRole = async (req, res) => {
-  let connection;
-  try {
-    connection = await db.getConnection();
-
-    const [rows] = await connection.execute(
-      `SELECT r.role, COUNT(*) AS count
-       FROM users u
-       INNER JOIN roles r ON r.id = u.role_id
-       GROUP BY r.role`,
-    );
-
-    return res.status(200).json({ roles: rows });
-  } catch (error) {
-    console.error("Get users by role error:", error);
-    return res.status(500).json({ error: "Failed to get users by role." });
-  } finally {
-    if (connection) connection.release();
-  }
-};
-
-export const getOngoingInternshipsByDepartment = async (req, res) => {
-  let connection;
-  try {
-    connection = await db.getConnection();
-
-    const [rows] = await connection.execute(
-      `SELECT
-         d.id AS department_id,
-         d.name AS department_name,
-         d.code AS department_code,
-         COUNT(ir.id) AS interns
-       FROM internship_records ir
-       INNER JOIN (
-         SELECT sai1.*
-         FROM student_academic_info AS sai1
+    let ongoingByDepartment = [];
+    try {
+      const [rows] = await connection.execute(
+        `SELECT
+           d.id AS department_id,
+           d.name AS department_name,
+           d.code AS department_code,
+           COUNT(ir.id) AS interns
+         FROM internship_records ir
          INNER JOIN (
-           SELECT user_id, MAX(id) AS max_id
-           FROM student_academic_info
-           GROUP BY user_id
-         ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
-       ) AS sai ON ir.user_id = sai.user_id
-       INNER JOIN departments d ON d.id = sai.department_id
-       WHERE ir.status = 'ongoing'
-       GROUP BY d.id, d.name, d.code
-       ORDER BY interns DESC`,
-    );
+           SELECT sai1.*
+           FROM student_academic_info AS sai1
+           INNER JOIN (
+             SELECT user_id, MAX(id) AS max_id
+             FROM student_academic_info
+             GROUP BY user_id
+           ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
+         ) AS sai ON ir.user_id = sai.user_id
+         INNER JOIN departments d ON d.id = sai.department_id
+         WHERE ir.status = 'ongoing'
+         GROUP BY d.id, d.name, d.code
+         ORDER BY interns DESC`,
+      );
+      ongoingByDepartment = rows;
+    } catch (err) {
+      console.error(
+        "getAdminDashboardData: ongoing by department query failed:",
+        err,
+      );
+    }
 
-    return res.status(200).json({ departments: rows });
+    let recentActivity = [];
+    try {
+      const [rows] = await connection.execute(
+        `SELECT id, actor_id, actor_role, action, target_type, target_id, description, created_at
+         FROM activity_logs
+         ORDER BY created_at DESC
+         LIMIT 10`,
+      );
+      recentActivity = rows;
+    } catch (err) {
+      console.error(
+        "getAdminDashboardData: recent activity query failed:",
+        err,
+      );
+    }
+
+    res.status(200).json({
+      success: true,
+      userGrowth,
+      usersByRole,
+      ongoingByDepartment,
+      recentActivity,
+    });
   } catch (error) {
-    console.error("Get ongoing internships by department error:", error);
-    return res
-      .status(500)
-      .json({ error: "Failed to get internships by department." });
-  } finally {
-    if (connection) connection.release();
-  }
-};
-
-export const getRecentSystemActivity = async (req, res) => {
-  let connection;
-  try {
-    connection = await db.getConnection();
-    const limit = 10;
-
-    const [rows] = await connection.execute(
-      `SELECT id, actor_id, actor_role, action, target_type, target_id, description, created_at
-       FROM activity_logs
-       ORDER BY created_at DESC
-       LIMIT ?`,
-      [limit],
-    );
-
-    return res.status(200).json({ data: rows });
-  } catch (error) {
-    console.error("Get recent system activity error:", error);
-    return res.status(500).json({ error: "Failed to get recent activity." });
+    console.error("Failed to retrieve admin dashboard data:", error);
+    res.status(500).json({
+      error: "Database metrics aggregation failed",
+      success: false,
+    });
   } finally {
     if (connection) connection.release();
   }
