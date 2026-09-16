@@ -141,8 +141,8 @@ export const getSearchedUser = async (req, res) => {
 };
 export const getSearchedStudentDTRs = async (req, res) => {
   // 🛡️ GUARD CLAUSE: Validate searched user route parameter
-  const { searchedUserId } = req.params;
-  if (!searchedUserId) {
+  const { studentId } = req.params;
+  if (!studentId) {
     return res
       .status(400)
       .json({ error: "Searched User ID parameter is required." });
@@ -191,13 +191,11 @@ export const getSearchedStudentDTRs = async (req, res) => {
 
     // Execute queries using the allocated connection thread
     const [rows] = await connection.execute(dtrQuery, [
-      searchedUserId,
+      studentId,
       limit,
       offset,
     ]);
-    const [countResult] = await connection.execute(countQuery, [
-      searchedUserId,
-    ]);
+    const [countResult] = await connection.execute(countQuery, [studentId]);
 
     const totalRecords = countResult[0].total;
     const totalPages = Math.ceil(totalRecords / limit);
