@@ -15,7 +15,7 @@ export const searchUsers = async (req, res) => {
     connection = await db.getConnection();
     const searchTerm = `%${q.trim()}%`;
 
-    // Searches user profiles, handles students (role_id = 1) and employers (role_id = 2)
+    // Searches user profiles, handles students, employers, and department heads
     const query = `
         SELECT 
           up.user_id, 
@@ -28,14 +28,32 @@ export const searchUsers = async (req, res) => {
             WHEN r.role = 'employer' THEN ebi.company_name
             ELSE NULL
           END AS company_name,
+          CASE
+            WHEN r.role = 'student' THEN d_student.name
+            WHEN r.role = 'department_head' THEN d_dept_head.name
+            ELSE NULL
+          END AS department,
           IFNULL(ir.accumulated_hours, 0) AS hours_rendered,
           IFNULL(ir.total_hours, 0) AS total_hours
         FROM user_profiles up
         INNER JOIN users u ON up.user_id = u.id 
         -- 🌟 Join the roles table to get the readable string
         INNER JOIN roles r ON u.role_id = r.id
-        LEFT JOIN student_academic_info sai ON up.user_id = sai.user_id
+        -- Latest student_academic_info row per user, same pattern used elsewhere —
+        -- a student can have multiple rows over time (e.g. shifted course/dept)
+        LEFT JOIN (
+          SELECT sai1.*
+          FROM student_academic_info AS sai1
+          INNER JOIN (
+            SELECT user_id, MAX(id) AS max_id
+            FROM student_academic_info
+            GROUP BY user_id
+          ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
+        ) sai ON up.user_id = sai.user_id
         LEFT JOIN courses c ON sai.course_id = c.id
+        LEFT JOIN departments d_student ON sai.department_id = d_student.id
+        LEFT JOIN dept_heads_background_info dhbi ON up.user_id = dhbi.user_id
+        LEFT JOIN departments d_dept_head ON dhbi.department_id = d_dept_head.id
         LEFT JOIN internship_records ir ON up.user_id = ir.user_id AND ir.status = 'ongoing'
         LEFT JOIN employer_background_info ebi ON up.user_id = ebi.user_id
         WHERE up.first_name LIKE ? 
@@ -140,7 +158,7 @@ export const saveSearchHistory = async (req, res) => {
 // 📅 C. GET RECENTLY VIEWED HISTORY
 export const getSearchHistory = async (req, res) => {
   // 🛡️ GUARD CLAUSE: Ensure user is authenticated
-  const userId = req.verifiedUser?.id;
+  const { id: userId } = req.verifiedUser;
   if (!userId) {
     return res
       .status(401)
@@ -175,6 +193,11 @@ export const getSearchHistory = async (req, res) => {
           WHEN r.role = 'employer' THEN ebi.company_name
           ELSE NULL
         END AS company_name,
+        CASE
+          WHEN r.role = 'student' THEN d_student.name
+          WHEN r.role = 'department_head' THEN d_dept_head.name
+          ELSE NULL
+        END AS department,
         IFNULL(ir.accumulated_hours, 0) AS hours_rendered,
         IFNULL(ir.total_hours, 0) AS total_hours
       FROM search_history sh
@@ -182,8 +205,21 @@ export const getSearchHistory = async (req, res) => {
       LEFT JOIN users u ON up.user_id = u.id
       -- 🌟 Join the roles table
       LEFT JOIN roles r ON u.role_id = r.id
-      LEFT JOIN student_academic_info sai ON up.user_id = sai.user_id
+      -- Latest student_academic_info row per user, same pattern used elsewhere —
+      -- a student can have multiple rows over time (e.g. shifted course/dept)
+      LEFT JOIN (
+        SELECT sai1.*
+        FROM student_academic_info AS sai1
+        INNER JOIN (
+          SELECT user_id, MAX(id) AS max_id
+          FROM student_academic_info
+          GROUP BY user_id
+        ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
+      ) sai ON up.user_id = sai.user_id
       LEFT JOIN courses c ON sai.course_id = c.id
+      LEFT JOIN departments d_student ON sai.department_id = d_student.id
+      LEFT JOIN dept_heads_background_info dhbi ON up.user_id = dhbi.user_id
+      LEFT JOIN departments d_dept_head ON dhbi.department_id = d_dept_head.id
       LEFT JOIN internship_records ir ON up.user_id = ir.user_id AND ir.status = 'ongoing'
       LEFT JOIN employer_background_info ebi ON up.user_id = ebi.user_id
       WHERE sh.user_id = ? AND sh.type = ?

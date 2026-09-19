@@ -7,8 +7,11 @@ import {
   deleteDailyNarrative,
   editNarrative,
   getAllNarratives,
+  getInternshipRecordNarratives,
+  getSearchedStudentNarratives,
 } from "../controllers/narrativeControllers.js";
 import {
+  generalLimiter,
   mediumLimiter,
   paginationLimiter,
   strictLimiter,
@@ -49,6 +52,22 @@ narrativeRoutes.delete(
   verifyRole(["student", "admin"]),
   mediumLimiter,
   deleteDailyNarrative,
+);
+
+narrativeRoutes.get(
+  "/searched-user/narratives/:searchedUserId",
+  verifyUser,
+  verifyRole(["employer", "department_head", "admin"]),
+  generalLimiter,
+  getSearchedStudentNarratives,
+);
+
+narrativeRoutes.get(
+  "/internship-records/narratives/:internshipId",
+  verifyUser,
+  verifyRole(["department_head", "admin"]),
+  generalLimiter,
+  getInternshipRecordNarratives,
 );
 
 export default narrativeRoutes;

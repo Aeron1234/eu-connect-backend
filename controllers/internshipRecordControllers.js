@@ -1291,35 +1291,6 @@ export const getInternshipRecordDtr = async (req, res) => {
   }
 };
 
-export const getInternshipRecordNarratives = async (req, res) => {
-  let connection;
-  try {
-    const { id: requesterId, role } = req.verifiedUser;
-    const { internshipId } = req.params;
-
-    connection = await db.getConnection();
-    await verifyRecordAccess(connection, internshipId, requesterId, role);
-
-    const [rows] = await connection.execute(
-      `SELECT id, day_number, title, narrative, created_at, updated_at
-       FROM daily_narratives
-       WHERE internship_id = ?
-       ORDER BY day_number ASC
-       LIMIT 100`,
-      [internshipId],
-    );
-
-    res.status(200).json(rows);
-  } catch (error) {
-    if (error.status)
-      return res.status(error.status).json({ error: error.message });
-    console.error("Get internship record narratives error:", error);
-    res.status(500).json({ error: "Failed to load narratives." });
-  } finally {
-    if (connection) connection.release();
-  }
-};
-
 export const getInternshipRecordEvaluations = async (req, res) => {
   let connection;
   try {

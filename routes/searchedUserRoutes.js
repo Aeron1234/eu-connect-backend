@@ -13,7 +13,6 @@ import {
 import {
   getSearchedUser,
   getSearchedStudentDTRs,
-  getSearchedStudentNarratives,
   getSearchedStudentFiles,
   setSearchedStudentDtrLocation,
   getSearchedStudentDtrLocation,
@@ -41,14 +40,6 @@ searchedUserRoutes.get(
   verifyRole(["employer", "department_head", "admin"]),
   generalLimiter,
   getSearchedStudentDTRs,
-);
-
-searchedUserRoutes.get(
-  "/searched-user/narratives/:searchedUserId",
-  verifyUser,
-  verifyRole(["employer", "department_head", "admin"]),
-  generalLimiter,
-  getSearchedStudentNarratives,
 );
 
 searchedUserRoutes.get(

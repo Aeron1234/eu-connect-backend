@@ -15,7 +15,6 @@ import {
   getInternshipRecordDocuments,
   getInternshipRecordDtr,
   getInternshipRecordEvaluations,
-  getInternshipRecordNarratives,
   getInternshipRecordOverview,
   getMyPastInternshipRecords,
   getRegions,
@@ -145,14 +144,6 @@ internshipRecordRoutes.get(
   verifyRole(["department_head", "admin"]),
   generalLimiter,
   getInternshipRecordDtr,
-);
-
-internshipRecordRoutes.get(
-  "/internship-records/narratives/:internshipId",
-  verifyUser,
-  verifyRole(["department_head", "admin"]),
-  generalLimiter,
-  getInternshipRecordNarratives,
 );
 
 internshipRecordRoutes.get(

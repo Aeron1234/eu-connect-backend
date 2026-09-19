@@ -4,6 +4,104 @@ import { ALLOWED_TYPES, UPLOAD_ROOT } from "../config/helpers.js";
 
 const BUCKET = process.env.SUPABASE_BUCKET;
 
+const EMPTY_SUPERVISION = {
+  status: null,
+  direction: null,
+  hasOngoingInternship: false,
+  requestId: null,
+};
+
+/**
+ * Resolves the supervision relationship between the *viewer* and the
+ * *searched user*. Only two directions are meaningful:
+ *   employer viewing a student  -> is this student my intern?
+ *   student viewing an employer -> is this employer my supervisor?
+ * Everything else resolves to EMPTY_SUPERVISION.
+ *
+ * `direction` tells the client whose perspective the status is from, so a
+ * single "accepted" can render as "Your intern" or "Your supervisor".
+ */
+async function resolveSupervision({
+  connection,
+  viewerId,
+  viewerRole,
+  searchedUserId,
+  searchedRole,
+  studentInternship, // { id, employerId } from the main query; student rows only
+}) {
+  if (!viewerId || viewerId === searchedUserId) return EMPTY_SUPERVISION;
+
+  // --- employer is viewing a student ---
+  if (viewerRole === "employer" && searchedRole === "student") {
+    if (!studentInternship?.id) return EMPTY_SUPERVISION;
+
+    if (studentInternship.employerId === viewerId) {
+      return {
+        status: "accepted",
+        direction: "viewer_is_supervisor",
+        hasOngoingInternship: true,
+        requestId: null,
+      };
+    }
+
+    // Has this student asked *me* to supervise them?
+    const [requests] = await connection.execute(
+      `SELECT id FROM supervisor_requests
+       WHERE internship_id = ? AND employer_id = ? AND status = 'pending'
+       LIMIT 1`,
+      [studentInternship.id, viewerId],
+    );
+
+    const requestId = requests[0]?.id || null;
+
+    return {
+      status: requestId ? "pending" : null,
+      direction: requestId ? "viewer_is_supervisor" : null,
+      hasOngoingInternship: true,
+      requestId,
+    };
+  }
+
+  // --- student is viewing an employer ---
+  if (viewerRole === "student" && searchedRole === "employer") {
+    // The viewer's own ongoing internship, plus any pending request aimed
+    // specifically at this employer. One round trip instead of two.
+    const [rows] = await connection.execute(
+      `SELECT ir.employer_id, sr.id AS request_id
+       FROM internship_records ir
+       LEFT JOIN supervisor_requests sr
+         ON sr.internship_id = ir.id
+        AND sr.employer_id = ?
+        AND sr.status = 'pending'
+       WHERE ir.user_id = ? AND ir.status = 'ongoing' AND ir.deleted_at IS NULL
+       LIMIT 1`,
+      [searchedUserId, viewerId],
+    );
+
+    if (rows.length === 0) return EMPTY_SUPERVISION;
+
+    const row = rows[0];
+
+    if (row.employer_id === searchedUserId) {
+      return {
+        status: "accepted",
+        direction: "viewer_is_intern",
+        hasOngoingInternship: true,
+        requestId: null,
+      };
+    }
+
+    return {
+      status: row.request_id ? "pending" : null,
+      direction: row.request_id ? "viewer_is_intern" : null,
+      hasOngoingInternship: true,
+      requestId: row.request_id || null,
+    };
+  }
+
+  return EMPTY_SUPERVISION;
+}
+
 export const getSearchedUser = async (req, res) => {
   const { searchedUserId } = req.params;
 
@@ -34,6 +132,8 @@ export const getSearchedUser = async (req, res) => {
         IFNULL(ir.accumulated_hours, 0) AS hours_rendered,
         IFNULL(ir.total_hours, 0) AS total_hours,
         ir.company_name AS student_company_name,
+        ir.id AS student_internship_id,
+        ir.employer_id AS student_internship_employer_id,
 
         -- department_head-only
         dd.name AS dept_head_department_name,
@@ -52,7 +152,11 @@ export const getSearchedUser = async (req, res) => {
       LEFT JOIN student_academic_info sai ON u.id = sai.user_id AND r.role = 'student'
       LEFT JOIN courses c ON sai.course_id = c.id
       LEFT JOIN departments sd ON sai.department_id = sd.id
-      LEFT JOIN internship_records ir ON u.id = ir.user_id AND ir.status = 'ongoing' AND r.role = 'student'
+      LEFT JOIN internship_records ir 
+        ON u.id = ir.user_id 
+       AND ir.status = 'ongoing' 
+       AND ir.deleted_at IS NULL 
+       AND r.role = 'student'
 
       LEFT JOIN dept_heads_background_info dhbi ON u.id = dhbi.user_id AND r.role = 'department_head'
       LEFT JOIN departments dd ON dhbi.department_id = dd.id
@@ -74,6 +178,34 @@ export const getSearchedUser = async (req, res) => {
     }
 
     const role = user.role_name.toLowerCase();
+
+    const { id: viewerId, role: rawViewerRole } = req.verifiedUser || {};
+    const viewerRole = rawViewerRole?.toLowerCase() || null;
+
+    // Supervision is supplementary — a failure here should degrade the tag,
+    // not take down the whole profile.
+    let supervision = EMPTY_SUPERVISION;
+    try {
+      supervision = await resolveSupervision({
+        connection,
+        viewerId,
+        viewerRole,
+        searchedUserId,
+        searchedRole: role,
+        studentInternship:
+          role === "student" && user.student_internship_id
+            ? {
+                id: user.student_internship_id,
+                employerId: user.student_internship_employer_id,
+              }
+            : null,
+      });
+    } catch (supervisionError) {
+      console.error(
+        "Supervision resolve failed (getSearchedUser):",
+        supervisionError,
+      );
+    }
 
     // ---- HEADER: exactly what <SearchedUserHeader> renders, nothing more ----
     const header = {
@@ -127,6 +259,7 @@ export const getSearchedUser = async (req, res) => {
       user: {
         header,
         info,
+        supervision,
       },
     });
   } catch (error) {
@@ -505,81 +638,7 @@ export const setSearchedStudentDtrLocation = async (req, res) => {
   }
 };
 
-export const getSearchedStudentNarratives = async (req, res) => {
-  const { searchedUserId } = req.params;
-  if (!searchedUserId) {
-    return res
-      .status(400)
-      .json({ error: "Searched User ID parameter is required." });
-  }
 
-  // 🌟 PAGE-BASED PAGINATION (Matches getAllNarratives implementation)
-  const page = parseInt(req.query.page, 10) || 1;
-  const limit = parseInt(req.query.limit, 10) || 10;
-  const offset = (page - 1) * limit;
-
-  let connection;
-  try {
-    connection = await db.getConnection();
-
-    // Query 1: Fetch paginated narratives for the student's ongoing internship
-    const narrativesQuery = `
-      SELECT 
-        dn.id,
-        dn.user_id,
-        dn.internship_id,
-        dn.day_number,
-        dn.title,
-        dn.narrative,
-        dn.created_at,
-        dn.updated_at
-      FROM daily_narratives dn
-      INNER JOIN internship_records ir 
-         ON dn.internship_id = ir.id
-      WHERE dn.user_id = ? 
-        AND ir.status = 'ongoing'
-        AND ir.deleted_at IS NULL
-      ORDER BY dn.day_number DESC, dn.created_at DESC
-      LIMIT ? OFFSET ?
-    `;
-
-    // Query 2: Total count for pagination
-    const countQuery = `
-      SELECT COUNT(*) AS total 
-      FROM daily_narratives dn
-      INNER JOIN internship_records ir 
-         ON dn.internship_id = ir.id
-      WHERE dn.user_id = ? 
-        AND ir.status = 'ongoing'
-        AND ir.deleted_at IS NULL
-    `;
-
-    // Execute queries in parallel using the allocated connection thread
-    const [[narratives], [countResult]] = await Promise.all([
-      connection.execute(narrativesQuery, [searchedUserId, limit, offset]),
-      connection.execute(countQuery, [searchedUserId]),
-    ]);
-
-    const totalRecords = Number(countResult[0].total);
-    const totalPages = Math.ceil(totalRecords / limit);
-
-    return res.status(200).json({
-      success: true,
-      narratives,
-      totalPages,
-      totalRecords,
-      currentPage: page,
-    });
-  } catch (error) {
-    console.error("Get searched user narratives query failure:", error);
-    return res.status(500).json({
-      success: false,
-      error: "Database query failed to get daily narrative logs.",
-    });
-  } finally {
-    if (connection) connection.release();
-  }
-};
 
 export const getSearchedStudentFiles = async (req, res) => {
   const { searchedUserId } = req.params;
