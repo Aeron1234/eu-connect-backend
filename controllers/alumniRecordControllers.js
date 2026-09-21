@@ -20,17 +20,17 @@ export const addAlumniInternshipRecord = async (req, res) => {
       notes,
     } = req.body;
 
+    // Only these seven remain required — internship_position, total_hours,
+    // accumulated_hours, and supervisor_name are now optional per the
+    // professor's request; notes was already optional.
     const required = {
       alumni_name,
       company_name,
       company_address,
       industry,
-      internship_position,
       course_id,
       batch_year,
       academic_year,
-      total_hours,
-      accumulated_hours,
     };
 
     for (const [field, value] of Object.entries(required)) {
@@ -72,20 +72,22 @@ export const addAlumniInternshipRecord = async (req, res) => {
         company_name.trim(),
         company_address.trim(),
         industry.trim(),
-        internship_position.trim(),
+        internship_position?.trim() || null,
         course_id,
         batch_year,
         academic_year,
-        Number(total_hours),
-        Number(accumulated_hours),
+        total_hours !== undefined && total_hours !== ""
+          ? Number(total_hours)
+          : null,
+        accumulated_hours !== undefined && accumulated_hours !== ""
+          ? Number(accumulated_hours)
+          : null,
         supervisor_name?.trim() || null,
         notes?.trim() || null,
         departmentId,
       ],
     );
 
-    // Activity log is supplementary — isolated so a logging failure can
-    // never roll back or fail the actual save.
     try {
       await connection.execute(
         `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -359,7 +361,7 @@ export const getAlumniInternships = async (req, res) => {
     const { academicYear, search, page = 1, limit = 10 } = req.query;
 
     const pageNum = Math.max(1, parseInt(page) || 1);
-    const pageSize = Math.max(1, Math.min(50, parseInt(limit) || 10)); // cap to avoid abuse
+    const pageSize = Math.max(1, Math.min(50, parseInt(limit) || 10));
     const offset = (pageNum - 1) * pageSize;
 
     const conditions = [];
@@ -418,8 +420,15 @@ export const getAlumniInternships = async (req, res) => {
     const normalizedNames = companyPage.map((c) => c.normalized_name);
     const placeholders = normalizedNames.map(() => "?").join(",");
 
+    // Position, hours, supervisor, and notes are no longer selected here —
+    // this list view never displays them, and the frontend doesn't need
+    // them fetched. They still exist in the table and are still editable
+    // via the update endpoint; this endpoint just no longer carries them.
     const [rows] = await connection.execute(
-      `SELECT air.*, c.course_name, d.id AS department_id, d.code AS department_code, d.name AS department_name
+      `SELECT air.id, air.alumni_name, air.company_name, air.company_address,
+              air.industry, air.course_id, air.batch_year, air.academic_year,
+              c.course_name, d.id AS department_id, d.code AS department_code,
+              d.name AS department_name
        FROM alumni_internship_records air
        LEFT JOIN courses c ON air.course_id = c.id
        LEFT JOIN departments d ON air.department_id = d.id
@@ -445,14 +454,9 @@ export const getAlumniInternships = async (req, res) => {
         id: row.id,
         alumni_name: row.alumni_name,
         course_name: row.course_name,
+        course_id: row.course_id,
         batch_year: row.batch_year,
-        internship_position: row.internship_position,
-        supervisor_name: row.supervisor_name,
-        total_hours: row.total_hours,
-        accumulated_hours: row.accumulated_hours,
         academic_year: row.academic_year,
-        notes: row.notes,
-        source: row.source,
         department_id: row.department_id,
         department_code: row.department_code,
         department_name: row.department_name,
