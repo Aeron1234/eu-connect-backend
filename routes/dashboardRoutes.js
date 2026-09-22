@@ -16,6 +16,7 @@ import {
   getEmployerDashboardData,
   getEmployerDashboardStats,
   getPostedJobs,
+  getStudentDashboardData,
   getStudentDashboardStats,
 } from "../controllers/dashboardController.js";
 
@@ -30,6 +31,14 @@ dashboardRoutes.get(
   verifyRole(["student"]),
   generalLimiter,
   getStudentDashboardStats,
+);
+
+dashboardRoutes.get(
+  "/student-dashboard-data",
+  verifyUser,
+  verifyRole(["student"]),
+  generalLimiter,
+  getStudentDashboardData,
 );
 
 ///////////////////

@@ -72,6 +72,180 @@ export const getStudentDashboardStats = async (req, res) => {
   }
 };
 
+export const getStudentDashboardData = async (req, res) => {
+  let connection;
+  try {
+    const { id: userId } = req.verifiedUser;
+    connection = await db.getConnection();
+
+    // Active internship — ongoing OR pending, matches getActiveInternship
+    let internshipData = null;
+    try {
+      const [rows] = await connection.execute(
+        `SELECT * FROM internship_records
+         WHERE user_id = ? AND (status = 'ongoing' OR status = 'pending')
+         LIMIT 1`,
+        [userId],
+      );
+      internshipData = rows.length > 0 ? rows[0] : null;
+    } catch (err) {
+      console.error(
+        "getStudentDashboardData: active internship query failed:",
+        err,
+      );
+    }
+
+    const internshipId = internshipData?.id || null;
+    const isOngoing = internshipData?.status === "ongoing";
+
+    let dtrToday = null;
+    let dtrStatus = { status: "CLOCKED_OUT", record: null };
+    let dtrData = { dtrs: [], totalPages: 1, totalRecords: 0, currentPage: 1 };
+    let location = {};
+
+    // DTR-specific pieces only make sense once the internship is actually
+    // ongoing (not merely pending) — matches getMySettedDtrLocation's own
+    // status = 'ongoing' restriction.
+    if (internshipId && isOngoing) {
+      // Today's DTR
+      try {
+        const [todayRows] = await connection.execute(
+          `SELECT id, clock_in, clock_out, created_at, status 
+           FROM daily_time_records 
+           WHERE user_id = ? AND DATE(created_at) = CURDATE() AND internship_id = ?
+           LIMIT 1`,
+          [userId, internshipId],
+        );
+        dtrToday = todayRows.length > 0 ? todayRows[0] : null;
+      } catch (err) {
+        console.error(
+          "getStudentDashboardData: today's DTR query failed:",
+          err,
+        );
+      }
+
+      // Latest clock-in/out status
+      try {
+        const [statusRows] = await connection.execute(
+          `SELECT id, clock_in, clock_out 
+           FROM daily_time_records 
+           WHERE user_id = ? AND internship_id = ? 
+           ORDER BY id DESC 
+           LIMIT 1`,
+          [userId, internshipId],
+        );
+        if (statusRows.length === 0) {
+          dtrStatus = { status: "CLOCKED_OUT", record: null };
+        } else {
+          const lastRecord = statusRows[0];
+          dtrStatus =
+            lastRecord.clock_out === null
+              ? { status: "CLOCKED_IN", record: lastRecord }
+              : { status: "CLOCKED_OUT", record: lastRecord };
+        }
+      } catch (err) {
+        console.error(
+          "getStudentDashboardData: latest DTR status query failed:",
+          err,
+        );
+      }
+
+      // First page of DTR history
+      try {
+        const limit = 5;
+        const [dtrRows] = await connection.execute(
+          `SELECT * FROM daily_time_records 
+           WHERE user_id = ? AND internship_id = ?
+           ORDER BY created_at DESC
+           LIMIT ?`,
+          [userId, internshipId, limit],
+        );
+        const [[countRow]] = await connection.execute(
+          `SELECT COUNT(*) AS total FROM daily_time_records
+            WHERE user_id = ? AND internship_id = ?`,
+          [userId, internshipId],
+        );
+        const totalRecords = countRow.total || 0;
+        dtrData = {
+          dtrs: dtrRows,
+          totalPages: Math.ceil(totalRecords / limit) || 1,
+          totalRecords,
+          currentPage: 1,
+        };
+      } catch (err) {
+        console.error(
+          "getStudentDashboardData: DTR history query failed:",
+          err,
+        );
+      }
+
+      // DTR location — same company-address-fallback-to-custom-location
+      // logic as getMySettedDtrLocation, reused here rather than
+      // re-simplified.
+      try {
+        const [locRows] = await connection.execute(
+          `SELECT 
+             ir.id AS internship_id,
+             ir.lat AS company_lat,
+             ir.lon AS company_lon,
+             dl.id AS dtr_location_id,
+             dl.set_by,
+             dl.lat AS dtr_lat,
+             dl.lon AS dtr_lon,
+             dl.radius_meters,
+             dl.address,
+             dl.label,
+             dl.created_at AS dtr_created_at,
+             dl.updated_at AS dtr_updated_at
+           FROM internship_records AS ir
+           LEFT JOIN dtr_locations AS dl ON ir.id = dl.internship_id
+           WHERE ir.user_id = ? AND ir.status = 'ongoing' AND ir.id = ?
+           LIMIT 1`,
+          [userId, internshipId],
+        );
+
+        if (locRows.length > 0) {
+          const record = locRows[0];
+          const isCustom = record.dtr_location_id !== null;
+
+          location = {
+            lat: isCustom ? record.dtr_lat : record.company_lat,
+            lon: isCustom ? record.dtr_lon : record.company_lon,
+            radius_meters: isCustom ? record.radius_meters : 150, // keep in sync with your default elsewhere
+            label: isCustom ? record.label : "Company address (default)",
+            address: isCustom ? record.address : null,
+            set_by: isCustom ? record.set_by : null,
+            created_at: isCustom ? record.dtr_created_at : null,
+            updated_at: isCustom ? record.dtr_updated_at : null,
+          };
+        }
+      } catch (err) {
+        console.error(
+          "getStudentDashboardData: DTR location query failed:",
+          err,
+        );
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      internshipData,
+      dtrToday,
+      dtrStatus,
+      dtrData,
+      location,
+    });
+  } catch (error) {
+    console.error("Failed to retrieve student dashboard data:", error);
+    res.status(500).json({
+      error: "Database metrics aggregation failed",
+      success: false,
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
 ///////////////////
 //EMPLOYER
 //////////////////
