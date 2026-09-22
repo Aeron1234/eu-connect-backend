@@ -39,7 +39,7 @@ dtrRoutes.get(
   "/dtr/status",
   verifyUser,
   verifyRole(["student", "admin"]),
-  paginationLimiter,
+  generalLimiter,
   getLatestDtrStatus,
 );
 

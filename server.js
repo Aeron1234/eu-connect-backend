@@ -35,6 +35,22 @@ import weeklyNarrativeRoutes from "./routes/weeklyNarrativeRoutes.js";
 
 // dotenv.config();
 
+// ---------------------------------------------------------------------------
+// Global crash guards.
+// Without these, any unhandled promise rejection or uncaught exception
+// anywhere in the app (including inside route handlers, cron jobs, or
+// socket.io listeners) will silently kill the Node process. Render then
+// restarts the service, which looks like "the server keeps breaking".
+// We log the error instead of letting the process die.
+// ---------------------------------------------------------------------------
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled Rejection:", reason);
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught Exception:", err);
+});
+
 const app = express();
 const httpServer = createServer(app);
 
@@ -94,6 +110,22 @@ app.use("/eu-connect/api", criteriaRoutes);
 app.use("/eu-connect/api", activityLogRoutes);
 app.use("/eu-connect/api", departmentAndCoursesRoutes);
 
+// ---------------------------------------------------------------------------
+// Fallback error-handling middleware.
+// If a route handler calls next(err) or throws synchronously, this catches
+// it and returns a JSON response instead of letting Express hang or crash.
+// Keep this AFTER all app.use(routes) calls.
+// ---------------------------------------------------------------------------
+app.use((err, req, res, next) => {
+  console.error("Unhandled route error:", err);
+  if (res.headersSent) {
+    return next(err);
+  }
+  res.status(err.status || 500).json({
+    message: err.message || "Internal server error",
+  });
+});
+
 // Socket.io Events
 io.on("connection", (socket) => {
   console.log("A user connected:", socket.id);
@@ -107,15 +139,28 @@ io.on("connection", (socket) => {
   });
 });
 
+// ---------------------------------------------------------------------------
 // Cron Jobs
-cron.schedule("0 * * * *", () => {
+// Wrapped in try/catch so a failure inside either job (DB timeout, bad
+// query, etc.) is logged instead of throwing an unhandled rejection that
+// takes down the whole server.
+// ---------------------------------------------------------------------------
+cron.schedule("0 * * * *", async () => {
   console.log("Running autoCloseStaleShifts job...");
-  autoCloseStaleShifts();
+  try {
+    await autoCloseStaleShifts();
+  } catch (err) {
+    console.error("autoCloseStaleShifts job failed:", err);
+  }
 });
 
-cron.schedule("0 3 * * *", () => {
+cron.schedule("0 3 * * *", async () => {
   console.log("Running refreshTokensCleanUp...");
-  refreshTokensCleanUp();
+  try {
+    await refreshTokensCleanUp();
+  } catch (err) {
+    console.error("refreshTokensCleanUp job failed:", err);
+  }
 });
 
 // Port Configuration
