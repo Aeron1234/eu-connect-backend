@@ -5,11 +5,14 @@ import { verifyRole } from "../middleware/verifyRole.js";
 import {
   createUser,
   deactivateAccount,
+  deleteUserAvatar,
   getAllAccounts,
+  getAvailableAvatars,
   getRoles,
   getUserProfile,
   reactivateAccount,
   updatePassword,
+  updateUserAvatar,
   updateUserInfo,
 } from "../controllers/accountControllers.js";
 import {
@@ -21,6 +24,30 @@ import {
 const accountRoutes = express.Router();
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
+
+accountRoutes.get(
+  "/avatars",
+  verifyUser,
+  verifyRole(["student", "employer", "department_head", "admin"]),
+  generalLimiter,
+  getAvailableAvatars,
+);
+
+accountRoutes.patch(
+  "/profile/avatar",
+  verifyUser,
+  verifyRole(["student", "employer", "department_head", "admin"]),
+  mediumLimiter,
+  updateUserAvatar,
+);
+
+accountRoutes.delete(
+  "/profile/avatar",
+  verifyUser,
+  verifyRole(["student", "employer", "department_head", "admin"]),
+  mediumLimiter,
+  deleteUserAvatar,
+);
 
 accountRoutes.get(
   "/account/user",

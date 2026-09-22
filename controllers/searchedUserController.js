@@ -123,7 +123,7 @@ export const getSearchedUser = async (req, res) => {
     const query = `
       SELECT 
         u.id AS user_id,
-        up.first_name, up.last_name, up.contact_number, up.full_address, up.gender,
+        up.first_name, up.last_name, up.contact_number, up.full_address, up.gender, up.avatar,
         r.role AS role_name,
 
         -- student-only
@@ -211,6 +211,7 @@ export const getSearchedUser = async (req, res) => {
     const header = {
       first_name: user.first_name,
       last_name: user.last_name,
+      avatar: user.avatar,
       role,
       ...(role === "student" && {
         course: user.course,
@@ -637,8 +638,6 @@ export const setSearchedStudentDtrLocation = async (req, res) => {
     if (connection) connection.release();
   }
 };
-
-
 
 export const getSearchedStudentFiles = async (req, res) => {
   const { searchedUserId } = req.params;

@@ -1,6 +1,69 @@
 import { db } from "../config/db.js";
 import bcrypt from "bcryptjs";
 import { newUUID } from "../config/helpers.js";
+import { AVAILABLE_AVATARS } from "../config/avatars.js";
+
+export const getAvailableAvatars = async (req, res) => {
+  try {
+    res.status(200).json({ avatars: AVAILABLE_AVATARS });
+  } catch (error) {
+    console.error("Get available avatars error:", error);
+    res.status(500).json({ error: "Failed to get available avatars." });
+  }
+};
+
+export const updateUserAvatar = async (req, res) => {
+  let connection;
+  try {
+    const { id: userId } = req.verifiedUser;
+    const { avatar } = req.body;
+
+    if (!avatar || typeof avatar !== "string") {
+      return res.status(400).json({ error: "Avatar is required." });
+    }
+
+    // Reject anything not on the known list — never trust a client-supplied
+    // filename directly, even though this isn't a file upload.
+    if (!AVAILABLE_AVATARS.includes(avatar)) {
+      return res.status(400).json({ error: "Invalid avatar selection." });
+    }
+
+    connection = await db.getConnection();
+
+    const [result] = await connection.execute(
+      `UPDATE user_profiles SET avatar = ? WHERE user_id = ?`,
+      [avatar, userId],
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "Profile not found." });
+    }
+
+    res.status(200).json({ success: true, avatar });
+  } catch (error) {
+    console.error("Update user avatar error:", error);
+    res.status(500).json({ error: "Failed to update avatar." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export async function deleteUserAvatar(prevState, formData) {
+  try {
+    const accessToken = await getAccessToken();
+    if (!accessToken) throw new Error("You must be logged in.");
+
+    const res = await fetch(`${process.env.API_BASE_URL}/api/profile/avatar`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    return await res.json();
+  } catch (err) {
+    console.error("Delete avatar error:", err.message);
+    return { success: false, error: err.message };
+  }
+}
 
 export const getUserProfile = async (req, res) => {
   let connection;
@@ -15,7 +78,7 @@ export const getUserProfile = async (req, res) => {
         query = `
           SELECT 
             u.id, u.email, u.username, r.role, u.status, u.created_at,
-            up.first_name, up.last_name, up.contact_number, up.full_address, up.gender
+            up.first_name, up.last_name, up.contact_number, up.full_address, up.gender, up.avatar
           FROM users u
           INNER JOIN roles r ON r.id = u.role_id
           INNER JOIN user_profiles up ON up.user_id = u.id
@@ -27,7 +90,7 @@ export const getUserProfile = async (req, res) => {
         query = `
           SELECT 
             u.id, u.email, u.username, r.role, u.status, u.created_at,
-            up.first_name, up.last_name, up.contact_number, up.full_address, up.gender,
+            up.first_name, up.last_name, up.contact_number, up.full_address, up.gender, up.avatar,
             c.course_name AS course, d.code AS department_code, d.name AS department_name,
             sai.student_number, sai.year_level
           FROM users u
@@ -52,7 +115,7 @@ export const getUserProfile = async (req, res) => {
         query = `
           SELECT 
             u.id, u.email, u.username, r.role, u.status, u.created_at,
-            up.first_name, up.last_name, up.contact_number, up.full_address, up.gender,
+            up.first_name, up.last_name, up.contact_number, up.full_address, up.gender, up.avatar,
             ebi.company_name, ebi.company_address, ebi.position,
             ebi.contact_number AS company_contact_number
           FROM users u
@@ -67,7 +130,7 @@ export const getUserProfile = async (req, res) => {
         query = `
           SELECT 
             u.id, u.email, u.username, r.role, u.status, u.created_at,
-            up.first_name, up.last_name, up.contact_number, up.full_address, up.gender,
+            up.first_name, up.last_name, up.contact_number, up.full_address, up.gender, up.avatar,
             d.code AS department_code, d.name AS department_name, dhbi.employee_number
           FROM users u
           INNER JOIN roles r ON r.id = u.role_id
@@ -297,7 +360,7 @@ export const getAllAccounts = async (req, res) => {
     const offset = (page - 1) * limit;
 
     const unionQuery = `
-      SELECT u.id, u.email, u.created_at, u.status, up.first_name, up.last_name,
+      SELECT u.id, u.email, u.created_at, u.status, up.first_name, up.last_name, up.avatar,
              r.role, c.course_name, d.code AS department_code, d.name AS department_name,
              NULL AS employee_number, NULL AS company_name
       FROM users u
@@ -310,7 +373,7 @@ export const getAllAccounts = async (req, res) => {
 
       UNION ALL
 
-      SELECT u.id, u.email, u.created_at, u.status, up.first_name, up.last_name,
+      SELECT u.id, u.email, u.created_at, u.status, up.first_name, up.last_name, up.avatar,
              r.role, NULL AS course_name, d.code AS department_code, d.name AS department_name,
              dhbi.employee_number, NULL AS company_name
       FROM users u
@@ -322,7 +385,7 @@ export const getAllAccounts = async (req, res) => {
 
       UNION ALL
 
-      SELECT u.id, u.email, u.created_at, u.status, up.first_name, up.last_name,
+      SELECT u.id, u.email, u.created_at, u.status, up.first_name, up.last_name, up.avatar,
              r.role, NULL AS course_name, NULL AS department_code, NULL AS department_name,
              NULL AS employee_number, ebi.company_name
       FROM users u

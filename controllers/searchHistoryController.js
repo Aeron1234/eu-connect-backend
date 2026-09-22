@@ -20,7 +20,8 @@ export const searchUsers = async (req, res) => {
         SELECT 
           up.user_id, 
           up.first_name, 
-          up.last_name, 
+          up.last_name,
+          up.avatar, 
           r.role, -- 🌟 Now returns the actual string (e.g., 'student', 'employer')
           c.course_name AS course, 
           CASE 
@@ -186,6 +187,7 @@ export const getSearchHistory = async (req, res) => {
         sh.updated_at,
         up.first_name,
         up.last_name,
+        up.avatar,
         r.role, -- 🌟 Now returns 'student', 'employer', etc.
         c.course_name AS course, 
         CASE 
