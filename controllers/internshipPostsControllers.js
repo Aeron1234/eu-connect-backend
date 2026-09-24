@@ -13,6 +13,7 @@ export const getInternshipPostings = async (req, res) => {
       courseId,
       search,
       mine,
+      favorite,
       page = 1,
       limit = 10,
     } = req.query;
@@ -47,6 +48,24 @@ export const getInternshipPostings = async (req, res) => {
          )`,
       );
       params.push(courseId);
+    }
+
+    if (favorite === "favorited") {
+      conditions.push(
+        `EXISTS (
+           SELECT 1 FROM internship_favorites fav
+           WHERE fav.posting_id = ip.id AND fav.student_id = ?
+         )`,
+      );
+      params.push(requesterId);
+    } else if (favorite === "not_favorited") {
+      conditions.push(
+        `NOT EXISTS (
+           SELECT 1 FROM internship_favorites fav
+           WHERE fav.posting_id = ip.id AND fav.student_id = ?
+         )`,
+      );
+      params.push(requesterId);
     }
 
     const whereClause = conditions.join(" AND ");
@@ -95,8 +114,6 @@ export const getInternshipPostings = async (req, res) => {
       postingIds,
     );
 
-    // Favorites for the current requester across these postings —
-    // only meaningful for students, but harmless to compute regardless
     const [favorites] = await connection.execute(
       `SELECT posting_id FROM internship_favorites
    WHERE student_id = ? AND posting_id IN (${placeholders})`,
@@ -136,6 +153,7 @@ export const getInternshipPostings = async (req, res) => {
     if (connection) connection.release();
   }
 };
+
 export const createInternshipPosting = async (req, res) => {
   let connection;
   try {

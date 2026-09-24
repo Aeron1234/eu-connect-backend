@@ -15,6 +15,7 @@ import {
   getPastStudentEvaluations,
   getStudentCompleteEvaluations,
   getStudentEvaluationCriteria,
+  getStudentEvaluationForPrint,
   respondToStudentEvaluation,
   restoreDisputedEvaluation,
   reviewDisputedEvaluation,
@@ -100,6 +101,14 @@ studentEvaluationRoutes.patch(
   verifyRole(["department_head", "admin"]),
   generalLimiter,
   reviewDisputedEvaluation,
+);
+
+studentEvaluationRoutes.get(
+  "/evaluations/student/:evaluationId/print",
+  verifyUser,
+  verifyRole(["student"]),
+  generalLimiter,
+  getStudentEvaluationForPrint,
 );
 
 export default studentEvaluationRoutes;

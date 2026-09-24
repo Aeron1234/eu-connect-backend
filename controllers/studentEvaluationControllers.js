@@ -1282,3 +1282,87 @@ export const getAllStudentEvaluations = async (req, res) => {
     if (connection) connection.release();
   }
 };
+
+export const getStudentEvaluationForPrint = async (req, res) => {
+  let connection;
+  try {
+    const { id: studentId, role } = req.verifiedUser;
+    const { evaluationId } = req.params;
+
+    if (role !== "student") {
+      return res.status(403).json({ error: "Not authorized." });
+    }
+
+    connection = await db.getConnection();
+
+    const [headerRows] = await connection.execute(
+      `SELECT 
+         sem.id, sem.other_remarks, sem.status, sem.created_at,
+         ir.company_name, ir.user_id AS record_owner_id,
+         up.first_name, up.last_name,
+         d.name AS department_name
+       FROM student_evaluation_masters sem
+       INNER JOIN internship_records ir ON ir.id = sem.internship_record_id
+       INNER JOIN user_profiles up ON up.user_id = ir.user_id
+       INNER JOIN student_academic_info sai ON sai.user_id = ir.user_id
+       INNER JOIN departments d ON d.id = sai.department_id
+       WHERE sem.id = ?
+       LIMIT 1`,
+      [evaluationId],
+    );
+
+    if (headerRows.length === 0) {
+      return res.status(404).json({ error: "Evaluation not found." });
+    }
+
+    const header = headerRows[0];
+
+    // Only the student this evaluation is about can print it
+    if (header.record_owner_id !== studentId) {
+      return res.status(403).json({ error: "Not authorized." });
+    }
+
+    // Only confirmed (completed) evaluations can be printed
+    if (header.status !== "completed") {
+      return res.status(403).json({
+        error: "This evaluation is not yet confirmed and cannot be printed.",
+      });
+    }
+
+    const [scoreRows] = await connection.execute(
+      `SELECT sec.category, sec.criterion_name, ses.score
+       FROM student_evaluation_scores ses
+       INNER JOIN student_evaluation_criteria sec ON sec.id = ses.criterion_id
+       WHERE ses.evaluation_master_id = ?
+       ORDER BY sec.category ASC, sec.id ASC`,
+      [evaluationId],
+    );
+
+    const categories = {};
+    scoreRows.forEach((row) => {
+      if (!categories[row.category]) categories[row.category] = [];
+      categories[row.category].push({
+        criterion_name: row.criterion_name,
+        score: row.score,
+      });
+    });
+
+    res.status(200).json({
+      id: header.id,
+      student_name: `${header.first_name} ${header.last_name}`,
+      company_name: header.company_name,
+      department_name: header.department_name,
+      other_remarks: header.other_remarks,
+      created_at: header.created_at,
+      categories: Object.entries(categories).map(([category, items]) => ({
+        category,
+        items,
+      })),
+    });
+  } catch (error) {
+    console.error("Get student evaluation for print error:", error);
+    res.status(500).json({ error: "Failed to load evaluation." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
