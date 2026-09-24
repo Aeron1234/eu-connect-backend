@@ -13,7 +13,7 @@ import {
 const authRoutes = express.Router();
 
 authRoutes.post("/auth/login", strictLimiter, login);
-authRoutes.post("/auth/refresh", refresh);
+// authRoutes.post("/auth/refresh", refresh);
 authRoutes.post("/auth/logout", logout);
 authRoutes.get("/auth/me", verifyUser, me);
 authRoutes.post("/auth/forgot-password", strictLimiter, forgotPassword);
