@@ -8,6 +8,7 @@ import {
   deleteUserAvatar,
   getAllAccounts,
   getAvailableAvatars,
+  getCreateAccountFormData,
   getRoles,
   getUserProfile,
   reactivateAccount,
@@ -79,6 +80,14 @@ accountRoutes.get(
   verifyRole(["admin"]),
   generalLimiter,
   getAllAccounts,
+);
+
+accountRoutes.get(
+  "/create-account-form-data",
+  verifyUser,
+  verifyRole(["admin"]),
+  generalLimiter,
+  getCreateAccountFormData,
 );
 
 accountRoutes.get(

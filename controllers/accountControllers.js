@@ -444,6 +444,62 @@ export const getAllAccounts = async (req, res) => {
   }
 };
 
+export const getCreateAccountFormData = async (req, res) => {
+  // THIS ENDPOINT IS FOR THE CREATE ACCOUNT ONLY
+  let connection;
+  try {
+    connection = await db.getConnection();
+
+    let roles = [];
+    try {
+      const [rows] = await connection.execute(
+        `SELECT id, role FROM roles ORDER BY id ASC`,
+      );
+      roles = rows;
+    } catch (err) {
+      console.error("getCreateAccountFormData: roles query failed:", err);
+    }
+
+    let courses = [];
+    try {
+      const [rows] = await connection.execute(
+        `SELECT id, course_name, short_name, department_id
+         FROM courses
+         WHERE is_active = 1
+         ORDER BY course_name ASC`,
+      );
+      courses = rows;
+    } catch (err) {
+      console.error("getCreateAccountFormData: courses query failed:", err);
+    }
+
+    let departments = [];
+    try {
+      const [rows] = await connection.execute(
+        `SELECT id, code, name
+         FROM departments
+         WHERE is_active = 1
+         ORDER BY name ASC`,
+      );
+      departments = rows;
+    } catch (err) {
+      console.error("getCreateAccountFormData: departments query failed:", err);
+    }
+
+    return res.status(200).json({
+      success: true,
+      roles,
+      courses,
+      departments,
+    });
+  } catch (error) {
+    console.error("Get create account form data error:", error);
+    res.status(500).json({ error: "Failed to load form data." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
 export const getRoles = async (req, res) => {
   try {
     const [rows] = await db.execute(`SELECT * FROM roles`);
