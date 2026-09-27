@@ -78,7 +78,6 @@ export const getStudentDashboardData = async (req, res) => {
     const { id: userId } = req.verifiedUser;
     connection = await db.getConnection();
 
-    // Active internship — ongoing OR pending, matches getActiveInternship
     let internshipData = null;
     try {
       const [rows] = await connection.execute(
@@ -100,12 +99,8 @@ export const getStudentDashboardData = async (req, res) => {
 
     let dtrToday = null;
     let dtrStatus = { status: "CLOCKED_OUT", record: null };
-    let dtrData = { dtrs: [], totalPages: 1, totalRecords: 0, currentPage: 1 };
     let location = {};
 
-    // DTR-specific pieces only make sense once the internship is actually
-    // ongoing (not merely pending) — matches getMySettedDtrLocation's own
-    // status = 'ongoing' restriction.
     if (internshipId && isOngoing) {
       // Today's DTR
       try {
@@ -150,38 +145,7 @@ export const getStudentDashboardData = async (req, res) => {
         );
       }
 
-      // First page of DTR history
-      try {
-        const limit = 5;
-        const [dtrRows] = await connection.execute(
-          `SELECT * FROM daily_time_records 
-           WHERE user_id = ? AND internship_id = ?
-           ORDER BY created_at DESC
-           LIMIT ?`,
-          [userId, internshipId, limit],
-        );
-        const [[countRow]] = await connection.execute(
-          `SELECT COUNT(*) AS total FROM daily_time_records
-            WHERE user_id = ? AND internship_id = ?`,
-          [userId, internshipId],
-        );
-        const totalRecords = countRow.total || 0;
-        dtrData = {
-          dtrs: dtrRows,
-          totalPages: Math.ceil(totalRecords / limit) || 1,
-          totalRecords,
-          currentPage: 1,
-        };
-      } catch (err) {
-        console.error(
-          "getStudentDashboardData: DTR history query failed:",
-          err,
-        );
-      }
-
-      // DTR location — same company-address-fallback-to-custom-location
-      // logic as getMySettedDtrLocation, reused here rather than
-      // re-simplified.
+      // DTR location
       try {
         const [locRows] = await connection.execute(
           `SELECT 
@@ -211,7 +175,7 @@ export const getStudentDashboardData = async (req, res) => {
           location = {
             lat: isCustom ? record.dtr_lat : record.company_lat,
             lon: isCustom ? record.dtr_lon : record.company_lon,
-            radius_meters: isCustom ? record.radius_meters : 150, // keep in sync with your default elsewhere
+            radius_meters: isCustom ? record.radius_meters : 150,
             label: isCustom ? record.label : "Company address (default)",
             address: isCustom ? record.address : null,
             set_by: isCustom ? record.set_by : null,
@@ -232,7 +196,6 @@ export const getStudentDashboardData = async (req, res) => {
       internshipData,
       dtrToday,
       dtrStatus,
-      dtrData,
       location,
     });
   } catch (error) {
@@ -245,7 +208,6 @@ export const getStudentDashboardData = async (req, res) => {
     if (connection) connection.release();
   }
 };
-
 ///////////////////
 //EMPLOYER
 //////////////////

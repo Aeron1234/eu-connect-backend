@@ -33,6 +33,7 @@ activityLogRoutes.get(
 activityLogRoutes.delete(
   "/activity-logs/:logId",
   verifyUser,
+  verifyRole(["admin"]),
   generalLimiter,
   deleteActivityLog,
 );

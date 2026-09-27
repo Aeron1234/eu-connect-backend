@@ -2,7 +2,9 @@ import { db } from "../config/db.js";
 import { isWithinRadius } from "../config/helpers.js";
 
 export const getTodayDTR = async (req, res) => {
+  let connection;
   try {
+    connection = await db.getConnection();
     const { id } = req.verifiedUser;
     const { internshipId } = req.query;
 
@@ -10,7 +12,7 @@ export const getTodayDTR = async (req, res) => {
       return res.status(400).json({ error: "Internship ID is required" });
     }
 
-    const [rows] = await db.execute(
+    const [rows] = await connection.execute(
       `SELECT id, clock_in, clock_out, created_at, status FROM daily_time_records 
        WHERE user_id = ? AND DATE(created_at) = CURDATE() AND internship_id = ?
        LIMIT 1`,
@@ -23,11 +25,15 @@ export const getTodayDTR = async (req, res) => {
   } catch (error) {
     console.error("Get today's DTR error:", error);
     res.status(500).json({ error: "Database query failed", success: false });
+  } finally {
+    if (connection) connection.release();
   }
 };
 
 export const getAllDTRs = async (req, res) => {
+  let connection;
   try {
+    connection = await db.getConnection();
     const { id } = req.verifiedUser;
     const internshipId = req.query.internshipId;
     const limit = parseInt(req.query.limit) || 5;
@@ -37,7 +43,7 @@ export const getAllDTRs = async (req, res) => {
       return res.status(400).json({ error: "Internship ID is required" });
     }
 
-    const [rows] = await db.execute(
+    const [rows] = await connection.execute(
       `SELECT * FROM daily_time_records 
        WHERE user_id = ? AND internship_id = ?
        ORDER BY created_at DESC
@@ -46,7 +52,7 @@ export const getAllDTRs = async (req, res) => {
       [id, internshipId, limit, offset],
     );
 
-    const [countResult] = await db.execute(
+    const [countResult] = await connection.execute(
       `SELECT COUNT(*) AS total FROM daily_time_records
         WHERE user_id = ? AND internship_id = ?`,
       [id, internshipId],
@@ -64,15 +70,19 @@ export const getAllDTRs = async (req, res) => {
   } catch (error) {
     console.error("Get all DTRs error:", error);
     res.status(500).json({ error: "Database query failed", success: false });
+  } finally {
+    if (connection) connection.release();
   }
 };
 
 export const getLatestDtrStatus = async (req, res) => {
+  let connection;
   try {
+    connection = await db.getConnection();
     const { id: userId } = req.verifiedUser;
     const { internshipId } = req.query;
 
-    const [records] = await db.execute(
+    const [records] = await connection.execute(
       `SELECT id, clock_in, clock_out 
        FROM daily_time_records 
        WHERE user_id = ? AND internship_id = ? 
@@ -97,6 +107,8 @@ export const getLatestDtrStatus = async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Failed to get DTR status" });
+  } finally {
+    if (connection) connection.release();
   }
 };
 
@@ -406,7 +418,9 @@ export const deleteDTR = async (req, res) => {
 };
 
 export const getMySettedDtrLocation = async (req, res) => {
+  let connection;
   try {
+    connection = await db.getConnection();
     const { id: studentId } = req.verifiedUser;
     const { internshipId } = req.query;
 
@@ -414,7 +428,7 @@ export const getMySettedDtrLocation = async (req, res) => {
       return res.status(400).json({ error: "studentId is required." });
     }
 
-    const [rows] = await db.execute(
+    const [rows] = await connection.execute(
       `SELECT 
          ir.id AS internship_id,
          ir.lat AS company_lat,
@@ -463,5 +477,7 @@ export const getMySettedDtrLocation = async (req, res) => {
   } catch (error) {
     console.error("Get DTR location error:", error);
     res.status(500).json({ error: "Database query failed.", success: false });
+  } finally {
+    if (connection) connection.release();
   }
 };

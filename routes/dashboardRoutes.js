@@ -65,7 +65,7 @@ dashboardRoutes.get(
   "/posted-jobs",
   verifyUser,
   verifyRole(["employer"]),
-  generalLimiter,
+  paginationLimiter,
   getPostedJobs,
 );
 
