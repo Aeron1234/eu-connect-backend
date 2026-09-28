@@ -48,22 +48,30 @@ export const updateUserAvatar = async (req, res) => {
   }
 };
 
-export async function deleteUserAvatar(prevState, formData) {
+export const deleteUserAvatar = async (req, res) => {
+  let connection;
   try {
-    const accessToken = await getAccessToken();
-    if (!accessToken) throw new Error("You must be logged in.");
+    const { id: userId } = req.verifiedUser;
 
-    const res = await fetch(`${process.env.API_BASE_URL}/api/profile/avatar`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
+    connection = await db.getConnection();
 
-    return await res.json();
-  } catch (err) {
-    console.error("Delete avatar error:", err.message);
-    return { success: false, error: err.message };
+    const [result] = await connection.execute(
+      `UPDATE user_profiles SET avatar = NULL WHERE user_id = ?`,
+      [userId],
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "Profile not found." });
+    }
+
+    res.status(200).json({ success: true, avatar: null });
+  } catch (error) {
+    console.error("Delete user avatar error:", error);
+    res.status(500).json({ error: "Failed to reset avatar." });
+  } finally {
+    if (connection) connection.release();
   }
-}
+};
 
 export const getUserProfile = async (req, res) => {
   let connection;
