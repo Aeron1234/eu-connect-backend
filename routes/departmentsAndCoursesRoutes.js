@@ -1,3 +1,4 @@
+import { cacheRoute } from "../middleware/cache-middleware.js";
 import express from "express";
 import { verifyUser } from "../middleware/verifyUser.js";
 import { verifyRole } from "../middleware/verifyRole.js";
@@ -36,6 +37,7 @@ departmentAndCoursesRoutes.get(
   verifyUser,
   verifyRole(["student", "employer", "department_head", "admin"]),
   generalLimiter,
+  cacheRoute(300),
   getCourses,
 );
 
@@ -44,6 +46,7 @@ departmentAndCoursesRoutes.get(
   verifyUser,
   verifyRole(["student", "department_head", "admin"]),
   generalLimiter,
+  cacheRoute(300),
   getDepartments,
 );
 

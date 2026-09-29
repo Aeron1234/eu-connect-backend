@@ -21,6 +21,7 @@ import {
   mediumLimiter,
   strictLimiter,
 } from "../middleware/rateLimiter.js";
+import { cacheRoute } from "../middleware/cache-middleware.js";
 
 const accountRoutes = express.Router();
 const storage = multer.memoryStorage();
@@ -31,6 +32,7 @@ accountRoutes.get(
   verifyUser,
   verifyRole(["student", "employer", "department_head", "admin"]),
   generalLimiter,
+  cacheRoute(60),
   getAvailableAvatars,
 );
 
@@ -53,23 +55,16 @@ accountRoutes.delete(
 accountRoutes.get(
   "/account/user",
   verifyUser,
-  // verifyRole(["student", "employer", "department_head", "admin"]),
   generalLimiter,
+  cacheRoute(60),
   getUserProfile,
 );
 
-accountRoutes.put(
-  "/account/update",
-  verifyUser,
-  // verifyRole(["student", "employer", "department_head", "admin"]),
-  mediumLimiter,
-  updateUserInfo,
-);
+accountRoutes.put("/account/update", verifyUser, mediumLimiter, updateUserInfo);
 
 accountRoutes.put(
   "/account/update-password",
   verifyUser,
-  // verifyRole(["student", "employer", "department_head", "admin"]),
   mediumLimiter,
   updatePassword,
 );
@@ -79,6 +74,7 @@ accountRoutes.get(
   verifyUser,
   verifyRole(["admin"]),
   generalLimiter,
+  cacheRoute(60),
   getAllAccounts,
 );
 
@@ -87,6 +83,7 @@ accountRoutes.get(
   verifyUser,
   verifyRole(["admin"]),
   generalLimiter,
+  cacheRoute(60),
   getCreateAccountFormData,
 );
 
@@ -95,6 +92,7 @@ accountRoutes.get(
   verifyUser,
   verifyRole(["admin"]),
   generalLimiter,
+  cacheRoute(60),
   getRoles,
 );
 

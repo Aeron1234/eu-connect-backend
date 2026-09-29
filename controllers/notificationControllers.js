@@ -1,3 +1,4 @@
+import { invalidateNotificationsCache } from "../config/notificationsCache.js";
 import { db } from "../config/db.js";
 
 export const getAllNotifications = async (req, res) => {
@@ -124,6 +125,8 @@ export const markAsReadNotification = async (req, res) => {
       });
     }
 
+    invalidateNotificationsCache(userId);
+
     res.status(200).json({ success: true, message: "Marked as read" });
   } catch (error) {
     console.log("Mark notification as read error:", error);
@@ -146,6 +149,8 @@ export const markAsAllReadNotification = async (req, res) => {
         error: "Notification not found or unauthorized",
       });
     }
+
+    invalidateNotificationsCache(userId);
 
     res.status(200).json({
       success: true,
@@ -181,6 +186,8 @@ export const deleteNotification = async (req, res) => {
         error: "Notification not found or you don't have access to it.",
       });
     }
+
+    invalidateNotificationsCache(userId);
 
     res.status(200).json({
       success: true,

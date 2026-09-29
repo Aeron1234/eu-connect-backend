@@ -1,3 +1,6 @@
+import { invalidateAnnouncementsCache } from "../config/announcementsCache.js";
+import { invalidateNotificationsCache } from "../config/notificationsCache.js";
+import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
 import { db } from "../config/db.js";
 
 export const getAnnouncementCategories = async (req, res) => {
@@ -291,6 +294,10 @@ export const createAnnouncement = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateAnnouncementsCache();
+    invalidateNotificationsCache();
+
+    invalidateActivityLogsCache();
 
     const io = req.app.get("socketio");
 
@@ -503,6 +510,10 @@ export const updateAnnouncement = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateAnnouncementsCache();
+    invalidateNotificationsCache();
+
+    invalidateActivityLogsCache();
 
     if (recipients.length > 0) {
       const io = req.app.get("socketio");
@@ -586,6 +597,10 @@ export const deleteAnnouncement = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateAnnouncementsCache();
+    invalidateNotificationsCache();
+
+    invalidateActivityLogsCache();
 
     // io.emit("announcement-deleted", id);
 
@@ -632,6 +647,7 @@ export const togglePinAnnouncement = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateAnnouncementsCache();
 
     // io.emit("announcement-pinned-toggled", { id: announcementId, is_pinned });
 

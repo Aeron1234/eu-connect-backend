@@ -1,7 +1,14 @@
+import { invalidateDocumentMetadataCache } from "../config/documentMetadataCache.js";
+import { invalidateStaffInternshipsCache } from "../config/staffInternshipsCache.js";
+import { invalidateHteReportsCache } from "../config/reportsCache.js";
+import { invalidateAnnouncementsCache } from "../config/announcementsCache.js";
+import { invalidateNotificationsCache } from "../config/notificationsCache.js";
+import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
 import { db } from "../config/db.js";
 import bcrypt from "bcryptjs";
 import { newUUID } from "../config/helpers.js";
 import { AVAILABLE_AVATARS } from "../config/avatars.js";
+import { invalidateRouteCache, invalidateUserCache } from "../config/cache.js";
 
 export const getAvailableAvatars = async (req, res) => {
   try {
@@ -39,6 +46,9 @@ export const updateUserAvatar = async (req, res) => {
       return res.status(404).json({ error: "Profile not found." });
     }
 
+    invalidateUserCache(userId);
+    invalidateRouteCache("/eu-connect/api/accounts");
+
     res.status(200).json({ success: true, avatar });
   } catch (error) {
     console.error("Update user avatar error:", error);
@@ -63,6 +73,9 @@ export const deleteUserAvatar = async (req, res) => {
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: "Profile not found." });
     }
+
+    invalidateUserCache(userId);
+    invalidateRouteCache("/eu-connect/api/accounts");
 
     res.status(200).json({ success: true, avatar: null });
   } catch (error) {
@@ -289,7 +302,15 @@ export const updateUserInfo = async (req, res) => {
     // student & admin: nothing further here — academic info has its own endpoint
 
     await connection.commit();
+    invalidateAnnouncementsCache();
+    invalidateHteReportsCache();
+    invalidateStaffInternshipsCache();
+    invalidateNotificationsCache();
 
+    invalidateActivityLogsCache();
+
+    invalidateUserCache(id);
+    invalidateRouteCache("/eu-connect/api/accounts");
     res.status(200).json({ success: true, message: "Profile updated." });
   } catch (error) {
     if (connection) await connection.rollback();
@@ -465,6 +486,7 @@ export const getCreateAccountFormData = async (req, res) => {
       );
       roles = rows;
     } catch (err) {
+      res.locals.skipCache = true;
       console.error("getCreateAccountFormData: roles query failed:", err);
     }
 
@@ -478,6 +500,7 @@ export const getCreateAccountFormData = async (req, res) => {
       );
       courses = rows;
     } catch (err) {
+      res.locals.skipCache = true;
       console.error("getCreateAccountFormData: courses query failed:", err);
     }
 
@@ -491,6 +514,7 @@ export const getCreateAccountFormData = async (req, res) => {
       );
       departments = rows;
     } catch (err) {
+      res.locals.skipCache = true;
       console.error("getCreateAccountFormData: departments query failed:", err);
     }
 
@@ -723,6 +747,9 @@ export const createUser = async (req, res) => {
 
     await connection.commit();
 
+    invalidateActivityLogsCache();
+
+    invalidateRouteCache("/eu-connect/api/accounts");
     res.status(201).json({
       success: true,
       message: "Account created successfully!",
@@ -785,7 +812,12 @@ export const deactivateAccount = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateDocumentMetadataCache();
 
+    invalidateActivityLogsCache();
+
+    invalidateUserCache(accountId); // the target user's own /account/user goes stale
+    invalidateRouteCache("/eu-connect/api/accounts"); // every admin's cached copy of the account list goes stale
     res.status(200).json({
       message: "Account deactivated successfully!",
       success: true,
@@ -848,7 +880,12 @@ export const reactivateAccount = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateDocumentMetadataCache();
 
+    invalidateActivityLogsCache();
+
+    invalidateUserCache(accountId); // the target user's own /account/user goes stale
+    invalidateRouteCache("/eu-connect/api/accounts"); // every admin's cached copy of the account list goes stale
     res.status(200).json({
       message: "Account reactivated successfully!", // 👈 Fixed message
       success: true,

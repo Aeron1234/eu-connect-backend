@@ -1,3 +1,4 @@
+import { cacheRoute } from "../middleware/cache-middleware.js";
 import express from "express";
 import multer from "multer";
 import { verifyUser } from "../middleware/verifyUser.js";
@@ -21,6 +22,7 @@ employerEvaluationsRoutes.get(
   "/evaluation-criterias",
   verifyUser,
   generalLimiter,
+  cacheRoute(300),
   getEvaluationCriterias,
 );
 

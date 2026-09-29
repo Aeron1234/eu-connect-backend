@@ -1,3 +1,6 @@
+import { invalidateDocumentMetadataCache } from "../config/documentMetadataCache.js";
+import { invalidatePastInternshipsCache } from "../config/pastInternshipsCache.js";
+import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
 import { db } from "../config/db.js";
 import { supabase } from "../config/supabase.js";
 import { newUUID, ALLOWED_TYPES } from "../config/helpers.js";
@@ -141,6 +144,9 @@ export const approveInternshipDocument = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateDocumentMetadataCache();
+
+    invalidateActivityLogsCache();
 
     res.status(200).json({ success: true, message: "Document accepted." });
   } catch (error) {
@@ -277,6 +283,10 @@ export const uploadInternshipFile = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateDocumentMetadataCache();
+    invalidatePastInternshipsCache(userId);
+
+    invalidateActivityLogsCache();
 
     res.status(201).json({
       message: "Document uploaded successfully!",
@@ -365,6 +375,10 @@ export const deleteFile = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateDocumentMetadataCache();
+    invalidatePastInternshipsCache(doc.user_id);
+
+    invalidateActivityLogsCache();
 
     // Delete from storage AFTER commit succeeds — DB is source of truth,
     // an orphaned storage object is recoverable, an orphaned DB row isn't

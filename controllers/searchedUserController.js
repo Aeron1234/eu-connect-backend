@@ -1,3 +1,7 @@
+import { invalidateDocumentMetadataCache } from "../config/documentMetadataCache.js";
+import { invalidatePastInternshipsCache } from "../config/pastInternshipsCache.js";
+import { invalidateNotificationsCache } from "../config/notificationsCache.js";
+import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
 import { db } from "../config/db.js";
 import { supabase } from "../config/supabase.js";
 import { ALLOWED_TYPES, UPLOAD_ROOT } from "../config/helpers.js";
@@ -604,6 +608,7 @@ export const setSearchedStudentDtrLocation = async (req, res) => {
     );
 
     await connection.commit();
+    invalidateNotificationsCache();
 
     const io = req.app.get("socketio");
     io.to(`user-${internship.user_id}`).emit("new_notification", {
@@ -988,6 +993,11 @@ export const uploadFileToSearchedStudent = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateDocumentMetadataCache();
+    invalidatePastInternshipsCache(searchedUserId);
+    invalidateNotificationsCache();
+
+    invalidateActivityLogsCache();
 
     const io = req.app.get("socketio");
     if (io) {
@@ -1113,6 +1123,10 @@ export const deleteSearchedStudentFile = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateDocumentMetadataCache();
+    invalidatePastInternshipsCache(searchedUserId);
+
+    invalidateActivityLogsCache();
 
     const { error: storageError } = await supabase.storage
       .from(BUCKET)

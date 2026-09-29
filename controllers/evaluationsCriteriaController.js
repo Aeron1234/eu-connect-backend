@@ -1,3 +1,4 @@
+import { invalidateCriteriaCache } from "../config/criteriaCache.js";
 import { db } from "../config/db.js";
 
 function createCriteriaEndpoints(tableName) {
@@ -66,6 +67,7 @@ function createCriteriaEndpoints(tableName) {
       }
 
       await connection.commit();
+      invalidateCriteriaCache(tableName);
 
       res.status(201).json({ success: true, id: result.insertId });
     } catch (error) {
@@ -115,6 +117,7 @@ function createCriteriaEndpoints(tableName) {
       }
 
       await connection.commit();
+      invalidateCriteriaCache(tableName);
 
       res
         .status(200)
@@ -160,6 +163,7 @@ function createCriteriaEndpoints(tableName) {
       );
 
       await connection.commit();
+      invalidateCriteriaCache(tableName);
 
       res
         .status(200)
@@ -203,6 +207,7 @@ function createCriteriaEndpoints(tableName) {
       );
 
       await connection.commit();
+      invalidateCriteriaCache(tableName);
 
       res.status(200).json({
         success: true,
@@ -251,6 +256,7 @@ function createCriteriaEndpoints(tableName) {
       );
 
       await connection.commit();
+      invalidateCriteriaCache(tableName);
 
       res.status(200).json({
         success: true,

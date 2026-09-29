@@ -1,3 +1,4 @@
+import { cacheRoute } from "../middleware/cache-middleware.js";
 import express from "express";
 import multer from "multer";
 import { verifyUser } from "../middleware/verifyUser.js";
@@ -26,6 +27,7 @@ hteReportRoutes.get(
   verifyUser,
   verifyRole(["department_head", "admin"]),
   generalLimiter,
+  cacheRoute(60),
   getAvailableAcademicYears,
 );
 

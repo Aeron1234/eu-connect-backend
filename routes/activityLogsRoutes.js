@@ -1,3 +1,4 @@
+import { cacheRoute } from "../middleware/cache-middleware.js";
 import express from "express";
 import multer from "multer";
 import { verifyUser } from "../middleware/verifyUser.js";
@@ -19,6 +20,7 @@ activityLogRoutes.get(
   "/activity-logs/mine",
   verifyUser,
   generalLimiter,
+  cacheRoute(30),
   getMyActivityLogs,
 );
 
@@ -27,6 +29,7 @@ activityLogRoutes.get(
   verifyUser,
   verifyRole(["admin"]),
   generalLimiter,
+  cacheRoute(30),
   getAllActivityLogs,
 );
 

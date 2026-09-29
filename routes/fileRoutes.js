@@ -1,3 +1,4 @@
+import { cacheRoute } from "../middleware/cache-middleware.js";
 import express from "express";
 import multer from "multer";
 import { verifyUser } from "../middleware/verifyUser.js";
@@ -25,6 +26,7 @@ fileRoutes.get(
   verifyUser,
   verifyRole(["student", "employer", "department_head", "admin"]),
   generalLimiter,
+  cacheRoute(300),
   getFileRequirementTypes,
 );
 
@@ -33,6 +35,7 @@ fileRoutes.get(
   verifyUser,
   verifyRole(["student", "department_head", "admin"]),
   generalLimiter,
+  cacheRoute(30),
   getInternshipFiles,
 );
 

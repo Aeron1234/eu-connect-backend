@@ -1,3 +1,4 @@
+import { cacheRoute } from "../middleware/cache-middleware.js";
 import express from "express";
 import { verifyUser } from "../middleware/verifyUser.js";
 import { verifyRole } from "../middleware/verifyRole.js";
@@ -30,6 +31,7 @@ dashboardRoutes.get(
   verifyUser,
   verifyRole(["student"]),
   generalLimiter,
+  cacheRoute(15),
   getStudentDashboardStats,
 );
 
@@ -50,6 +52,7 @@ dashboardRoutes.get(
   verifyUser,
   verifyRole(["employer"]),
   generalLimiter,
+  cacheRoute(15),
   getEmployerDashboardStats,
 );
 
@@ -58,6 +61,7 @@ dashboardRoutes.get(
   verifyUser,
   verifyRole(["employer"]),
   generalLimiter,
+  cacheRoute(15),
   getEmployerDashboardData,
 );
 
@@ -66,6 +70,7 @@ dashboardRoutes.get(
   verifyUser,
   verifyRole(["employer"]),
   paginationLimiter,
+  cacheRoute(30),
   getPostedJobs,
 );
 
@@ -78,6 +83,7 @@ dashboardRoutes.get(
   verifyUser,
   verifyRole(["department_head"]),
   generalLimiter,
+  cacheRoute(15),
   getDepartmentHeadDashboardStats,
 );
 
@@ -86,6 +92,7 @@ dashboardRoutes.get(
   verifyUser,
   verifyRole(["department_head"]),
   generalLimiter,
+  cacheRoute(15),
   getDepartmentHeadDashboardData,
 );
 
@@ -94,6 +101,7 @@ dashboardRoutes.get(
   verifyUser,
   verifyRole(["department_head"]),
   generalLimiter,
+  cacheRoute(15),
   getAverageShiftHoursByWeek,
 );
 
@@ -106,6 +114,7 @@ dashboardRoutes.get(
   verifyUser,
   verifyRole(["admin"]),
   generalLimiter,
+  cacheRoute(15),
   getAdminDashboardStats,
 );
 
@@ -114,6 +123,7 @@ dashboardRoutes.get(
   verifyUser,
   verifyRole(["admin"]),
   generalLimiter,
+  cacheRoute(15),
   getAdminDashboardData,
 );
 

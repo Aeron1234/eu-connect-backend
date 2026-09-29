@@ -1,3 +1,4 @@
+import { cacheRoute } from "../middleware/cache-middleware.js";
 import express from "express";
 import { verifyUser } from "../middleware/verifyUser.js";
 import { verifyRole } from "../middleware/verifyRole.js";
@@ -28,6 +29,7 @@ studentEvaluationRoutes.get(
   verifyUser,
   verifyRole(["employer"]),
   generalLimiter,
+  cacheRoute(300),
   getStudentEvaluationCriteria,
 );
 

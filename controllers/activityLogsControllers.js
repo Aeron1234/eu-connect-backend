@@ -1,3 +1,4 @@
+import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
 import { db } from "../config/db.js";
 
 // GET — for the logged-in user's own activity, 10 per page
@@ -173,6 +174,8 @@ export const deleteActivityLog = async (req, res) => {
     await connection.execute(`DELETE FROM activity_logs WHERE id = ?`, [logId]);
 
     await connection.commit();
+
+    invalidateActivityLogsCache();
 
     res.status(200).json({ success: true, message: "Activity log deleted." });
   } catch (error) {

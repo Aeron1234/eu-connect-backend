@@ -1,4 +1,14 @@
+import { invalidateDashboardCache } from "../config/dashboardCache.js";
 import { db } from "../config/db.js";
+import { invalidateRouteCache } from "../config/cache.js";
+
+// Use only the fixed table names supplied by this module. Clear every user's
+// list variants and the account form after the database transaction commits.
+function invalidateLookupCache(tableName) {
+  invalidateDashboardCache();
+  invalidateRouteCache(`/eu-connect/api/${tableName}`);
+  invalidateRouteCache("/eu-connect/api/create-account-form-data");
+}
 
 export const addDepartment = async (req, res) => {
   let connection;
@@ -30,6 +40,7 @@ export const addDepartment = async (req, res) => {
     );
 
     await connection.commit();
+    invalidateLookupCache("departments");
 
     const [rows] = await connection.execute(
       `SELECT * FROM departments WHERE id = ?`,
@@ -88,6 +99,7 @@ export const addCourse = async (req, res) => {
     );
 
     await connection.commit();
+    invalidateLookupCache("courses");
 
     const [rows] = await connection.execute(
       `SELECT * FROM courses WHERE id = ?`,
@@ -148,6 +160,7 @@ function createLookupTableEndpoints(tableName, label) {
       );
 
       await connection.commit();
+      invalidateLookupCache(tableName);
 
       res.status(200).json({
         success: true,

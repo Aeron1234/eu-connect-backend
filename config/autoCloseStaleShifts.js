@@ -1,3 +1,5 @@
+import { invalidateDepartmentInternshipsCache } from "./staffInternshipsCache.js";
+import { invalidateDashboardCache } from "./dashboardCache.js";
 // jobs/autoCloseStaleShifts.js
 import { db } from "../config/db.js"; // adjust path to your actual db module
 
@@ -82,6 +84,8 @@ async function closeBatch(batch) {
     }
 
     await connection.commit();
+    invalidateDashboardCache();
+    invalidateDepartmentInternshipsCache();
   } catch (error) {
     if (connection) await connection.rollback();
     console.error("[autoCloseStaleShifts] Batch error:", error);

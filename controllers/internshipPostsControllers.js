@@ -1,3 +1,5 @@
+import { invalidatePostingsCache, invalidatePostingFavoritesCache } from "../config/postingsCache.js";
+import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
 import { db } from "../config/db.js";
 import { newUUID } from "../config/helpers.js";
 
@@ -289,6 +291,9 @@ export const createInternshipPosting = async (req, res) => {
     }
 
     await connection.commit();
+    invalidatePostingsCache();
+
+    invalidateActivityLogsCache();
 
     return res.status(201).json({
       message: "Internship posting created successfully.",
@@ -508,6 +513,9 @@ export const updateInternshipPosting = async (req, res) => {
     }
 
     await connection.commit();
+    invalidatePostingsCache();
+
+    invalidateActivityLogsCache();
 
     const responseData = {
       ...updatedPosting,
@@ -600,6 +608,9 @@ export const deleteInternshipPosting = async (req, res) => {
     }
 
     await connection.commit();
+    invalidatePostingsCache();
+
+    invalidateActivityLogsCache();
 
     return res.status(200).json({
       message: "Posting deleted successfully.",
@@ -656,6 +667,7 @@ export const toggleInternshipFavorite = async (req, res) => {
       );
 
       await connection.commit();
+      invalidatePostingFavoritesCache(studentId);
 
       return res.status(200).json({
         message: "Removed from favorites.",
@@ -677,6 +689,7 @@ export const toggleInternshipFavorite = async (req, res) => {
     }
 
     await connection.commit();
+    invalidatePostingFavoritesCache(studentId);
 
     return res.status(201).json({
       message: "Added to favorites.",

@@ -1,3 +1,4 @@
+import { cacheRoute } from "../middleware/cache-middleware.js";
 import express from "express";
 import multer from "multer";
 import { verifyUser } from "../middleware/verifyUser.js";
@@ -25,6 +26,7 @@ announcementRoutes.get(
   verifyUser,
   verifyRole(["student", "employer", "department_head", "admin"]),
   generalLimiter,
+  cacheRoute(300),
   getAnnouncementCategories,
 );
 
@@ -33,6 +35,7 @@ announcementRoutes.get(
   verifyUser,
   verifyRole(["student", "employer", "department_head", "admin"]),
   paginationLimiter,
+  cacheRoute(30),
   getAllAnnouncements,
 );
 

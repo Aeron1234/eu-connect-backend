@@ -88,6 +88,7 @@ export const getStudentDashboardData = async (req, res) => {
       );
       internshipData = rows.length > 0 ? rows[0] : null;
     } catch (err) {
+      res.locals.skipCache = true;
       console.error(
         "getStudentDashboardData: active internship query failed:",
         err,
@@ -113,6 +114,7 @@ export const getStudentDashboardData = async (req, res) => {
         );
         dtrToday = todayRows.length > 0 ? todayRows[0] : null;
       } catch (err) {
+      res.locals.skipCache = true;
         console.error(
           "getStudentDashboardData: today's DTR query failed:",
           err,
@@ -139,6 +141,7 @@ export const getStudentDashboardData = async (req, res) => {
               : { status: "CLOCKED_OUT", record: lastRecord };
         }
       } catch (err) {
+      res.locals.skipCache = true;
         console.error(
           "getStudentDashboardData: latest DTR status query failed:",
           err,
@@ -184,6 +187,7 @@ export const getStudentDashboardData = async (req, res) => {
           };
         }
       } catch (err) {
+      res.locals.skipCache = true;
         console.error(
           "getStudentDashboardData: DTR location query failed:",
           err,
@@ -318,6 +322,7 @@ export const getEmployerDashboardData = async (req, res) => {
       );
       interns = internRows;
     } catch (err) {
+      res.locals.skipCache = true;
       console.error("getEmployerDashboardData: interns query failed:", err);
     }
 
@@ -344,6 +349,7 @@ export const getEmployerDashboardData = async (req, res) => {
       postedJobs = jobRows;
       postedJobsTotalPages = Math.ceil((countRow.total || 0) / limit);
     } catch (err) {
+      res.locals.skipCache = true;
       console.error("getEmployerDashboardData: posted jobs query failed:", err);
     }
 
@@ -566,6 +572,7 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
       );
       ongoingPerCourse = rows;
     } catch (err) {
+      res.locals.skipCache = true;
       console.error(
         "getDepartmentHeadDashboardData: per-course query failed:",
         err,
@@ -601,6 +608,7 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
         score: Number(Number(r.avg_score).toFixed(2)),
       }));
     } catch (err) {
+      res.locals.skipCache = true;
       console.error(
         "getDepartmentHeadDashboardData: student evaluation averages query failed:",
         err,
@@ -635,6 +643,7 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
         score: Number(Number(r.avg_score).toFixed(2)),
       }));
     } catch (err) {
+      res.locals.skipCache = true;
       console.error(
         "getDepartmentHeadDashboardData: employer evaluation averages query failed:",
         err,
@@ -697,6 +706,7 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
         })),
       };
     } catch (err) {
+      res.locals.skipCache = true;
       console.error(
         "getDepartmentHeadDashboardData: hours tracker query failed:",
         err,
@@ -726,6 +736,7 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
       );
       availableShiftHoursMonths = rows;
     } catch (err) {
+      res.locals.skipCache = true;
       console.error(
         "getDepartmentHeadDashboardData: available months query failed:",
         err,
@@ -962,6 +973,7 @@ export const getAdminDashboardData = async (req, res) => {
 
       userGrowth = Array.from(dataByMonth.values());
     } catch (err) {
+      res.locals.skipCache = true;
       console.error("getAdminDashboardData: user growth query failed:", err);
     }
 
@@ -975,6 +987,7 @@ export const getAdminDashboardData = async (req, res) => {
       );
       usersByRole = rows;
     } catch (err) {
+      res.locals.skipCache = true;
       console.error("getAdminDashboardData: users by role query failed:", err);
     }
 
@@ -1003,6 +1016,7 @@ export const getAdminDashboardData = async (req, res) => {
       );
       ongoingByDepartment = rows;
     } catch (err) {
+      res.locals.skipCache = true;
       console.error(
         "getAdminDashboardData: ongoing by department query failed:",
         err,
@@ -1019,6 +1033,7 @@ export const getAdminDashboardData = async (req, res) => {
       );
       recentActivity = rows;
     } catch (err) {
+      res.locals.skipCache = true;
       console.error(
         "getAdminDashboardData: recent activity query failed:",
         err,

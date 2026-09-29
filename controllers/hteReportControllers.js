@@ -1,3 +1,6 @@
+import { reportCacheHit } from "../middleware/report-cache.js";
+import { invalidateAnnualReportsCache } from "../config/reportsCache.js";
+import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
 import { db } from "../config/db.js";
 import {
   getCurrentAcademicYear,
@@ -56,6 +59,8 @@ export const getHteCompanyList = async (req, res) => {
           "Only the Registrar department head or admin can access this report.",
       });
     }
+
+    if (reportCacheHit(req, res)) return;
 
     // --- Single-company detail mode (still used by PDF export re-fetch, if kept) ---
     if (companyKey) {
@@ -268,6 +273,8 @@ export const getHteCompanyReport = async (req, res) => {
       });
     }
 
+    if (reportCacheHit(req, res)) return;
+
     const [rows] = await connection.execute(
       `SELECT 
          ir.company_name, ir.company_address,
@@ -348,6 +355,8 @@ export const getProgramAnnualReports = async (req, res) => {
           "Only the Registrar department head or admin can access this report.",
       });
     }
+
+    if (reportCacheHit(req, res)) return;
 
     const pageNum = Math.max(1, parseInt(page) || 1);
     const pageSize = Math.max(1, Math.min(50, parseInt(limit) || 10));
@@ -625,6 +634,9 @@ export const saveProgramAnnualReport = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateAnnualReportsCache();
+
+    invalidateActivityLogsCache();
 
     const [report] = await connection.execute(
       `SELECT * FROM program_annual_reports WHERE id = ?`,
@@ -713,6 +725,9 @@ export const deleteProgramAnnualReport = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateAnnualReportsCache();
+
+    invalidateActivityLogsCache();
 
     res.status(200).json({ success: true, message: "Report deleted." });
   } catch (error) {

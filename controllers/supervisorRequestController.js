@@ -1,3 +1,5 @@
+import { invalidateNotificationsCache } from "../config/notificationsCache.js";
+import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
 import { db } from "../config/db.js";
 import { newUUID } from "../config/helpers.js";
 
@@ -174,6 +176,9 @@ export const requestSupervisor = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateNotificationsCache();
+
+    invalidateActivityLogsCache();
 
     const io = req.app.get("socketio");
     io.to(`user-${employerId}`).emit("new_notification", {
@@ -258,6 +263,9 @@ export const cancelSupervisorRequest = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateNotificationsCache();
+
+    invalidateActivityLogsCache();
 
     return res
       .status(200)
@@ -386,6 +394,9 @@ export const respondToSupervisorRequest = async (req, res) => {
       }
 
       await connection.commit();
+      invalidateNotificationsCache();
+
+      invalidateActivityLogsCache();
 
       const io = req.app.get("socketio");
       io.to(`user-${request.student_id}`).emit("new_notification", {
@@ -448,6 +459,9 @@ export const respondToSupervisorRequest = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateNotificationsCache();
+
+    invalidateActivityLogsCache();
 
     const io = req.app.get("socketio");
     io.to(`user-${request.student_id}`).emit("new_notification", {

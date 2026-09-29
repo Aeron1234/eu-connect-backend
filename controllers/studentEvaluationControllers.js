@@ -1,3 +1,5 @@
+import { invalidateNotificationsCache } from "../config/notificationsCache.js";
+import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
 import { db } from "../config/db.js";
 import { newUUID } from "../config/helpers.js";
 
@@ -443,6 +445,9 @@ export const createStudentEvaluation = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateNotificationsCache();
+
+    invalidateActivityLogsCache();
 
     // 4. Real-time Socket Event
     const io = req.app.get("socketio");
@@ -677,16 +682,6 @@ export const deleteStudentEvaluation = async (req, res) => {
           );
         }
 
-        // Dispatch real-time socket emit safely
-        if (io) {
-          io.to(`user-${recipient.id}`).emit("new_notification", {
-            title: notifTitle,
-            message: recipient.msg,
-            type: "evaluation_deleted",
-            link: Number(evaluation.internship_id),
-            link_uuid: evaluationId,
-          });
-        }
       } catch (insertionError) {
         // Immediately abort everything if any single notification fails to generate safely
         await connection.rollback();
@@ -705,6 +700,23 @@ export const deleteStudentEvaluation = async (req, res) => {
 
     // Commit everything once every standalone query passes safely
     await connection.commit();
+    invalidateNotificationsCache();
+    invalidateActivityLogsCache();
+
+    // Notify only after the data is committed and the inbox cache is cleared.
+    for (const recipient of recipientsToNotify) {
+      try {
+        if (io) io.to(`user-${recipient.id}`).emit("new_notification", {
+          title: notifTitle,
+          message: recipient.msg,
+          type: "evaluation_deleted",
+          link: Number(evaluation.internship_id),
+          link_uuid: evaluationId,
+        });
+      } catch (socketError) {
+        console.error("Evaluation deletion notification delivery failed:", socketError);
+      }
+    }
 
     return res.status(200).json({
       success: true,
@@ -815,6 +827,9 @@ export const respondToStudentEvaluation = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateNotificationsCache();
+
+    invalidateActivityLogsCache();
 
     const message =
       decision === "completed"
@@ -913,6 +928,9 @@ export const restoreDisputedEvaluation = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateNotificationsCache();
+
+    invalidateActivityLogsCache();
 
     res.status(200).json({
       success: true,
@@ -1009,6 +1027,8 @@ export const reviewDisputedEvaluation = async (req, res) => {
     }
 
     await connection.commit();
+
+    invalidateActivityLogsCache();
 
     res.status(200).json({
       success: true,

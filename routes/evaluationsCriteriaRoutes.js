@@ -1,3 +1,4 @@
+import { cacheRoute } from "../middleware/cache-middleware.js";
 import express from "express";
 import multer from "multer";
 import { verifyUser } from "../middleware/verifyUser.js";
@@ -31,6 +32,7 @@ criteriaRoutes.get(
   verifyUser,
   verifyRole(["admin"]),
   generalLimiter,
+  cacheRoute(300),
   getEmployerEvaluationCriteria,
 );
 
@@ -80,6 +82,7 @@ criteriaRoutes.get(
   verifyUser,
   verifyRole(["admin"]),
   generalLimiter,
+  cacheRoute(300),
   getStudentEvaluationCriteria,
 );
 

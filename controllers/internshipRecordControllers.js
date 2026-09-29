@@ -1,3 +1,13 @@
+import { documentMetadataCacheHit } from "../middleware/document-metadata-cache.js";
+import { invalidateDocumentMetadataCache } from "../config/documentMetadataCache.js";
+import { invalidateStaffInternshipsCache } from "../config/staffInternshipsCache.js";
+import { departmentInternshipsCacheHit } from "../middleware/staff-internships-cache.js";
+import { invalidatePastInternshipsCache } from "../config/pastInternshipsCache.js";
+import { invalidateHteReportsCache } from "../config/reportsCache.js";
+import { invalidateAlumniCache } from "../config/alumniCache.js";
+import { invalidateDashboardCache } from "../config/dashboardCache.js";
+import { invalidateNotificationsCache } from "../config/notificationsCache.js";
+import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
 import { db } from "../config/db.js";
 import { newUUID, verifyRecordAccess } from "../config/helpers.js";
 import { supabase } from "../config/supabase.js";
@@ -281,6 +291,14 @@ export const createInternshipRecord = async (req, res) => {
     );
 
     await connection.commit();
+    invalidateDocumentMetadataCache();
+    invalidateStaffInternshipsCache();
+    invalidatePastInternshipsCache();
+    invalidateHteReportsCache();
+    invalidateAlumniCache();
+    invalidateNotificationsCache();
+
+    invalidateActivityLogsCache();
 
     const io = req.app.get("socketio");
 
@@ -460,6 +478,14 @@ export const approveInternshipRecord = async (req, res) => {
     );
 
     await connection.commit();
+    invalidateDocumentMetadataCache();
+    invalidateStaffInternshipsCache();
+    invalidatePastInternshipsCache();
+    invalidateHteReportsCache();
+    invalidateAlumniCache();
+    invalidateNotificationsCache();
+
+    invalidateActivityLogsCache();
 
     const io = req.app.get("socketio");
     io.to(`user-${studentId}`).emit("new_notification", {
@@ -660,6 +686,14 @@ export const markInternshipFinished = async (req, res) => {
     );
 
     await connection.commit();
+    invalidateDocumentMetadataCache();
+    invalidateStaffInternshipsCache();
+    invalidatePastInternshipsCache();
+    invalidateHteReportsCache();
+    invalidateAlumniCache();
+    invalidateNotificationsCache();
+
+    invalidateActivityLogsCache();
 
     const io = req.app.get("socketio");
     io.to(`user-${studentId}`).emit("new_notification", {
@@ -857,6 +891,14 @@ export const finishInternshipRecord = async (req, res) => {
     );
 
     await connection.commit();
+    invalidateDocumentMetadataCache();
+    invalidateStaffInternshipsCache();
+    invalidatePastInternshipsCache();
+    invalidateHteReportsCache();
+    invalidateAlumniCache();
+    invalidateNotificationsCache();
+
+    invalidateActivityLogsCache();
 
     const io = req.app.get("socketio");
     recipients.forEach((recipient) => {
@@ -909,6 +951,8 @@ export const getDepartmentInternshipRecords = async (req, res) => {
       }
       userDepartmentId = deptHeadRows[0].department_id;
     }
+
+    if (departmentInternshipsCacheHit(req, res, userDepartmentId)) return;
 
     const conditions = ["ir.deleted_at IS NULL"];
     const params = [];
@@ -1097,6 +1141,12 @@ export const restoreInternshipRecord = async (req, res) => {
     );
 
     await connection.commit();
+    invalidateDocumentMetadataCache();
+    invalidateStaffInternshipsCache();
+    invalidatePastInternshipsCache();
+    invalidateHteReportsCache();
+    invalidateAlumniCache();
+    invalidateDashboardCache();
 
     res.status(200).json({
       success: true,
@@ -1155,6 +1205,12 @@ export const deleteInternshipRecord = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateDocumentMetadataCache();
+    invalidateStaffInternshipsCache();
+    invalidatePastInternshipsCache();
+    invalidateHteReportsCache();
+    invalidateAlumniCache();
+    invalidateDashboardCache();
 
     res.status(200).json({
       success: true,
@@ -1461,6 +1517,7 @@ export const getInternshipRecordDocuments = async (req, res) => {
 
     connection = await db.getConnection();
     await verifyRecordAccess(connection, internshipId, requesterId, role);
+    if (documentMetadataCacheHit(req, res)) return;
 
     const [rows] = await connection.execute(
       `SELECT 

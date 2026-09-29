@@ -1,3 +1,4 @@
+import { cacheRoute } from "../middleware/cache-middleware.js";
 import express from "express";
 import multer from "multer";
 import { verifyUser } from "../middleware/verifyUser.js";
@@ -64,6 +65,7 @@ searchedUserRoutes.get(
   verifyUser,
   verifyRole(["department_head", "admin"]),
   generalLimiter,
+  cacheRoute(30),
   getSearchedStudentFiles,
 );
 
@@ -88,6 +90,7 @@ searchedUserRoutes.get(
   verifyUser,
   verifyRole(["employer", "admin"]),
   generalLimiter,
+  cacheRoute(30),
   getEmployerUploadedFiles,
 );
 

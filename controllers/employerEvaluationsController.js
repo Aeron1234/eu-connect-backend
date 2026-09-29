@@ -1,3 +1,4 @@
+import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
 import { db } from "../config/db.js";
 import { newUUID } from "../config/helpers.js";
 
@@ -288,6 +289,8 @@ export const createEmployerEvaluation = async (req, res) => {
     }
 
     await connection.commit();
+
+    invalidateActivityLogsCache();
 
     res.status(201).json({
       success: true,

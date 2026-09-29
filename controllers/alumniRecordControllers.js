@@ -1,3 +1,5 @@
+import { invalidateAlumniCache } from "../config/alumniCache.js";
+import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
 import { db } from "../config/db.js";
 import { newUUID } from "../config/helpers.js";
 
@@ -117,6 +119,9 @@ export const addAlumniInternshipRecord = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateAlumniCache();
+
+    invalidateActivityLogsCache();
 
     res.status(201).json({ success: true, id: recordId });
   } catch (error) {
@@ -255,6 +260,9 @@ export const updateAlumniInternshipRecord = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateAlumniCache();
+
+    invalidateActivityLogsCache();
 
     res.status(200).json({
       success: true,
@@ -344,6 +352,9 @@ export const deleteAlumniInternshipRecord = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateAlumniCache();
+
+    invalidateActivityLogsCache();
 
     res.status(200).json({ success: true, message: "Alumni record deleted." });
   } catch (error) {

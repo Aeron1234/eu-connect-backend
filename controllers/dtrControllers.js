@@ -1,3 +1,5 @@
+import { invalidateDepartmentInternshipsCache } from "../config/staffInternshipsCache.js";
+import { invalidateDashboardCache } from "../config/dashboardCache.js";
 import { db } from "../config/db.js";
 import { isWithinRadius } from "../config/helpers.js";
 
@@ -204,6 +206,8 @@ export const clockIn = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateDashboardCache();
+    invalidateDepartmentInternshipsCache();
 
     res.status(201).json({
       message: "Clock-in successful. Location verified.",
@@ -342,6 +346,8 @@ export const clockOut = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateDashboardCache();
+    invalidateDepartmentInternshipsCache();
 
     res.status(200).json({
       message: flagged
@@ -404,6 +410,8 @@ export const deleteDTR = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateDashboardCache();
+    invalidateDepartmentInternshipsCache();
     res.status(200).json({
       message: "Record deleted successfully.",
       success: true,
