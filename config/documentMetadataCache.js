@@ -1,7 +1,9 @@
+import { invalidateInternshipOverviewsCache } from "./profileOverviewCache.js";
 import cache, { invalidateRouteCache } from "./cache.js";
 const ownPath = "/eu-connect/api/internships/files";
 const families = ["/eu-connect/api/searched-user/files/", "/eu-connect/api/searched-user/employer-uploaded-files/", "/eu-connect/api/internship-records/documents/"];
 export function invalidateDocumentMetadataCache() {
+  invalidateInternshipOverviewsCache();
   // Always advance the generation, even when no entry exists yet.
   invalidateRouteCache(ownPath);
   const paths = new Set();

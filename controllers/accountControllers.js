@@ -1,3 +1,6 @@
+import { getActivityLogUserName } from "../config/activityLogNames.js";
+import { invalidateProfileOverviewCache } from "../config/profileOverviewCache.js";
+import { invalidateEvaluationHistoryCache } from "../config/evaluationHistoryCache.js";
 import { invalidateDocumentMetadataCache } from "../config/documentMetadataCache.js";
 import { invalidateStaffInternshipsCache } from "../config/staffInternshipsCache.js";
 import { invalidateHteReportsCache } from "../config/reportsCache.js";
@@ -46,6 +49,7 @@ export const updateUserAvatar = async (req, res) => {
       return res.status(404).json({ error: "Profile not found." });
     }
 
+    invalidateProfileOverviewCache();
     invalidateUserCache(userId);
     invalidateRouteCache("/eu-connect/api/accounts");
 
@@ -74,6 +78,7 @@ export const deleteUserAvatar = async (req, res) => {
       return res.status(404).json({ error: "Profile not found." });
     }
 
+    invalidateProfileOverviewCache();
     invalidateUserCache(userId);
     invalidateRouteCache("/eu-connect/api/accounts");
 
@@ -117,15 +122,13 @@ export const getUserProfile = async (req, res) => {
           FROM users u
           INNER JOIN roles r ON r.id = u.role_id
           INNER JOIN user_profiles up ON up.user_id = u.id
-          INNER JOIN (
-            SELECT sai1.*
-            FROM student_academic_info sai1
-            INNER JOIN (
-              SELECT user_id, MAX(id) AS max_id
-              FROM student_academic_info
-              GROUP BY user_id
-            ) latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
-          ) sai ON sai.user_id = u.id
+          INNER JOIN student_academic_info sai
+            ON sai.user_id = u.id
+           AND sai.id = (
+             SELECT MAX(sai_latest.id)
+             FROM student_academic_info sai_latest
+             WHERE sai_latest.user_id = u.id
+           )
           INNER JOIN departments d ON d.id = sai.department_id
           INNER JOIN courses c ON c.id = sai.course_id
           WHERE u.id = ?
@@ -302,8 +305,10 @@ export const updateUserInfo = async (req, res) => {
     // student & admin: nothing further here — academic info has its own endpoint
 
     await connection.commit();
+    invalidateProfileOverviewCache();
     invalidateAnnouncementsCache();
     invalidateHteReportsCache();
+    invalidateEvaluationHistoryCache();
     invalidateStaffInternshipsCache();
     invalidateNotificationsCache();
 
@@ -424,6 +429,36 @@ export const getAllAccounts = async (req, res) => {
       WHERE r.role = 'employer'
     `;
 
+    // The count still follows the UNION ALL branches, including duplicate rows
+    // when a user has multiple academic/background records. Its joined course
+    // and department details are only needed for the displayed page.
+    const countUnionQuery = `
+      SELECT u.email, u.status, up.first_name, up.last_name, r.role
+      FROM users u
+      INNER JOIN user_profiles up ON u.id = up.user_id
+      INNER JOIN roles r ON u.role_id = r.id
+      LEFT JOIN student_academic_info sai ON u.id = sai.user_id
+      WHERE r.role = 'student'
+
+      UNION ALL
+
+      SELECT u.email, u.status, up.first_name, up.last_name, r.role
+      FROM users u
+      INNER JOIN user_profiles up ON u.id = up.user_id
+      INNER JOIN roles r ON u.role_id = r.id
+      LEFT JOIN dept_heads_background_info dhbi ON u.id = dhbi.user_id
+      WHERE r.role = 'department_head'
+
+      UNION ALL
+
+      SELECT u.email, u.status, up.first_name, up.last_name, r.role
+      FROM users u
+      INNER JOIN user_profiles up ON u.id = up.user_id
+      INNER JOIN roles r ON u.role_id = r.id
+      LEFT JOIN employer_background_info ebi ON u.id = ebi.user_id
+      WHERE r.role = 'employer'
+    `;
+
     let filterClauses = [];
     let params = [];
 
@@ -452,7 +487,7 @@ export const getAllAccounts = async (req, res) => {
     );
 
     const [countResult] = await connection.execute(
-      `SELECT COUNT(*) AS total FROM (${unionQuery}) AS accounts ${whereString}`,
+      `SELECT COUNT(*) AS total FROM (${countUnionQuery}) AS accounts ${whereString}`,
       params,
     );
 
@@ -800,7 +835,7 @@ export const deactivateAccount = async (req, res) => {
           "account_deactivated",
           "users",
           accountId,
-          `Admin deactivated account ${accountId}.`,
+          `Admin deactivated the account of ${await getActivityLogUserName(connection, accountId)}.`,
           null,
         ],
       );
@@ -812,6 +847,7 @@ export const deactivateAccount = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateProfileOverviewCache();
     invalidateDocumentMetadataCache();
 
     invalidateActivityLogsCache();
@@ -868,7 +904,7 @@ export const reactivateAccount = async (req, res) => {
           "account_reactivated",
           "users",
           accountId,
-          `Admin reactivated account ${accountId}.`,
+          `Admin reactivated the account of ${await getActivityLogUserName(connection, accountId)}.`,
           null,
         ],
       );
@@ -880,6 +916,7 @@ export const reactivateAccount = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateProfileOverviewCache();
     invalidateDocumentMetadataCache();
 
     invalidateActivityLogsCache();

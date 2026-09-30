@@ -82,10 +82,19 @@ export const getAllAnnouncements = async (req, res) => {
       ORDER BY a.created_at DESC
     `;
 
+    const countQuery = `
+      SELECT COUNT(*) AS total
+      FROM announcements AS a
+      INNER JOIN announcement_categories AS ac ON a.category_id = ac.id
+      ${departmentJoin}
+      WHERE a.is_pinned = 0 ${whereString}
+    `;
+
     const regularQuery = `
       SELECT a.id, a.author_id, a.title, a.content, a.is_pinned, a.created_at, a.updated_at, 
              r.role, up.first_name, up.last_name,
-             ac.id AS category_id, ac.name AS category, ac.color, ac.text_color
+             ac.id AS category_id, ac.name AS category, ac.color, ac.text_color,
+             (${countQuery}) AS total_regular
       FROM announcements AS a
       INNER JOIN users AS u ON a.author_id = u.id
       INNER JOIN roles AS r ON u.role_id = r.id
@@ -98,22 +107,23 @@ export const getAllAnnouncements = async (req, res) => {
     `;
 
     const [pinnedRows] = await db.execute(pinnedQuery, params);
-    const [regularRows] = await db.execute(regularQuery, [
+    const [pageRows] = await db.execute(regularQuery, [
+      ...params,
       ...params,
       limit,
       offset,
     ]);
 
-    const countQuery = `
-      SELECT COUNT(*) AS total 
-      FROM announcements AS a
-      INNER JOIN announcement_categories AS ac ON a.category_id = ac.id
-      ${departmentJoin}
-      WHERE a.is_pinned = 0 ${whereString}
-    `;
-    const [countResult] = await db.execute(countQuery, params);
-
-    const totalRecords = countResult[0].total;
+    let totalRecords;
+    if (pageRows.length > 0) {
+      totalRecords = pageRows[0].total_regular;
+    } else {
+      // The count intentionally uses fewer joins than the display query, so
+      // even an empty first page needs its original count semantics.
+      const [[{ total }]] = await db.execute(countQuery, params);
+      totalRecords = total;
+    }
+    const regularRows = pageRows.map(({ total_regular, ...row }) => row);
     const totalPages = Math.ceil(totalRecords / limit);
 
     res.status(200).json({

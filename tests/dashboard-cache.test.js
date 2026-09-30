@@ -117,9 +117,11 @@ test("attendance deletion invalidates only after successful commit", async () =>
     console.log = () => {};
     for (const fail of [false, true]) {
       cache.flushAll(); seed(); failCommit = fail; const res = response();
+      cache.set("overview-hours",{path:"/eu-connect/api/internship-records/overview/i",userId:"staff",body:{}});
+      cache.set("attendance-history",{path:"/eu-connect/api/dtr/history",userId:"student",body:{}});
       cache.set("staff-hours",{path:"/eu-connect/api/internship-records/department",userId:"head",body:{}});
       await deleteDTR({ verifiedUser: { id: "alice" }, params: { dtrId: 1 } }, res);
-      assert.equal(cache.has("staff-hours"),fail);
+      assert.equal(cache.has("staff-hours"),fail);assert.equal(cache.has("attendance-history"),fail);assert.equal(cache.has("overview-hours"),fail);
       assert.equal(res.statusCode, fail ? 500 : 200); assert.equal(cache.has("alice"), fail); assert.ok(cache.has("profile"));
     }
   } finally { console.log = log; }
@@ -132,8 +134,10 @@ test("stale-shift cron clears summary caches after commit but preserves them on 
     connection.execute = async () => [[{ id: 1, internship_id: 1 }]];
     for (const fail of [false, true]) {
       cache.flushAll(); seed(); failCommit = fail;
+      cache.set("overview-hours",{path:"/eu-connect/api/internship-records/overview/i",userId:"staff",body:{}});
+      cache.set("attendance-history",{path:"/eu-connect/api/dtr/history",userId:"student",body:{}});
       cache.set("staff-hours",{path:"/eu-connect/api/internship-records/department",userId:"head",body:{}});
-      await autoCloseStaleShifts(); assert.equal(cache.has("staff-hours"),fail); assert.equal(cache.has("alice"), fail); assert.ok(cache.has("profile"));
+      await autoCloseStaleShifts(); assert.equal(cache.has("staff-hours"),fail);assert.equal(cache.has("attendance-history"),fail);assert.equal(cache.has("overview-hours"),fail); assert.equal(cache.has("alice"), fail); assert.ok(cache.has("profile"));
     }
   } finally { console.log = log; console.error = error; }
 });

@@ -25,10 +25,14 @@ beforeEach(() => {
     async beginTransaction() {}, async commit() {}, async rollback() {}, release() {},
     async execute(sql, params = []) {
       queries++;
-      if (sql.includes("COUNT(*)")) return [[{ total: 1 }]];
-      if (sql.includes("DISTINCT")) return [[]];
+      if (sql.trim().startsWith("SELECT COUNT(*) AS total")) return [[{ total: 1 }]];
+      if (sql.includes("UNION ALL")) return [[
+        { filter_type: "action", filter_value: "created" },
+        { filter_type: "actor_role", filter_value: "student" },
+        { filter_type: "target_type", filter_value: "internship" },
+      ]];
       if (sql.includes("FOR UPDATE")) return [[{ id: 1, actor_id: "alice" }]];
-      if (sql.trim().startsWith("SELECT")) return [[{ id: 1, actor_id: params[0] || "alice", description: "activity" }]];
+      if (sql.trim().startsWith("SELECT")) return [[{ id: 1, actor_id: sql.includes("WHERE actor_id") ? params[0] : "alice", description: "activity", total_logs: 1 }]];
       return [{ affectedRows: 1 }];
     },
   };
@@ -60,27 +64,27 @@ function response() {
 test("personal log route caches reads and isolates users and pages", async (t) => {
   const get = await client(t);
   assert.equal((await get(base + "/mine?page=1")).status, 200);
-  assert.equal(queries, 2);
+  assert.equal(queries, 1);
   assert.equal((await get(base + "/mine?page=1")).status, 200);
-  assert.equal(queries, 2);
+  assert.equal(queries, 1);
   const bob = await (await get(base + "/mine?page=1", "bob")).json();
   assert.equal(bob.data[0].actor_id, "bob");
-  assert.equal(queries, 4);
+  assert.equal(queries, 2);
   await get(base + "/mine?page=2");
-  assert.equal(queries, 6);
+  assert.equal(queries, 3);
 });
 
 test("admin log route caches filters but still enforces authentication and role", async (t) => {
   const get = await client(t);
   await get(base + "?action=created", "admin", "admin");
-  assert.equal(queries, 5);
+  assert.equal(queries, 2);
   await get(base + "?action=created", "admin", "admin");
-  assert.equal(queries, 5);
+  assert.equal(queries, 2);
   assert.equal((await get(base + "?action=created", "admin", "student")).status, 403);
   assert.equal((await get(base + "?action=created", null)).status, 401);
-  assert.equal(queries, 5);
+  assert.equal(queries, 2);
   await get(base + "?action=deleted", "admin", "admin");
-  assert.equal(queries, 10);
+  assert.equal(queries, 4);
 });
 
 test("committed log deletion clears both views and leaves unrelated caches", async (t) => {
@@ -121,7 +125,7 @@ test("invalidation refreshes subsequent reads; errors never populate cache", asy
   await get(base + "/mine");
   invalidateActivityLogsCache();
   await get(base + "/mine");
-  assert.equal(queries, 4);
+  assert.equal(queries, 2);
   cache.flushAll();
   const execute = connection.execute;
   const log = console.error;

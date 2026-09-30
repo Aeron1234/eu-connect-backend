@@ -32,10 +32,10 @@ beforeEach(() => {
       calls++;
       if (mode === "read-error") throw new Error("offline");
       if (!sql.trim().startsWith("SELECT")) return [{ affectedRows: 1, insertId: 1 }];
-      if (mode === "empty") return sql.includes("COUNT(") ? [[{ total: 0 }]] : [[]];
+      if (mode === "empty") return sql.includes("COUNT(DISTINCT") ? [[{ total: 0 }]] : [[]];
       if (sql.includes("SELECT DISTINCT academic_year")) return [[{ academic_year: "2025-2026" }]];
       if (sql.includes("COUNT(DISTINCT")) return [[{ total: 1 }]];
-      if (sql.includes("AS normalized_name")) return [[{ normalized_name: "company", company_name: "Company" }]];
+      if (sql.includes("AS normalized_name")) return mode === "out-of-range" ? [[]] : [[{ normalized_name: "company", company_name: "Company", total: 1 }]];
       if (sql.includes("SELECT air.id, air.alumni_name")) return [[{ id: "a", company_name: "Company", company_address: "City", industry: "IT", alumni_name: "Graduate", course_id: 1, course_name: "Computing", academic_year: "2025-2026", department_id: 1 }]];
       if (sql.includes("SELECT ir.company_name, c.course_name")) return [[{ company_name: "Company", course_name: "Computing" }]];
       if (sql.includes("SELECT air.company_name, c.course_name")) return [[{ company_name: " company ", course_name: "Business" }]];
@@ -88,14 +88,37 @@ test("alumni grouping and merged directory cache for sixty seconds", async (t) =
 test("year/search/page/limit and user/context keys remain separate with role checks", async (t) => {
   const get = await client(t);
   for (const query of ["", "?academicYear=2025-2026", "?search=Company", "?page=2", "?limit=20"]) {
-    const before = calls; assert.equal((await get("alumni-internships" + query)).status, 200); assert.equal(calls, before + 4);
-    await get("alumni-internships" + query); assert.equal(calls, before + 4);
+    const before = calls; assert.equal((await get("alumni-internships" + query)).status, 200); assert.equal(calls, before + 3);
+    await get("alumni-internships" + query); assert.equal(calls, before + 3);
   }
-  let before = calls; await get("alumni-internships", "student", "other"); assert.equal(calls, before + 4);
-  before = calls; await get("alumni-internships", "student", "viewer", 2); assert.equal(calls, before + 4);
+  let before = calls; await get("alumni-internships", "student", "other"); assert.equal(calls, before + 3);
+  before = calls; await get("alumni-internships", "student", "viewer", 2); assert.equal(calls, before + 3);
   for (const path of ["alumni-internships", "company-directory"]) {
     assert.equal((await get(path, "employer")).status, 403); assert.equal((await get(path, "student", null)).status, 401);
   }
+});
+
+test("group page carries its total and empty out-of-range pages count without loading rows", async (t) => {
+  const get = await client(t);
+  const queries = [];
+  const execute = connection.execute;
+  connection.execute = async (sql, params) => { queries.push({ sql, params }); return execute(sql, params); };
+  const first = await (await get("alumni-internships?search=Company&limit=5")).json();
+  assert.equal(first.pagination.total, 1);
+  assert.equal(first.pagination.totalPages, 1);
+  assert.equal(queries.length, 3);
+  assert.match(queries[1].sql, /COUNT\(\*\) OVER\(\) AS total/);
+  assert.ok(!queries.some(({ sql }) => sql.includes("COUNT(DISTINCT")));
+  assert.deepEqual(queries[1].params.slice(-2), [5, 0]);
+
+  queries.length = 0;
+  mode = "out-of-range";
+  const beyond = await (await get("alumni-internships?page=3&limit=5")).json();
+  assert.deepEqual(beyond.data, []);
+  assert.deepEqual(beyond.pagination, { page: 3, limit: 5, total: 1, totalPages: 1 });
+  assert.equal(queries.length, 3);
+  assert.ok(queries[2].sql.includes("COUNT(DISTINCT"));
+  assert.ok(!queries.some(({ sql }) => sql.includes("SELECT air.id, air.alumni_name")));
 });
 
 test("manual alumni writes clear every page of both views only after commit", async () => {
@@ -174,7 +197,13 @@ test("past internship caches clear after all lifecycle commits and survive rollb
 test("staff lists invalidate for lifecycle commits and survive rollback",async()=>{
 const error=console.error,log=console.log;console.error=()=>{};console.log=()=>{};
 try{for(const failed of [false,true])for(const [name,role,state]of lifecycle){cache.flushAll();seed();status=state;mode=failed?"commit-failure":"success";
-for(const path of ["internship-records/department","internships/all","internships/active/all","searched-user/files/student"])cache.set(path,{path:base+path,userId:"viewer",body:[]});
+for(const path of ["internship-records/department","internships/all","internships/active/all","searched-user/files/student","student-past-evaluations/student","searched-user/weekly-narratives/student","searched-user/student","internship-records/overview/i","searched-user/dtrs/student"])cache.set(path,{path:base+path,userId:"viewer",body:[]});
 const res=response();await internships[name](request(role),res);assert.ok(failed?res.statusCode===500:res.statusCode<300);
-for(const path of ["internship-records/department","internships/all","internships/active/all","searched-user/files/student"])assert.equal(cache.has(path),failed);
+for(const path of ["internship-records/department","internships/all","internships/active/all","searched-user/files/student","student-past-evaluations/student","searched-user/weekly-narratives/student","searched-user/student","internship-records/overview/i","searched-user/dtrs/student"])assert.equal(cache.has(path),failed);
 }}finally{console.error=error;console.log=log;}});
+
+test("forced completion logs the student full name and preserves student ID metadata",async()=>{
+ seed();const execute=connection.execute;let description,metadata;
+ connection.execute=async(sql,params)=>{if(sql.includes("INSERT INTO activity_logs")&&params[2]==="internship_record_force_finished"){description=params[5];metadata=JSON.parse(params[6]);}return execute(sql,params);};
+ const res=response();await internships.markInternshipFinished(request("admin"),res);assert.ok(res.statusCode<300);assert.ok(description.includes("student: Test User"));assert.equal(metadata.student_id,"student");
+});

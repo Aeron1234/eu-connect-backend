@@ -10,54 +10,31 @@ export const getStudentDashboardStats = async (req, res) => {
     connection = await db.getConnection();
     const { id: userId } = req.verifiedUser;
 
-    // 2. Execute all count queries concurrently using the same connection instance
-    const [
-      [internshipResult],
-      [announcementResult],
-      [evaluationResult],
-      [documentResult],
-    ] = await Promise.all([
-      // Unread Announcements Count
-      connection.execute(
-        `SELECT COUNT(*) AS count 
-         FROM internship_favorites 
-         WHERE student_id = ? AND favorited_at IS NOT NULL`,
-        [userId],
-      ),
-      // Unread Announcements Count
-      connection.execute(
-        `SELECT COUNT(*) AS count 
-         FROM notifications 
-         WHERE user_id = ? AND type = 'announcement' AND is_read = 0`,
-        [userId],
-      ),
-
-      // Pending Evaluations Count
-      connection.execute(
-        `SELECT COUNT(*) AS count 
-         FROM student_evaluation_masters AS sem
-         INNER JOIN internship_records AS ir ON sem.internship_record_id = ir.id
-         WHERE ir.user_id = ? AND sem.status = 'pending'`,
-        [userId],
-      ),
-
-      // Total Stored Documents Count
-      connection.execute(
-        `SELECT COUNT(*) AS count 
-         FROM internship_documents 
-         WHERE user_id = ?`,
-        [userId],
-      ),
-    ]);
+    // Independent scalar counts keep each table's original filter while using
+    // one database statement instead of four queued commands.
+    const [[counts]] = await connection.execute(
+      `SELECT
+         (SELECT COUNT(*) FROM internship_favorites
+          WHERE student_id = ? AND favorited_at IS NOT NULL) AS favorite_count,
+         (SELECT COUNT(*) FROM notifications
+          WHERE user_id = ? AND type = 'announcement' AND is_read = 0) AS announcement_count,
+         (SELECT COUNT(*)
+          FROM student_evaluation_masters AS sem
+          INNER JOIN internship_records AS ir ON sem.internship_record_id = ir.id
+          WHERE ir.user_id = ? AND sem.status = 'pending') AS evaluation_count,
+         (SELECT COUNT(*) FROM internship_documents
+          WHERE user_id = ?) AS document_count`,
+      [userId, userId, userId, userId],
+    );
 
     // 3. Send back the aggregated metrics
     res.status(200).json({
       success: true,
       stats: {
-        favoriteInternships: internshipResult[0].count || 0, // Placeholder for later implementation
-        unreadAnnouncements: announcementResult[0].count || 0,
-        pendingEvaluations: evaluationResult[0].count || 0,
-        documentsStored: documentResult[0].count || 0,
+        favoriteInternships: counts.favorite_count || 0,
+        unreadAnnouncements: counts.announcement_count || 0,
+        pendingEvaluations: counts.evaluation_count || 0,
+        documentsStored: counts.document_count || 0,
       },
     });
   } catch (error) {
@@ -108,7 +85,8 @@ export const getStudentDashboardData = async (req, res) => {
         const [todayRows] = await connection.execute(
           `SELECT id, clock_in, clock_out, created_at, status 
            FROM daily_time_records 
-           WHERE user_id = ? AND DATE(created_at) = CURDATE() AND internship_id = ?
+           WHERE user_id = ? AND created_at >= CURDATE()
+             AND created_at < CURDATE() + INTERVAL 1 DAY AND internship_id = ?
            LIMIT 1`,
           [userId, internshipId],
         );
@@ -222,55 +200,37 @@ export const getEmployerDashboardStats = async (req, res) => {
     connection = await db.getConnection();
     const { id: employerId } = req.verifiedUser;
 
-    const [
-      [postingsResult],
-      [announcementResult],
-      [currentInternsResult],
-      [pastInternsResult],
-      [documentResult],
-    ] = await Promise.all([
-      connection.execute(
-        `SELECT COUNT(*) AS count 
-         FROM internship_postings 
-         WHERE employer_id = ? AND deleted_at IS NULL`,
-        [employerId],
-      ),
-      connection.execute(
-        `SELECT COUNT(*) AS count 
-         FROM notifications 
-         WHERE user_id = ? AND type = 'announcement' AND is_read = 0`,
-        [employerId],
-      ),
-      connection.execute(
-        `SELECT COUNT(*) AS count 
-         FROM internship_records 
-         WHERE employer_id = ? AND status = 'ongoing'`,
-        [employerId],
-      ),
-      connection.execute(
-        `SELECT COUNT(*) AS count 
-         FROM internship_records 
-         WHERE employer_id = ? AND status = 'finished'`,
-        [employerId],
-      ),
-      connection.execute(
-        `SELECT COUNT(*) AS count 
-         FROM internship_documents 
-         WHERE uploaded_by_id = ? AND uploaded_by_role = 'employer'`,
-        [employerId],
-      ),
-    ]);
+    // Count both intern states in one employer-scoped scan. The other counters
+    // are independent scalar subqueries in the same statement.
+    const [[counts]] = await connection.execute(
+      `SELECT
+         (SELECT COUNT(*) FROM internship_postings
+          WHERE employer_id = ? AND deleted_at IS NULL) AS posting_count,
+         (SELECT COUNT(*) FROM notifications
+          WHERE user_id = ? AND type = 'announcement' AND is_read = 0) AS announcement_count,
+         intern_counts.ongoing_count,
+         intern_counts.finished_count,
+         (SELECT COUNT(*) FROM internship_documents
+          WHERE uploaded_by_id = ? AND uploaded_by_role = 'employer') AS document_count
+       FROM (
+         SELECT COUNT(CASE WHEN status = 'ongoing' THEN 1 END) AS ongoing_count,
+                COUNT(CASE WHEN status = 'finished' THEN 1 END) AS finished_count
+         FROM internship_records
+         WHERE employer_id = ? AND status IN ('ongoing', 'finished')
+       ) AS intern_counts`,
+      [employerId, employerId, employerId, employerId],
+    );
 
     res.status(200).json({
       success: true,
       stats: {
-        internshipPosts: postingsResult[0].count || 0,
-        unreadAnnouncements: announcementResult[0].count || 0,
+        internshipPosts: counts.posting_count || 0,
+        unreadAnnouncements: counts.announcement_count || 0,
         internsHandled: {
-          current: currentInternsResult[0].count || 0,
-          past: pastInternsResult[0].count || 0,
+          current: counts.ongoing_count || 0,
+          past: counts.finished_count || 0,
         },
-        documentsUploaded: documentResult[0].count || 0,
+        documentsUploaded: counts.document_count || 0,
       },
     });
   } catch (error) {
@@ -284,8 +244,7 @@ export const getEmployerDashboardStats = async (req, res) => {
   }
 };
 
-// Consolidated — everything else for the employer dashboard's main page.js,
-// in one round trip. Stats deliberately excluded (see getEmployerDashboardStats).
+// Employer dashboard data; stats stay on getEmployerDashboardStats.
 export const getEmployerDashboardData = async (req, res) => {
   let connection;
   try {
@@ -333,21 +292,18 @@ export const getEmployerDashboardData = async (req, res) => {
     try {
       const limit = 5;
       const [jobRows] = await connection.execute(
-        `SELECT id, position, location, work_type, vacancies, status, created_at
+        `SELECT id, position, location, work_type, vacancies, status, created_at,
+                (SELECT COUNT(*) FROM internship_postings
+                 WHERE employer_id = ? AND deleted_at IS NULL) AS total_postings
          FROM internship_postings
          WHERE employer_id = ? AND deleted_at IS NULL
          ORDER BY created_at DESC
          LIMIT ?`,
-        [employerId, limit],
+        [employerId, employerId, limit],
       );
-      const [[countRow]] = await connection.execute(
-        `SELECT COUNT(*) AS total
-         FROM internship_postings
-         WHERE employer_id = ? AND deleted_at IS NULL`,
-        [employerId],
-      );
-      postedJobs = jobRows;
-      postedJobsTotalPages = Math.ceil((countRow.total || 0) / limit);
+      // This is always the first page, so no rows means the total is zero.
+      postedJobsTotalPages = Math.ceil((jobRows[0]?.total_postings || 0) / limit);
+      postedJobs = jobRows.map(({ total_postings, ...job }) => job);
     } catch (err) {
       res.locals.skipCache = true;
       console.error("getEmployerDashboardData: posted jobs query failed:", err);
@@ -392,26 +348,30 @@ export const getPostedJobs = async (req, res) => {
          work_type,
          vacancies,
          status,
-         created_at
+         created_at,
+         (SELECT COUNT(*) FROM internship_postings
+          WHERE employer_id = ? AND deleted_at IS NULL) AS total_records
        FROM internship_postings
        WHERE employer_id = ? AND deleted_at IS NULL
        ORDER BY created_at DESC
        LIMIT ? OFFSET ?`,
-      [employerId, limit, offset],
+      [employerId, employerId, limit, offset],
     );
 
-    const [countResult] = await connection.execute(
-      `SELECT COUNT(*) AS total
-       FROM internship_postings
-       WHERE employer_id = ? AND deleted_at IS NULL`,
-      [employerId],
-    );
-
-    const totalRecords = countResult[0].total;
+    let totalRecords = jobs[0]?.total_records ?? 0;
+    if (jobs.length === 0 && page > 1) {
+      const [[{ total }]] = await connection.execute(
+        `SELECT COUNT(*) AS total
+         FROM internship_postings
+         WHERE employer_id = ? AND deleted_at IS NULL`,
+        [employerId],
+      );
+      totalRecords = total;
+    }
     const totalPages = Math.ceil(totalRecords / limit);
 
     return res.status(200).json({
-      jobs,
+      jobs: jobs.map(({ total_records, ...job }) => job),
       totalPages,
       totalRecords,
       currentPage: page,
@@ -440,47 +400,17 @@ export const getDepartmentHeadDashboardStats = async (req, res) => {
     }
 
     const [
-      [ongoingResult],
-      [pendingResult],
-      [internshipRecordsResult],
+      [internshipCountsResult],
       [manualAlumniResult],
       [announcementResult],
     ] = await Promise.all([
       connection.execute(
-        `SELECT COUNT(*) AS count
+        `SELECT COUNT(*) AS total_count,
+                COUNT(CASE WHEN ir.status = 'ongoing' THEN 1 END) AS ongoing_count,
+                COUNT(CASE WHEN ir.status = 'pending' THEN 1 END) AS pending_count
          FROM internship_records ir
          INNER JOIN (
-           SELECT sai1.*
-           FROM student_academic_info AS sai1
-           INNER JOIN (
-             SELECT user_id, MAX(id) AS max_id
-             FROM student_academic_info
-             GROUP BY user_id
-           ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
-         ) AS sai ON ir.user_id = sai.user_id
-         WHERE sai.department_id = ? AND ir.status = 'ongoing'`,
-        [departmentId],
-      ),
-      connection.execute(
-        `SELECT COUNT(*) AS count
-         FROM internship_records ir
-         INNER JOIN (
-           SELECT sai1.*
-           FROM student_academic_info AS sai1
-           INNER JOIN (
-             SELECT user_id, MAX(id) AS max_id
-             FROM student_academic_info
-             GROUP BY user_id
-           ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
-         ) AS sai ON ir.user_id = sai.user_id
-         WHERE sai.department_id = ? AND ir.status = 'pending'`,
-        [departmentId],
-      ),
-      connection.execute(
-        `SELECT COUNT(*) AS count
-         FROM internship_records ir
-         INNER JOIN (
-           SELECT sai1.*
+           SELECT sai1.user_id, sai1.department_id
            FROM student_academic_info AS sai1
            INNER JOIN (
              SELECT user_id, MAX(id) AS max_id
@@ -506,15 +436,15 @@ export const getDepartmentHeadDashboardStats = async (req, res) => {
     ]);
 
     const internshipRecordsCount =
-      (internshipRecordsResult[0].count || 0) +
+      (internshipCountsResult[0].total_count || 0) +
       (manualAlumniResult[0].count || 0);
 
     res.status(200).json({
       success: true,
       stats: {
-        ongoingInternships: ongoingResult[0].count || 0,
+        ongoingInternships: internshipCountsResult[0].ongoing_count || 0,
         internshipRecords: internshipRecordsCount,
-        pendingResponses: pendingResult[0].count || 0,
+        pendingResponses: internshipCountsResult[0].pending_count || 0,
         unreadAnnouncements: announcementResult[0].count || 0,
       },
     });
@@ -556,7 +486,7 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
            COUNT(ir.id) AS interns
          FROM internship_records ir
          INNER JOIN (
-           SELECT sai1.*
+           SELECT sai1.user_id, sai1.department_id, sai1.course_id
            FROM student_academic_info AS sai1
            INNER JOIN (
              SELECT user_id, MAX(id) AS max_id
@@ -590,7 +520,7 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
          INNER JOIN student_evaluation_masters sem ON sem.id = ses.evaluation_master_id
          INNER JOIN internship_records ir ON ir.id = sem.internship_record_id
          INNER JOIN (
-           SELECT sai1.*
+           SELECT sai1.user_id, sai1.department_id, sai1.course_id
            FROM student_academic_info AS sai1
            INNER JOIN (
              SELECT user_id, MAX(id) AS max_id
@@ -625,7 +555,7 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
          INNER JOIN employer_evaluation_criteria eec ON eec.id = ees.criterion_id
          INNER JOIN employer_evaluation_masters eem ON eem.id = ees.evaluation_master_id
          INNER JOIN (
-           SELECT sai1.*
+           SELECT sai1.user_id, sai1.department_id, sai1.course_id
            FROM student_academic_info AS sai1
            INNER JOIN (
              SELECT user_id, MAX(id) AS max_id
@@ -666,7 +596,7 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
            c.short_name AS course
          FROM internship_records ir
          INNER JOIN (
-           SELECT sai1.*
+           SELECT sai1.user_id, sai1.department_id, sai1.course_id
            FROM student_academic_info AS sai1
            INNER JOIN (
              SELECT user_id, MAX(id) AS max_id
@@ -719,7 +649,7 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
         `SELECT DISTINCT YEAR(dtr.clock_in) AS year, MONTH(dtr.clock_in) AS month
          FROM daily_time_records dtr
          INNER JOIN (
-           SELECT sai1.*
+           SELECT sai1.user_id, sai1.department_id, sai1.course_id
            FROM student_academic_info AS sai1
            INNER JOIN (
              SELECT user_id, MAX(id) AS max_id
@@ -796,7 +726,7 @@ export const getAverageShiftHoursByWeek = async (req, res) => {
       `SELECT dtr.clock_in, dtr.total_hours
        FROM daily_time_records dtr
        INNER JOIN (
-         SELECT sai1.*
+         SELECT sai1.user_id, sai1.department_id
          FROM student_academic_info AS sai1
          INNER JOIN (
            SELECT user_id, MAX(id) AS max_id
@@ -823,13 +753,14 @@ export const getAverageShiftHoursByWeek = async (req, res) => {
       cursor.setUTCDate(cursor.getUTCDate() + 7);
     }
 
+    const weekMilliseconds = 7 * 24 * 60 * 60 * 1000;
+    const rangeStartMilliseconds = rangeStart.getTime();
     for (const row of rows) {
       const clockIn = new Date(row.clock_in);
-      const bucket = weeks.find(
-        (w) =>
-          clockIn >= w.start &&
-          clockIn < new Date(w.end.getTime() + 24 * 60 * 60 * 1000),
+      const weekIndex = Math.floor(
+        (clockIn.getTime() - rangeStartMilliseconds) / weekMilliseconds,
       );
+      const bucket = weeks[weekIndex];
       if (bucket) {
         bucket.hoursSum += Number(row.total_hours) || 0;
         bucket.count += 1;
@@ -864,41 +795,26 @@ export const getAdminDashboardStats = async (req, res) => {
   try {
     connection = await db.getConnection();
 
-    const [
-      [ongoingResult],
-      [employersResult],
-      [studentsResult],
-      [inactiveSuspendedResult],
-    ] = await Promise.all([
-      connection.execute(
-        `SELECT COUNT(*) AS count FROM internship_records WHERE status = 'ongoing'`,
-      ),
-      connection.execute(
-        `SELECT COUNT(*) AS count 
-         FROM users u
-         INNER JOIN roles r ON r.id = u.role_id
-         WHERE r.role = 'employer'`,
-      ),
-      connection.execute(
-        `SELECT COUNT(*) AS count 
-         FROM users u
-         INNER JOIN roles r ON r.id = u.role_id
-         WHERE r.role = 'student'`,
-      ),
-      connection.execute(
-        `SELECT COUNT(*) AS count 
-         FROM users 
-         WHERE status IN ('inactive', 'suspended')`,
-      ),
-    ]);
+    // The left join keeps inactive/suspended users in the count even if their
+    // role row is absent; the role counters still require a matching role.
+    const [[counts]] = await connection.execute(
+      `SELECT
+         (SELECT COUNT(*) FROM internship_records
+          WHERE status = 'ongoing') AS ongoing_count,
+         COUNT(CASE WHEN r.role = 'employer' THEN 1 END) AS employer_count,
+         COUNT(CASE WHEN r.role = 'student' THEN 1 END) AS student_count,
+         COUNT(CASE WHEN u.status IN ('inactive', 'suspended') THEN 1 END) AS inactive_count
+       FROM users u
+       LEFT JOIN roles r ON r.id = u.role_id`,
+    );
 
     res.status(200).json({
       success: true,
       stats: {
-        ongoingInternships: ongoingResult[0].count || 0,
-        employers: employersResult[0].count || 0,
-        students: studentsResult[0].count || 0,
-        inactiveOrSuspended: inactiveSuspendedResult[0].count || 0,
+        ongoingInternships: counts.ongoing_count || 0,
+        employers: counts.employer_count || 0,
+        students: counts.student_count || 0,
+        inactiveOrSuspended: counts.inactive_count || 0,
       },
     });
   } catch (error) {
@@ -912,8 +828,8 @@ export const getAdminDashboardStats = async (req, res) => {
   }
 };
 
-// Consolidated — everything except stats, in one round trip. Each section
-// wrapped independently so one bad query doesn't take down the rest.
+// Admin dashboard sections stay independent so one failed query does not
+// discard the others.
 export const getAdminDashboardData = async (req, res) => {
   let connection;
   try {
@@ -1001,7 +917,7 @@ export const getAdminDashboardData = async (req, res) => {
            COUNT(ir.id) AS interns
          FROM internship_records ir
          INNER JOIN (
-           SELECT sai1.*
+           SELECT sai1.user_id, sai1.department_id
            FROM student_academic_info AS sai1
            INNER JOIN (
              SELECT user_id, MAX(id) AS max_id

@@ -46,6 +46,7 @@ studentEvaluationRoutes.get(
   verifyUser,
   verifyRole(["student", "employer", "department_head", "admin"]),
   generalLimiter,
+  cacheRoute(30),
   getPastStudentEvaluations,
 );
 
@@ -86,6 +87,7 @@ studentEvaluationRoutes.get(
   verifyUser,
   verifyRole(["student"]),
   generalLimiter,
+  cacheRoute(30),
   getDisputedStudentEvaluations,
 );
 
@@ -94,6 +96,7 @@ studentEvaluationRoutes.get(
   verifyUser,
   verifyRole(["student"]),
   generalLimiter,
+  cacheRoute(30),
   getAllStudentEvaluations,
 );
 

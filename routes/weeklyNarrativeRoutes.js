@@ -1,3 +1,4 @@
+import { cacheRoute } from "../middleware/cache-middleware.js";
 import express from "express";
 import multer from "multer";
 import { verifyUser } from "../middleware/verifyUser.js";
@@ -26,6 +27,7 @@ weeklyNarrativeRoutes.get(
   verifyUser,
   verifyRole(["student", "employer", "department_head", "admin"]),
   paginationLimiter,
+  cacheRoute(30),
   getAllWeeklyNarratives,
 );
 
@@ -59,6 +61,7 @@ weeklyNarrativeRoutes.get(
   verifyUser,
   verifyRole(["employer", "department_head", "admin"]),
   generalLimiter,
+  cacheRoute(30),
   getSearchedStudentWeeklyNarratives,
 );
 

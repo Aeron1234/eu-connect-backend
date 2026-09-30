@@ -9,6 +9,18 @@ import {
   verifyRecordAccess,
 } from "../config/helpers.js";
 
+// The view derives YYYY-YYYY+1 from date_started and semester. Every matching
+// record starts in one of those two calendar years, so this broad range lets
+// the existing (status, deleted_at, date_started) index prune other years.
+// Keep the view's exact academic_year predicate for its semester rules.
+const getHteDateBounds = (academicYear) => {
+  const firstYear = Number(String(academicYear).slice(0, 4));
+  if (!Number.isInteger(firstYear) || firstYear < 1000 || firstYear > 9997) {
+    return [];
+  }
+  return [`${firstYear}-01-01`, `${firstYear + 2}-01-01`];
+};
+
 export const getAvailableAcademicYears = async (req, res) => {
   let connection;
   try {
@@ -60,6 +72,11 @@ export const getHteCompanyList = async (req, res) => {
       });
     }
 
+    const dateBounds = getHteDateBounds(academicYear);
+    const dateCondition = dateBounds.length
+      ? "AND ir.date_started >= ? AND ir.date_started < ?"
+      : "";
+
     if (reportCacheHit(req, res)) return;
 
     // --- Single-company detail mode (still used by PDF export re-fetch, if kept) ---
@@ -85,9 +102,10 @@ export const getHteCompanyList = async (req, res) => {
          WHERE ir.deleted_at IS NULL
            AND ir.status IN ('ongoing', 'finished')
            AND ir.academic_year = ?
+           ${dateCondition}
            AND MD5(CONCAT(ROUND(ir.lat, 5), '_', ROUND(ir.lon, 5), '_', LOWER(TRIM(ir.company_name)))) = ?
          ORDER BY up.last_name ASC`,
-        [academicYear, companyKey],
+        [academicYear, ...dateBounds, companyKey],
       );
 
       if (rows.length === 0) {
@@ -121,6 +139,10 @@ export const getHteCompanyList = async (req, res) => {
       "ir.academic_year = ?",
     ];
     const params = [academicYear];
+    if (dateBounds.length) {
+      conditions.push("ir.date_started >= ?", "ir.date_started < ?");
+      params.push(...dateBounds);
+    }
 
     if (search) {
       conditions.push(
@@ -203,9 +225,10 @@ export const getHteCompanyList = async (req, res) => {
        WHERE ir.deleted_at IS NULL
          AND ir.status IN ('ongoing', 'finished')
          AND ir.academic_year = ?
+         ${dateCondition}
          AND MD5(CONCAT(ROUND(ir.lat, 5), '_', ROUND(ir.lon, 5), '_', LOWER(TRIM(ir.company_name)))) IN (${keyPlaceholders})
        ORDER BY up.last_name ASC`,
-      [academicYear, ...companyKeys],
+      [academicYear, ...dateBounds, ...companyKeys],
     );
 
     const internsByCompany = {};
@@ -260,6 +283,11 @@ export const getHteCompanyReport = async (req, res) => {
       return res.status(400).json({ error: "companyKey is required." });
     }
 
+    const dateBounds = getHteDateBounds(academicYear);
+    const dateCondition = dateBounds.length
+      ? "AND ir.date_started >= ? AND ir.date_started < ?"
+      : "";
+
     connection = await db.getConnection();
 
     const authorized = await isRegistrarHeadOrAdmin(
@@ -296,9 +324,10 @@ export const getHteCompanyReport = async (req, res) => {
        WHERE ir.deleted_at IS NULL
          AND ir.status IN ('ongoing', 'finished')
          AND ir.academic_year = ?
+         ${dateCondition}
          AND MD5(CONCAT(ROUND(ir.lat, 5), '_', ROUND(ir.lon, 5), '_', LOWER(TRIM(ir.company_name)))) = ?
        ORDER BY up.last_name ASC`,
-      [academicYear, companyKey],
+      [academicYear, ...dateBounds, companyKey],
     );
 
     if (rows.length === 0) {
@@ -372,27 +401,34 @@ export const getProgramAnnualReports = async (req, res) => {
 
     const whereClause = conditions.join(" AND ");
 
-    const [[{ total }]] = await connection.execute(
-      `SELECT COUNT(*) AS total FROM program_annual_reports WHERE ${whereClause}`,
-      params,
-    );
-
-    if (total === 0) {
-      return res.status(200).json({
-        academicYear,
-        reports: [],
-        pagination: { page: pageNum, limit: pageSize, total: 0, totalPages: 0 },
-      });
-    }
-
     const [reports] = await connection.execute(
-      `SELECT id, academic_year, degree_program, status, prepared_by, certified_by, submitted_at, updated_at
+      `SELECT id, academic_year, degree_program, status, prepared_by, certified_by, submitted_at, updated_at,
+              (SELECT COUNT(*) FROM program_annual_reports counted WHERE ${whereClause}) AS total_reports
        FROM program_annual_reports
        WHERE ${whereClause}
        ORDER BY degree_program ASC
        LIMIT ? OFFSET ?`,
-      [...params, pageSize, offset],
+      [...params, ...params, pageSize, offset],
     );
+
+    if (reports.length === 0) {
+      const [[{ total }]] = await connection.execute(
+        `SELECT COUNT(*) AS total FROM program_annual_reports WHERE ${whereClause}`,
+        params,
+      );
+      return res.status(200).json({
+        academicYear,
+        reports: [],
+        pagination: {
+          page: pageNum,
+          limit: pageSize,
+          total,
+          totalPages: Math.ceil(total / pageSize),
+        },
+      });
+    }
+
+    const total = reports[0].total_reports;
 
     const reportIds = reports.map((r) => r.id);
     const placeholders = reportIds.map(() => "?").join(",");
@@ -415,9 +451,9 @@ export const getProgramAnnualReports = async (req, res) => {
       });
     });
 
-    const reportsWithEntries = reports.map((r) => ({
-      ...r,
-      entries: entriesByReport[r.id] || [],
+    const reportsWithEntries = reports.map(({ total_reports, ...report }) => ({
+      ...report,
+      entries: entriesByReport[report.id] || [],
     }));
 
     res.status(200).json({
@@ -455,6 +491,8 @@ export const getProgramAnnualReportById = async (req, res) => {
           "Only the Registrar department head or admin can access this report.",
       });
     }
+
+    if (reportCacheHit(req, res)) return;
 
     const [reportRows] = await connection.execute(
       `SELECT * FROM program_annual_reports WHERE id = ?`,

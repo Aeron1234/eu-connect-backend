@@ -56,7 +56,7 @@ accountRoutes.get(
   "/account/user",
   verifyUser,
   generalLimiter,
-  cacheRoute(60),
+  cacheRoute(300),
   getUserProfile,
 );
 

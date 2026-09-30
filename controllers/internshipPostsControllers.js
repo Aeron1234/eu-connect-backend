@@ -74,26 +74,35 @@ export const getInternshipPostings = async (req, res) => {
 
     connection = await db.getConnection();
 
-    // Total count for pagination metadata — same filters, no LIMIT
-    const [[{ total }]] = await connection.execute(
-      `SELECT COUNT(*) AS total FROM internship_postings ip WHERE ${whereClause}`,
-      params,
-    );
-
+    // Keep the page and its filtered total in one database round trip.
     const [postings] = await connection.execute(
       `SELECT 
          ip.id, ip.employer_id, ip.company_name, ip.position, ip.vacancies,
          ip.location, ip.work_type, ip.duration_hours, ip.description,
          ip.requirements, ip.contact_name, ip.contact_email, ip.contact_phone,
-         ip.contact_website, ip.status, ip.created_at, ip.updated_at
+         ip.contact_website, ip.status, ip.created_at, ip.updated_at,
+         EXISTS (
+           SELECT 1 FROM internship_favorites fav
+           WHERE fav.posting_id = ip.id AND fav.student_id = ?
+         ) AS favorite_for_requester,
+         (SELECT COUNT(*) FROM internship_postings ip WHERE ${whereClause}) AS total_postings
        FROM internship_postings ip
        WHERE ${whereClause}
        ORDER BY ip.created_at DESC
        LIMIT ? OFFSET ?`,
-      [...params, pageSize, offset],
+      [requesterId, ...params, ...params, pageSize, offset],
     );
 
     if (postings.length === 0) {
+      // Page one can only be empty when there are no matches. Later pages
+      // still need the filtered total even when their offset is out of range.
+      let total = 0;
+      if (pageNum > 1) {
+        [[{ total }]] = await connection.execute(
+          `SELECT COUNT(*) AS total FROM internship_postings ip WHERE ${whereClause}`,
+          params,
+        );
+      }
       return res.status(200).json({
         data: [],
         pagination: {
@@ -105,6 +114,7 @@ export const getInternshipPostings = async (req, res) => {
       });
     }
 
+    const total = postings[0].total_postings;
     const postingIds = postings.map((p) => p.id);
     const placeholders = postingIds.map(() => "?").join(",");
 
@@ -116,24 +126,23 @@ export const getInternshipPostings = async (req, res) => {
       postingIds,
     );
 
-    const [favorites] = await connection.execute(
-      `SELECT posting_id FROM internship_favorites
-   WHERE student_id = ? AND posting_id IN (${placeholders})`,
-      [requesterId, ...postingIds],
-    );
-    const favoritedPostingIds = new Set(favorites.map((f) => f.posting_id));
+    const coursesByPostingId = new Map();
+    for (const course of courseLinks) {
+      if (!coursesByPostingId.has(course.posting_id)) {
+        coursesByPostingId.set(course.posting_id, []);
+      }
+      coursesByPostingId.get(course.posting_id).push({
+        id: course.course_id,
+        name: course.course_name,
+        shortName: course.short_name,
+      });
+    }
 
-    const records = postings.map((posting) => ({
+    const records = postings.map(({ favorite_for_requester, total_postings, ...posting }) => ({
       ...posting,
       isOwner: posting.employer_id === requesterId,
-      isFavorited: favoritedPostingIds.has(posting.id),
-      courses: courseLinks
-        .filter((c) => c.posting_id === posting.id)
-        .map((c) => ({
-          id: c.course_id,
-          name: c.course_name,
-          shortName: c.short_name,
-        })),
+      isFavorited: Boolean(favorite_for_requester),
+      courses: coursesByPostingId.get(posting.id) ?? [],
     }));
 
     return res.status(200).json({

@@ -1,5 +1,4 @@
 import { db } from "../config/db.js";
-import { newUUID } from "../config/helpers.js";
 
 export const getStudentMap = async (req, res) => {
   let connection;
@@ -12,8 +11,11 @@ export const getStudentMap = async (req, res) => {
 
     connection = await db.getConnection();
 
-    const [rows] = await connection.execute(
-      `SELECT 
+    // mysql2's underlying prepared command streams rows in the same order and
+    // types as execute(), without retaining a second full result array.
+    const rows = connection.connection
+      .execute(
+        `SELECT 
          ir.id, ir.company_name, ir.company_address, ir.internship_position,
          ir.lat, ir.lon, ir.date_started, ir.date_ended, ir.total_hours,
          ir.accumulated_hours, ir.user_id, ir.region_id,
@@ -23,7 +25,7 @@ export const getStudentMap = async (req, res) => {
        FROM internship_records ir
        INNER JOIN user_profiles up ON ir.user_id = up.user_id
        INNER JOIN (
-         SELECT sai1.*
+         SELECT sai1.user_id, sai1.course_id
          FROM student_academic_info AS sai1
          INNER JOIN (
            SELECT user_id, MAX(id) AS max_id
@@ -35,14 +37,15 @@ export const getStudentMap = async (req, res) => {
        LEFT JOIN regions r ON ir.region_id = r.id
        WHERE ir.status = 'ongoing' AND ir.deleted_at IS NULL
        ORDER BY ir.company_name ASC`,
-    );
+      )
+      .stream({ highWaterMark: 64 });
 
     // Group by physical location + normalized company name — same company
     // at the same coordinates is one pin/card, regardless of casing
     const groups = {};
     const regionsSeen = new Map(); // id -> name, dedupe while preserving one clean name per id
 
-    rows.forEach((row) => {
+    for await (const row of rows) {
       const normalizedName = row.company_name.trim().toLowerCase();
       const key = `${Number(row.lat).toFixed(5)}_${Number(row.lon).toFixed(5)}_${normalizedName}`;
 
@@ -77,7 +80,7 @@ export const getStudentMap = async (req, res) => {
         date_started: row.date_started,
         date_ended: row.date_ended,
       });
-    });
+    }
 
     const companies = Object.values(groups).map((g) => ({
       ...g,

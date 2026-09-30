@@ -235,8 +235,7 @@ errors and empty reads. The full staged suite passes 72 tests.
 
 Four GET routes cache for 60 seconds: /reports/academic-years,
 /reports/hte-annual/companies, /reports/hte-annual/company and /reports/annex-c
-(all under /eu-connect/api). Saved /reports/annex-c/:reportId detail reads stay
-uncached. Full query strings and user/role/department context partition entries.
+(all under /eu-connect/api). Saved /reports/annex-c/:reportId details now also cache for 60 seconds. Full query strings and user/role/department context partition entries.
 
 The three Registrar-restricted controllers call reportCacheHit only AFTER their
 existing validation and database-backed isRegistrarHeadOrAdmin check. Never move
@@ -383,3 +382,161 @@ Five new tests plus existing writer/lifecycle/account test extensions cover the
 four reads, counts, TTL, isolation, current record authorization, invalidation,
 approval, errors and empty results. All 100 staged tests pass; SQL/storage are
 mocked and installation is pending. Existing single-process restrictions apply.
+
+## Historical evaluation lists and summaries
+
+Five views cache for 30 seconds under /eu-connect/api:
+/student-past-evaluations/:studentId, /evaluations/all, /evaluations/disputed,
+/evaluations/submitted and /internship-records/evaluations/:internshipId.
+Full URL, identity, role and academic context partition entries. Existing score
+aggregation, dates, status labels, reviewer fields and empty response shapes are
+preserved. Pending eligibility, current complete-evaluation and print reads remain
+uncached; criteria retain their independent five-minute cache.
+
+Record-specific summaries call evaluationHistoryCacheHit only after the existing
+verifyRecordAccess database check on every request, including hits. The searched
+past-student route retains existing role checks but has no ownership/department
+restriction in its controller. This phase does not redesign those permissions.
+Personal all/disputed/submitted lists retain identity-scoped SQL filters.
+
+invalidateEvaluationHistoryCache clears all five families for every viewer and
+query after both submission types, student-evaluation deletion, response
+(completed/disputed), restoration, and staff review commits. Internship lifecycle
+commits and profile edits also invalidate joined company/access and actor/reviewer
+data. Invalidation precedes socket delivery; failed commits preserve entries.
+Dynamic paths match exactly one target segment; print and similar paths are not
+matched. Generation advances even with no entries to prevent stale in-flight fill.
+
+Existing criterion writes create or toggle active state, while historical joins
+do not filter active state. Future criterion/category renaming or deletion must
+invalidate evaluation history; adding criteria does not alter existing scores.
+No new refresh/socket mechanism or evaluation business-rule change was added.
+
+Seven new tests cover five reads, score grouping, TTLs, viewer/target/query
+isolation, current record access, all six write handlers (including both response
+decisions), rollback, rejected writes, empty/error reads and exact invalidation.
+Existing profile/lifecycle tests also verify history invalidation. All 107 staged
+tests pass using mocked SQL; live database/performance behavior is unverified.
+This phase awaits installer application. Existing process-local limits apply.
+
+## Weekly narratives
+
+User requirement: daily narratives were dropped; school requires weekly only.
+Do not implement daily-narrative caching or restore that feature. Legacy daily
+source files still exist in this checkout; this phase does not delete them.
+
+Three GET views use a 30-second TTL under /eu-connect/api:
+/weekly-narratives/history, /searched-user/weekly-narratives/:searchedUserId,
+and /internship-records/weekly-narratives/:internshipId. Identity, authorization
+context and the full URL separate users, targets, internshipId, page and limit.
+History statistics and response shapes are unchanged. This-week statistics can
+lag the week boundary by at most the TTL; oversized narratives bypass caching.
+
+Record-specific reads call weeklyNarrativesCacheHit after verifyRecordAccess on
+every request, including hits. Searched-student reads retain the existing role
+check and ongoing/non-deleted internship filter; they do not currently verify
+supervisor or department ownership. Personal reads retain user_id filtering.
+This phase changes no existing ownership, pagination or validation business rule.
+
+invalidateWeeklyNarrativesCache clears all three views across users and filters.
+Creation and edits are autocommit writes: invalidate only after nonzero affected
+rows. Deletion invalidates only after transaction commit. All six internship
+lifecycle commits also invalidate because ongoing status and deletion affect
+searched results and record access. Zero-row writes, errors and failed commits
+preserve entries. No review endpoint exists for weekly narratives.
+
+The helper uses exact paths for personal history and one-segment dynamic target
+families; similar names and nested paths are excluded. It always advances the
+generation to prevent stale in-flight cache refill. It does not clear daily data.
+No frontend refresh/socket events were added. Single-process constraints apply.
+
+Six added mocked-database tests cover TTLs, statistics, pagination, isolation,
+current record access, all three writes, failed commits/zero-row writes, errors,
+empty results and exact invalidation. Existing lifecycle tests cover weekly
+invalidation too. All 113 staged tests pass; installation is pending. Production
+performance and live database behavior have not been verified.
+
+## Searched-user profiles and internship overviews
+
+GET /searched-user/:searchedUserId and /internship-records/overview/:internshipId
+(under /eu-connect/api) cache for 30 seconds. Keys include viewer identity, role,
+academic context and full URL, preserving viewer-specific supervision tags in
+both employer-to-student and student-to-employer directions. Profile supervision
+lookup failures retain the existing fallback response but set skipCache so partial
+results cannot be repeatedly served. Missing/error results are not cached.
+
+Overview caching runs after verifyRecordAccess on every request, including hits.
+Profiles retain existing authenticated role access without adding ownership rules.
+The overview narrative_count now counts weekly_narratives, following the user's
+weekly-only requirement; the response field name remains narrative_count.
+
+config/profileOverviewCache.js supplies invalidators for profiles, overviews,
+and both together. Account profile/avatar/activation changes, all six internship
+lifecycle commits, supervisor request/cancel/accept/reject commits, DTR commits and
+stale-shift batches clear both families. Document metadata and weekly narrative
+invalidators also clear overviews for document/narrative counts. Writes invalidate
+after success/commit; rollback preserves cache. Avatar writes are autocommit.
+These helper dependencies are intentionally broad and preserve unrelated caches.
+
+Dynamic families match exactly one target segment, leaving nested searched-user
+metadata paths untouched. Generation advances even with no entries. Future
+course/department renaming or academic reassignment must invalidate joined profile
+and overview data. Existing course/department active toggles do not change joins.
+Current overview attendance totals are cached summaries; attendance validation
+and live location endpoints are unchanged. No new frontend refresh events added.
+
+Four new tests and extensions of account/profile, supervision, lifecycle,
+attendance/cron, document and weekly tests cover TTLs, viewer isolation, current
+access, partial failures, counts and invalidation. All 117 staged tests pass;
+database and storage are mocked. Installation is pending and production performance
+has not been benchmarked. Existing single-process restrictions apply.
+
+## Historical attendance
+
+Three GET views use a 30-second TTL under /eu-connect/api: /dtr/history,
+/searched-user/dtrs/:studentId and /internship-records/dtr/:internshipId.
+cacheAttendanceHistory only stores successful results when every returned row
+has a non-null clock_out. Any open shift bypasses storage for the entire response;
+empty results remain cacheable. No SQL row filtering or pagination/count change
+was introduced. A page of closed shifts can be cached even if another page holds
+an open shift; clock-in/out invalidation keeps page boundaries and counts fresh.
+
+Today/status/location endpoints and clock-in/out validation remain uncached.
+User identity, role/context and full URL separate targets, internshipId, limit
+and offset. Record-specific reads run verifyRecordAccess before each cache lookup.
+Searched-student reads preserve existing role checks and ongoing/non-deleted
+internship filters; their controller has no supervisor/department ownership check.
+Existing access and geofence rules are not redesigned by caching.
+
+invalidateAttendanceHistoryCache clears all users/variants after clock-in,
+clock-out, deletion, automatic stale-shift batch commits and all six internship
+lifecycle commits. Failed commits preserve entries. Exact dynamic target matching
+excludes live and similarly named paths; generation always advances to prevent
+stale in-flight refill. No frontend refresh or socket mechanism was added.
+
+Six new mocked-database tests cover TTL, closed/open/empty/error results,
+pagination/isolation, current record permissions, live-route bypass, all three DTR
+writes and rollback, and geofence rejection. Existing lifecycle and cron tests also
+assert attendance invalidation. All 123 staged tests pass; installation pending.
+Live database behavior/performance is unverified. Single-process limits apply.
+
+## Saved annual report details
+
+GET /reports/annex-c/:reportId (under /eu-connect/api) now caches for 60 seconds,
+using reportCacheHit only after the controller's database-backed Registrar/admin
+access check. That check still runs on hits; revoked Registrar assignment or
+permission-query errors cannot receive cached details. Keys separate viewers,
+role/department context, report IDs and query variants. Report fields and entry
+ordering are preserved. Missing reports and read errors never populate cache.
+
+invalidateAnnualReportsCache now clears both summary and one-segment detail paths
+for all viewers after creation, update, submission or deletion commits. Existing
+save/delete hooks run before response rereads; a failed reread after commit still
+leaves entries invalidated. Failed commits preserve both summaries and details.
+Nested/export and similarly named routes are excluded. Generation advances even
+when no entries exist. No new write endpoints, permissions or schema changes.
+
+Three new tests and expanded annual write/rollback checks cover detail TTLs,
+viewer/report/query separation, current Registrar access, missing/error reads,
+post-commit invalidation and exact route matching. Full staged suite: 126 passed,
+0 failed. Database is mocked; live performance is unverified. Installation pending.

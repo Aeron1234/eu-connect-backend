@@ -1,3 +1,4 @@
+import { invalidateEvaluationHistoryCache } from "../config/evaluationHistoryCache.js";
 import { invalidateNotificationsCache } from "../config/notificationsCache.js";
 import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
 import { db } from "../config/db.js";
@@ -107,6 +108,7 @@ export const getStudentCompleteEvaluations = async (req, res) => {
 
     // 2. If an evaluation master entry exists, populate the score groupings
     if (payload.is_evaluated) {
+      const categoriesByName = new Map();
       payload.evaluation_details = {
         evaluation_id: rows[0].evaluation_master_id,
         evaluated_by: rows[0].evaluated_by,
@@ -118,9 +120,7 @@ export const getStudentCompleteEvaluations = async (req, res) => {
       rows.forEach((row) => {
         if (!row.category) return; // Guard against broken entries
 
-        let categoryGroup = payload.evaluation_details.categories.find(
-          (cat) => cat.category_name === row.category,
-        );
+        let categoryGroup = categoriesByName.get(row.category);
 
         if (!categoryGroup) {
           categoryGroup = {
@@ -128,6 +128,7 @@ export const getStudentCompleteEvaluations = async (req, res) => {
             items: [],
           };
           payload.evaluation_details.categories.push(categoryGroup);
+          categoriesByName.set(row.category, categoryGroup);
         }
 
         categoryGroup.items.push({
@@ -204,6 +205,7 @@ export const getPastStudentEvaluations = async (req, res) => {
     }
 
     const evaluationsGroup = {};
+    const categoryGroups = new Map();
 
     rows.forEach((row) => {
       const evalId = row.evaluation_id;
@@ -240,11 +242,11 @@ export const getPastStudentEvaluations = async (req, res) => {
           review_notes: row.review_notes || null,
           breakdown: [],
         };
+        categoryGroups.set(evalId, new Map());
       }
 
-      let existingCategory = evaluationsGroup[evalId].breakdown.find(
-        (b) => b.label === row.breakdown_label,
-      );
+      const categories = categoryGroups.get(evalId);
+      const existingCategory = categories.get(row.breakdown_label);
 
       const currentScore = Number(row.breakdown_score);
 
@@ -252,11 +254,13 @@ export const getPastStudentEvaluations = async (req, res) => {
         existingCategory.score += currentScore;
         existingCategory.max += POINTS_PER_CRITERION;
       } else {
-        evaluationsGroup[evalId].breakdown.push({
+        const category = {
           label: row.breakdown_label,
           score: currentScore,
           max: POINTS_PER_CRITERION,
-        });
+        };
+        evaluationsGroup[evalId].breakdown.push(category);
+        categories.set(row.breakdown_label, category);
       }
     });
 
@@ -445,6 +449,7 @@ export const createStudentEvaluation = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateEvaluationHistoryCache();
     invalidateNotificationsCache();
 
     invalidateActivityLogsCache();
@@ -700,6 +705,7 @@ export const deleteStudentEvaluation = async (req, res) => {
 
     // Commit everything once every standalone query passes safely
     await connection.commit();
+    invalidateEvaluationHistoryCache();
     invalidateNotificationsCache();
     invalidateActivityLogsCache();
 
@@ -827,6 +833,7 @@ export const respondToStudentEvaluation = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateEvaluationHistoryCache();
     invalidateNotificationsCache();
 
     invalidateActivityLogsCache();
@@ -928,6 +935,7 @@ export const restoreDisputedEvaluation = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateEvaluationHistoryCache();
     invalidateNotificationsCache();
 
     invalidateActivityLogsCache();
@@ -1027,6 +1035,7 @@ export const reviewDisputedEvaluation = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateEvaluationHistoryCache();
 
     invalidateActivityLogsCache();
 
@@ -1086,6 +1095,7 @@ export const getDisputedStudentEvaluations = async (req, res) => {
     }
 
     const evaluationsGroup = {};
+    const categoryGroups = new Map();
 
     rows.forEach((row) => {
       const evalId = row.evaluation_id;
@@ -1118,11 +1128,11 @@ export const getDisputedStudentEvaluations = async (req, res) => {
           comments: row.comments || "",
           breakdown: [],
         };
+        categoryGroups.set(evalId, new Map());
       }
 
-      let existingCategory = evaluationsGroup[evalId].breakdown.find(
-        (b) => b.label === row.breakdown_label,
-      );
+      const categories = categoryGroups.get(evalId);
+      const existingCategory = categories.get(row.breakdown_label);
 
       const currentScore = Number(row.breakdown_score);
 
@@ -1130,11 +1140,13 @@ export const getDisputedStudentEvaluations = async (req, res) => {
         existingCategory.score += currentScore;
         existingCategory.max += POINTS_PER_CRITERION;
       } else {
-        evaluationsGroup[evalId].breakdown.push({
+        const category = {
           label: row.breakdown_label,
           score: currentScore,
           max: POINTS_PER_CRITERION,
-        });
+        };
+        evaluationsGroup[evalId].breakdown.push(category);
+        categories.set(row.breakdown_label, category);
       }
     });
 
@@ -1216,6 +1228,7 @@ export const getAllStudentEvaluations = async (req, res) => {
 
     function groupRows(rows, type, actorLabel) {
       const group = {};
+      const categoryGroups = new Map();
 
       rows.forEach((row) => {
         const evalId = row.evaluation_id;
@@ -1253,11 +1266,11 @@ export const getAllStudentEvaluations = async (req, res) => {
             review_notes: row.review_notes || null,
             breakdown: [],
           };
+          categoryGroups.set(evalId, new Map());
         }
 
-        let existingCategory = group[evalId].breakdown.find(
-          (b) => b.label === row.breakdown_label,
-        );
+        const categories = categoryGroups.get(evalId);
+        const existingCategory = categories.get(row.breakdown_label);
 
         const currentScore = Number(row.breakdown_score);
 
@@ -1265,11 +1278,13 @@ export const getAllStudentEvaluations = async (req, res) => {
           existingCategory.score += currentScore;
           existingCategory.max += POINTS_PER_CRITERION;
         } else {
-          group[evalId].breakdown.push({
+          const category = {
             label: row.breakdown_label,
             score: currentScore,
             max: POINTS_PER_CRITERION,
-          });
+          };
+          group[evalId].breakdown.push(category);
+          categories.set(row.breakdown_label, category);
         }
       });
 

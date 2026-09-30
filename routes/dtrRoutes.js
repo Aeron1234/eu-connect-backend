@@ -1,3 +1,4 @@
+import { cacheAttendanceHistory } from "../middleware/attendance-history-cache.js";
 import express from "express";
 import { verifyUser } from "../middleware/verifyUser.js";
 import { verifyRole } from "../middleware/verifyRole.js";
@@ -32,6 +33,7 @@ dtrRoutes.get(
   verifyUser,
   verifyRole(["student", "employer", "department_head", "admin"]),
   paginationLimiter,
+  cacheAttendanceHistory,
   getAllDTRs,
 );
 

@@ -1,3 +1,5 @@
+import { invalidateAttendanceHistoryCache } from "./attendanceHistoryCache.js";
+import { invalidateProfileOverviewCache } from "./profileOverviewCache.js";
 import { invalidateDepartmentInternshipsCache } from "./staffInternshipsCache.js";
 import { invalidateDashboardCache } from "./dashboardCache.js";
 // jobs/autoCloseStaleShifts.js
@@ -84,6 +86,8 @@ async function closeBatch(batch) {
     }
 
     await connection.commit();
+    invalidateAttendanceHistoryCache();
+    invalidateProfileOverviewCache();
     invalidateDashboardCache();
     invalidateDepartmentInternshipsCache();
   } catch (error) {

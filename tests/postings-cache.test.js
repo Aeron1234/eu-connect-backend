@@ -28,11 +28,12 @@ beforeEach(() => {
     async execute(sql, params = []) {
       calls++;
       if (mode === "db-error") throw new Error("offline");
-      if (sql.includes("COUNT(*)")) return [[{ total: mode === "empty" ? 0 : 1 }]];
+      if (sql.trim().startsWith("SELECT COUNT(*) AS total")) return [[{ total: mode === "empty" ? 0 : 1 }]];
       if (sql.includes("SELECT id FROM courses")) return [[{ id: 1 }]];
       if (sql.includes("SELECT id FROM internship_favorites")) return [existingFavorite ? [{ id: "favorite" }] : []];
-      if (sql.includes("SELECT posting_id FROM internship_favorites")) return [params[0] === "alice" ? [{ posting_id: "p" }] : []];
       if (sql.includes("JOIN courses")) return [[{ posting_id: "p", course_id: 1, course_name: "Computing", short_name: "CS" }]];
+      if (sql.includes("AS favorite_for_requester")) return [mode === "empty" ? [] : [{ id: "p", employer_id: "owner", deleted_at: null, company_name: "Company", position: "Intern", favorite_for_requester: params[0] === "alice" ? 1 : 0, total_postings: 1 }]];
+      if (sql.includes("AS total_records")) return [mode === "empty" ? [] : [{ id: "p", position: "Intern", total_records: 1 }]];
       if (sql.trim().startsWith("SELECT")) return [mode === "empty" ? [] : [{ id: "p", employer_id: "owner", deleted_at: null, company_name: "Company", position: "Intern" }]];
       return [{ affectedRows: 1 }];
     },
@@ -71,21 +72,53 @@ test("listing caches user-specific ownership/favorites without mixing users", as
 test("all posting filters and pagination get distinct cached results", async (t) => {
   const get = await client(t);
   for (const query of ["", "?page=2", "?limit=20", "?mine=true", "?favorite=favorited", "?favorite=not_favorited", "?courseId=1", "?search=Company", "?workType=remote"]) {
-    const before = calls; await get("internship-postings" + query); assert.equal(calls, before + 4);
-    await get("internship-postings" + query); assert.equal(calls, before + 4);
+    const before = calls; await get("internship-postings" + query); assert.equal(calls, before + 2);
+    await get("internship-postings" + query); assert.equal(calls, before + 2);
   }
+});
+
+test("posting page folds favorite lookup into its SELECT without changing JSON", async (t) => {
+  const get = await client(t);
+  const queries = [];
+  const originalExecute = connection.execute;
+  connection.execute = async (sql, params = []) => {
+    queries.push({ sql, params });
+    if (sql.includes("JOIN courses")) {
+      calls++;
+      return [[
+        { posting_id: "p", course_id: 2, course_name: "Engineering", short_name: "ENG" },
+        { posting_id: "p", course_id: 1, course_name: "Computing", short_name: "CS" },
+      ]];
+    }
+    return originalExecute(sql, params);
+  };
+  const result = await (await get("internship-postings?workType=remote&search=Company&mine=true&courseId=1&favorite=favorited&page=2&limit=5")).json();
+  assert.equal(queries.length, 2);
+  const filters = ["remote", "%Company%", "%Company%", "alice", "1", "alice"];
+  assert.deepEqual(queries[0].params, ["alice", ...filters, ...filters, 5, 5]);
+  assert.deepEqual(queries[1].params, ["p"]);
+  assert.match(queries[0].sql, /EXISTS \([\s\S]*FROM internship_favorites fav[\s\S]*\) AS favorite_for_requester/);
+  assert.match(queries[0].sql, /SELECT COUNT\(\*\) FROM internship_postings ip WHERE/);
+  assert.equal(result.data[0].isFavorited, true);
+  assert.equal(result.data[0].isOwner, false);
+  assert.equal("favorite_for_requester" in result.data[0], false);
+  assert.equal("total_postings" in result.data[0], false);
+  assert.deepEqual(result.data[0].courses, [
+    { id: 2, name: "Engineering", shortName: "ENG" },
+    { id: 1, name: "Computing", shortName: "CS" },
+  ]);
 });
 
 test("posted-jobs caches per employer/page and keeps authorization checks", async (t) => {
   const get = await client(t);
-  await get("posted-jobs", "owner", "employer"); assert.equal(calls, 2);
-  await get("posted-jobs", "owner", "employer"); assert.equal(calls, 2);
+  await get("posted-jobs", "owner", "employer"); assert.equal(calls, 1);
+  await get("posted-jobs", "owner", "employer"); assert.equal(calls, 1);
   await get("posted-jobs?page=2", "owner", "employer");
-  await get("posted-jobs", "other", "employer"); assert.equal(calls, 6);
+  await get("posted-jobs", "other", "employer"); assert.equal(calls, 3);
   assert.equal((await get("posted-jobs", "owner", "student")).status, 403);
   assert.equal((await get("internship-postings", null)).status, 401);
   assert.equal((await get("internship-postings", "alice", "unknown")).status, 403);
-  assert.equal(calls, 6);
+  assert.equal(calls, 3);
 });
 
 test("creation, edits, course-only edits and deletion clear both lists for everyone", async () => {

@@ -14,19 +14,24 @@ export const getMyActivityLogs = async (req, res) => {
 
     connection = await db.getConnection();
 
-    const [[{ total }]] = await connection.execute(
-      `SELECT COUNT(*) AS total FROM activity_logs WHERE actor_id = ?`,
-      [actorId],
-    );
-
-    const [rows] = await connection.execute(
-      `SELECT id, action, target_type, target_id, description, metadata, created_at
+    const [pageRows] = await connection.execute(
+      `SELECT id, action, target_type, target_id, description, metadata, created_at,
+              (SELECT COUNT(*) FROM activity_logs WHERE actor_id = ?) AS total_logs
        FROM activity_logs
        WHERE actor_id = ?
        ORDER BY created_at DESC
        LIMIT ? OFFSET ?`,
-      [actorId, pageSize, offset],
+      [actorId, actorId, pageSize, offset],
     );
+
+    let total = pageRows[0]?.total_logs;
+    if (pageRows.length === 0) {
+      [[{ total }]] = await connection.execute(
+        `SELECT COUNT(*) AS total FROM activity_logs WHERE actor_id = ?`,
+        [actorId],
+      );
+    }
+    const rows = pageRows.map(({ total_logs, ...row }) => row);
 
     res.status(200).json({
       data: rows,
@@ -82,31 +87,35 @@ export const getAllActivityLogs = async (req, res) => {
 
     connection = await db.getConnection();
 
-    const [[{ total }]] = await connection.execute(
-      `SELECT COUNT(*) AS total FROM activity_logs ${whereClause}`,
-      params,
-    );
-
     const [rows] = await connection.execute(
       `SELECT al.id, al.actor_id, al.actor_role, al.action, al.target_type, 
               al.target_id, al.description, al.metadata, al.created_at,
-              up.first_name, up.last_name
+              up.first_name, up.last_name,
+              (SELECT COUNT(*) FROM activity_logs ${whereClause}) AS total_logs
        FROM activity_logs al
        LEFT JOIN user_profiles up ON al.actor_id = up.user_id
        ${whereClause}
        ORDER BY al.created_at DESC
        LIMIT ? OFFSET ?`,
-      [...params, pageSize, offset],
+      [...params, ...params, pageSize, offset],
     );
 
-    const [actionRows] = await connection.execute(
-      `SELECT DISTINCT action FROM activity_logs ORDER BY action ASC`,
-    );
-    const [roleRows] = await connection.execute(
-      `SELECT DISTINCT actor_role FROM activity_logs ORDER BY actor_role ASC`,
-    );
-    const [targetTypeRows] = await connection.execute(
-      `SELECT DISTINCT target_type FROM activity_logs ORDER BY target_type ASC`,
+    let total = rows[0]?.total_logs;
+    if (rows.length === 0) {
+      [[{ total }]] = await connection.execute(
+        `SELECT COUNT(*) AS total FROM activity_logs ${whereClause}`,
+        params,
+      );
+    }
+
+    const [filterRows] = await connection.execute(
+      `SELECT DISTINCT 'action' AS filter_type, action AS filter_value
+       FROM activity_logs
+       UNION ALL
+       SELECT DISTINCT 'actor_role', actor_role FROM activity_logs
+       UNION ALL
+       SELECT DISTINCT 'target_type', target_type FROM activity_logs
+       ORDER BY filter_type ASC, filter_value ASC`,
     );
 
     const data = rows.map((r) => ({
@@ -125,9 +134,9 @@ export const getAllActivityLogs = async (req, res) => {
     res.status(200).json({
       data,
       filters: {
-        actions: actionRows.map((r) => r.action),
-        actorRoles: roleRows.map((r) => r.actor_role),
-        targetTypes: targetTypeRows.map((r) => r.target_type),
+        actions: filterRows.filter((r) => r.filter_type === "action").map((r) => r.filter_value),
+        actorRoles: filterRows.filter((r) => r.filter_type === "actor_role").map((r) => r.filter_value),
+        targetTypes: filterRows.filter((r) => r.filter_type === "target_type").map((r) => r.filter_value),
       },
       pagination: {
         page: pageNum,

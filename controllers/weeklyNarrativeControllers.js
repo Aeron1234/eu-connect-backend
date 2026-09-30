@@ -1,3 +1,5 @@
+import { invalidateWeeklyNarrativesCache } from "../config/weeklyNarrativesCache.js";
+import { weeklyNarrativesCacheHit } from "../middleware/weekly-narratives-cache.js";
 import { db } from "../config/db.js";
 import { verifyRecordAccess } from "../config/helpers.js";
 
@@ -22,14 +24,6 @@ export const getAllWeeklyNarratives = async (req, res) => {
   try {
     connection = await db.getConnection();
 
-    const narrativesQuery = `
-      SELECT id, user_id, internship_id, week_number, title, narrative, created_at, updated_at
-      FROM weekly_narratives 
-      WHERE user_id = ? AND internship_id = ?
-      ORDER BY created_at DESC
-      LIMIT ? OFFSET ?
-    `;
-
     const statsQuery = `
       SELECT 
         COUNT(*) AS total_entries,
@@ -45,22 +39,43 @@ export const getAllWeeklyNarratives = async (req, res) => {
       WHERE user_id = ? AND internship_id = ?
     `;
 
-    const [[narratives], [statsResult]] = await Promise.all([
-      connection.execute(narrativesQuery, [
-        userId,
-        internshipId,
-        limit,
-        offset,
-      ]),
-      connection.execute(statsQuery, [userId, internshipId]),
+    const narrativesQuery = `
+      SELECT wn.id, wn.user_id, wn.internship_id, wn.week_number, wn.title,
+             wn.narrative, wn.created_at, wn.updated_at,
+             stats.total_entries, stats.latest_week, stats.total_words,
+             stats.entries_this_week
+      FROM weekly_narratives wn
+      CROSS JOIN (${statsQuery}) stats
+      WHERE wn.user_id = ? AND wn.internship_id = ?
+      ORDER BY wn.created_at DESC
+      LIMIT ? OFFSET ?
+    `;
+
+    const [pageRows] = await connection.execute(narrativesQuery, [
+      userId,
+      internshipId,
+      userId,
+      internshipId,
+      limit,
+      offset,
     ]);
 
-    const stats = statsResult[0] || {
-      total_entries: 0,
-      latest_week: 0,
-      total_words: 0,
-      entries_this_week: 0,
-    };
+    let stats = pageRows[0];
+    if (!stats) {
+      const [statsResult] = await connection.execute(statsQuery, [
+        userId,
+        internshipId,
+      ]);
+      stats = statsResult[0] || {
+        total_entries: 0,
+        latest_week: 0,
+        total_words: 0,
+        entries_this_week: 0,
+      };
+    }
+    const narratives = pageRows.map(({
+      total_entries, latest_week, total_words, entries_this_week, ...row
+    }) => row);
 
     const totalRecords = Number(stats.total_entries);
     const totalPages = Math.ceil(totalRecords / limit);
@@ -117,6 +132,7 @@ export const createWeeklyNarrative = async (req, res) => {
       });
     }
 
+    invalidateWeeklyNarrativesCache();
     res.status(201).json({
       message: "Narrative added!",
       success: true,
@@ -175,6 +191,7 @@ export const editWeeklyNarrative = async (req, res) => {
       });
     }
 
+    invalidateWeeklyNarrativesCache();
     res.status(200).json({
       message: "Narrative updated successfully!",
       success: true,
@@ -213,6 +230,7 @@ export const deleteWeeklyNarrative = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateWeeklyNarrativesCache();
     res.status(200).json({
       message: "Record deleted successfully.",
       success: true,
@@ -251,7 +269,16 @@ export const getSearchedStudentWeeklyNarratives = async (req, res) => {
         wn.title,
         wn.narrative,
         wn.created_at,
-        wn.updated_at
+        wn.updated_at,
+        (
+          SELECT COUNT(*)
+          FROM weekly_narratives countedWn
+          INNER JOIN internship_records countedIr
+            ON countedWn.internship_id = countedIr.id
+          WHERE countedWn.user_id = ?
+            AND countedIr.status = 'ongoing'
+            AND countedIr.deleted_at IS NULL
+        ) AS total_narratives
       FROM weekly_narratives wn
       INNER JOIN internship_records ir 
          ON wn.internship_id = ir.id
@@ -272,12 +299,15 @@ export const getSearchedStudentWeeklyNarratives = async (req, res) => {
         AND ir.deleted_at IS NULL
     `;
 
-    const [[narratives], [countResult]] = await Promise.all([
-      connection.execute(narrativesQuery, [searchedUserId, limit, offset]),
-      connection.execute(countQuery, [searchedUserId]),
-    ]);
-
-    const totalRecords = Number(countResult[0].total);
+    const [pageRows] = await connection.execute(narrativesQuery,
+      [searchedUserId, searchedUserId, limit, offset]);
+    let totalRecords = pageRows[0]?.total_narratives;
+    if (pageRows.length === 0) {
+      const [[{ total }]] = await connection.execute(countQuery, [searchedUserId]);
+      totalRecords = total;
+    }
+    totalRecords = Number(totalRecords);
+    const narratives = pageRows.map(({ total_narratives, ...row }) => row);
     const totalPages = Math.ceil(totalRecords / limit);
 
     return res.status(200).json({
@@ -306,6 +336,7 @@ export const getInternshipRecordWeeklyNarratives = async (req, res) => {
 
     connection = await db.getConnection();
     await verifyRecordAccess(connection, internshipId, requesterId, role);
+    if (weeklyNarrativesCacheHit(req, res)) return;
 
     const [rows] = await connection.execute(
       `SELECT id, week_number, title, narrative, created_at, updated_at

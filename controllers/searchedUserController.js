@@ -205,6 +205,7 @@ export const getSearchedUser = async (req, res) => {
             : null,
       });
     } catch (supervisionError) {
+      res.locals.skipCache = true;
       console.error(
         "Supervision resolve failed (getSearchedUser):",
         supervisionError,
@@ -305,7 +306,16 @@ export const getSearchedStudentDTRs = async (req, res) => {
         dtr.clock_in,
         dtr.clock_out,
         dtr.user_id,
-        dtr.status
+        dtr.status,
+        (
+          SELECT COUNT(*)
+          FROM daily_time_records countedDtr
+          INNER JOIN internship_records countedIr
+            ON countedDtr.internship_id = countedIr.id
+          WHERE countedDtr.user_id = ?
+            AND countedIr.status = 'ongoing'
+            AND countedIr.deleted_at IS NULL
+        ) AS total_dtrs
       FROM daily_time_records dtr
       INNER JOIN internship_records ir 
          ON dtr.internship_id = ir.id
@@ -328,14 +338,18 @@ export const getSearchedStudentDTRs = async (req, res) => {
     `;
 
     // Execute queries using the allocated connection thread
-    const [rows] = await connection.execute(dtrQuery, [
+    const [pageRows] = await connection.execute(dtrQuery, [
+      studentId,
       studentId,
       limit,
       offset,
     ]);
-    const [countResult] = await connection.execute(countQuery, [studentId]);
-
-    const totalRecords = countResult[0].total;
+    let totalRecords = pageRows[0]?.total_dtrs;
+    if (pageRows.length === 0) {
+      const [[{ total }]] = await connection.execute(countQuery, [studentId]);
+      totalRecords = total;
+    }
+    const rows = pageRows.map(({ total_dtrs, ...row }) => row);
     const totalPages = Math.ceil(totalRecords / limit);
 
     return res.status(200).json({
@@ -663,7 +677,8 @@ export const getSearchedStudentFiles = async (req, res) => {
     const [internships] = await connection.execute(
       `SELECT 
          ir.id, ir.company_name, ir.internship_position,
-         ir.date_started, ir.date_ended, ir.status
+         ir.date_started, ir.date_ended, ir.status,
+         (SELECT COUNT(*) FROM requirement_types) AS totalRequirements
        FROM internship_records ir
        INNER JOIN users u ON ir.user_id = u.id
        WHERE ir.user_id = ? AND u.deleted_at IS NULL AND ir.deleted_at IS NULL
@@ -697,16 +712,20 @@ export const getSearchedStudentFiles = async (req, res) => {
       [searchedUserId],
     );
 
-    // 3. Total requirement count, for the completion percentage denominator
-    const [[{ totalRequirements }]] = await connection.execute(
-      `SELECT COUNT(*) AS totalRequirements FROM requirement_types`,
-    );
+    // 3. Keep the document order from the query while indexing by internship.
+    const documentsByInternship = new Map();
+    for (const document of documents) {
+      if (!documentsByInternship.has(document.internship_id)) {
+        documentsByInternship.set(document.internship_id, []);
+      }
+      documentsByInternship.get(document.internship_id).push(document);
+    }
+
+    const totalRequirements = internships[0].totalRequirements;
 
     // 4. Attach each internship's own files + completion stats
     const records = internships.map((internship) => {
-      const files = documents.filter(
-        (doc) => doc.internship_id === internship.id,
-      );
+      const files = documentsByInternship.get(internship.id) || [];
 
       const submittedCount = new Set(files.map((f) => f.requirement_type_id))
         .size;

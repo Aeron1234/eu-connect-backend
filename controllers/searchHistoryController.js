@@ -43,7 +43,7 @@ export const searchUsers = async (req, res) => {
         -- Latest student_academic_info row per user, same pattern used elsewhere —
         -- a student can have multiple rows over time (e.g. shifted course/dept)
         LEFT JOIN (
-          SELECT sai1.*
+          SELECT sai1.user_id, sai1.course_id, sai1.department_id
           FROM student_academic_info AS sai1
           INNER JOIN (
             SELECT user_id, MAX(id) AS max_id
@@ -209,15 +209,13 @@ export const getSearchHistory = async (req, res) => {
       LEFT JOIN roles r ON u.role_id = r.id
       -- Latest student_academic_info row per user, same pattern used elsewhere —
       -- a student can have multiple rows over time (e.g. shifted course/dept)
-      LEFT JOIN (
-        SELECT sai1.*
-        FROM student_academic_info AS sai1
-        INNER JOIN (
-          SELECT user_id, MAX(id) AS max_id
-          FROM student_academic_info
-          GROUP BY user_id
-        ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
-      ) sai ON up.user_id = sai.user_id
+      LEFT JOIN student_academic_info sai
+        ON sai.user_id = up.user_id
+       AND sai.id = (
+         SELECT MAX(sai_latest.id)
+         FROM student_academic_info sai_latest
+         WHERE sai_latest.user_id = up.user_id
+       )
       LEFT JOIN courses c ON sai.course_id = c.id
       LEFT JOIN departments d_student ON sai.department_id = d_student.id
       LEFT JOIN dept_heads_background_info dhbi ON up.user_id = dhbi.user_id

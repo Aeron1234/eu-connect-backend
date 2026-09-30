@@ -1,6 +1,6 @@
 # EU Connect backend — agent handoff
 
-Updated: 2026-09-30 (Asia/Manila).
+Updated: 2026-10-01 (Asia/Manila).
 
 ## Purpose and scope
 
@@ -9,9 +9,15 @@ chat. Read the actual checkout before editing: this handoff does not install the
 implementation, and another project may have different files or dependencies.
 Merge these instructions with an existing AGENTS.md rather than overwriting it.
 
-Document metadata caching is implemented in this package. All **100 tests**
-pass in staging; installation is pending. The user confirmed **95 tests passed**
-after the staff-list phase. Future priorities are recommendations.
+Activity-log user-name fixes, Priority-1 query phases 1-9, Priority-2
+phases 1-9, and Priority-3 phase 1 (evaluation reads) are installed.
+Priority-3 phase 2 reviewed evaluation printing and added a contract test;
+Priority-3 phase 3 optimized the personal student profile lookup and reviewed
+searched profiles. Priority-3 phase 4 consolidated internship overview
+counts, phase 5 simplified search-history's academic join, and phase 6
+optimized grouped document lists. Priority-3 phase 7 optimized saved annual
+report pagination; the full suite passed **181 tests** in the backend checkout.
+Narrative work remains weekly-only.
 
 ## System overview
 
@@ -28,7 +34,7 @@ after the staff-list phase. Future priorities are recommendations.
 - Supabase stores uploaded files. Socket.IO delivers notifications to user rooms.
 - Background jobs close stale attendance shifts and clean up refresh tokens.
 - Main flows: internship submission/approval/completion, supervisor requests,
-  geofenced attendance, daily/weekly narratives, documents, evaluations/disputes,
+  geofenced attendance, weekly narratives (daily feature dropped), documents, evaluations/disputes,
   announcements, alumni records, reporting and role-specific dashboards.
 
 The initial analysis was source-level. The frontend and live database schema
@@ -41,8 +47,15 @@ suite were found initially; focused caching tests were added during this work.
   untracked files; no commits or pushes were made by this work.
 - Account caching changes already existed when the review began. They were
   corrected and extended rather than discarded.
-- User confirmed **95 passing tests** through staff internship lists. Document
-  metadata staging passes **100 tests, 0 failed**; application pending.
+- Priority-1 phases 1-9, Priority-2 phases 1-9 and Priority-3 phase 1 are
+  installed. Priority-3 phase 2 found no justified print-query rewrite and
+  added a contract test. Priority-3 phase 3 optimized the personal student
+  profile lookup and reviewed searched profiles. Priority-3 phase 4
+  consolidated internship overview counts, and phase 5 simplified
+  search-history's academic join. Priority-3 phase 6 optimized grouped
+  document lists, and phase 7 optimized saved annual report pagination. The
+  current suite passed **181 tests**. Daily narrative caching remains out of
+  scope.
 - Tests use mocked database connections and real Express routing where relevant.
   Passing tests do not establish production performance, live database behavior,
   frontend refresh behavior, or multi-instance consistency.
@@ -122,6 +135,175 @@ All paths below are relative to `/eu-connect/api`.
 
 | Document metadata | Own files, grouped student files/counts, employer uploads, record documents | 30 seconds |
 
+| Evaluation history | Past student, combined, disputed, submitted and record summaries | 30 seconds |
+
+| Weekly narratives | Personal history/statistics, searched-student and record views | 30 seconds |
+
+| Searched profiles and overviews | `/searched-user/:searchedUserId`, `/internship-records/overview/:internshipId` | 30 seconds |
+
+| Attendance history | Personal, searched-student and record DTR views; closed-row responses only | 30 seconds |
+
+| Saved annual details | `/reports/annex-c/:reportId` | 60 seconds |
+
+### Saved annual report details
+
+GET /reports/annex-c/:reportId (under /eu-connect/api) now caches for 60 seconds,
+using reportCacheHit only after the controller's database-backed Registrar/admin
+access check. That check still runs on hits; revoked Registrar assignment or
+permission-query errors cannot receive cached details. Keys separate viewers,
+role/department context, report IDs and query variants. Report fields and entry
+ordering are preserved. Missing reports and read errors never populate cache.
+
+invalidateAnnualReportsCache now clears both summary and one-segment detail paths
+for all viewers after creation, update, submission or deletion commits. Existing
+save/delete hooks run before response rereads; a failed reread after commit still
+leaves entries invalidated. Failed commits preserve both summaries and details.
+Nested/export and similarly named routes are excluded. Generation advances even
+when no entries exist. No new write endpoints, permissions or schema changes.
+
+Three new tests and expanded annual write/rollback checks cover detail TTLs,
+viewer/report/query separation, current Registrar access, missing/error reads,
+post-commit invalidation and exact route matching. Full staged suite: 126 passed,
+0 failed. User confirmed this phase installed with 126 passing tests.
+
+### Historical attendance
+
+Three GET views use a 30-second TTL under /eu-connect/api: /dtr/history,
+/searched-user/dtrs/:studentId and /internship-records/dtr/:internshipId.
+cacheAttendanceHistory only stores successful results when every returned row
+has a non-null clock_out. Any open shift bypasses storage for the entire response;
+empty results remain cacheable. No SQL row filtering or pagination/count change
+was introduced. A page of closed shifts can be cached even if another page holds
+an open shift; clock-in/out invalidation keeps page boundaries and counts fresh.
+
+Today/status/location endpoints and clock-in/out validation remain uncached.
+User identity, role/context and full URL separate targets, internshipId, limit
+and offset. Record-specific reads run verifyRecordAccess before each cache lookup.
+Searched-student reads preserve existing role checks and ongoing/non-deleted
+internship filters; their controller has no supervisor/department ownership check.
+Existing access and geofence rules are not redesigned by caching.
+
+invalidateAttendanceHistoryCache clears all users/variants after clock-in,
+clock-out, deletion, automatic stale-shift batch commits and all six internship
+lifecycle commits. Failed commits preserve entries. Exact dynamic target matching
+excludes live and similarly named paths; generation always advances to prevent
+stale in-flight refill. No frontend refresh or socket mechanism was added.
+
+Six new mocked-database tests cover TTL, closed/open/empty/error results,
+pagination/isolation, current record permissions, live-route bypass, all three DTR
+writes and rollback, and geofence rejection. Existing lifecycle and cron tests also
+assert attendance invalidation. User confirmed installation with 123 passing tests.
+Live database behavior/performance is unverified. Single-process limits apply.
+
+### Searched-user profiles and internship overviews
+
+GET /searched-user/:searchedUserId and /internship-records/overview/:internshipId
+(under /eu-connect/api) cache for 30 seconds. Keys include viewer identity, role,
+academic context and full URL, preserving viewer-specific supervision tags in
+both employer-to-student and student-to-employer directions. Profile supervision
+lookup failures retain the existing fallback response but set skipCache so partial
+results cannot be repeatedly served. Missing/error results are not cached.
+
+Overview caching runs after verifyRecordAccess on every request, including hits.
+Profiles retain existing authenticated role access without adding ownership rules.
+The overview narrative_count now counts weekly_narratives, following the user's
+weekly-only requirement; the response field name remains narrative_count.
+
+config/profileOverviewCache.js supplies invalidators for profiles, overviews,
+and both together. Account profile/avatar/activation changes, all six internship
+lifecycle commits, supervisor request/cancel/accept/reject commits, DTR commits and
+stale-shift batches clear both families. Document metadata and weekly narrative
+invalidators also clear overviews for document/narrative counts. Writes invalidate
+after success/commit; rollback preserves cache. Avatar writes are autocommit.
+These helper dependencies are intentionally broad and preserve unrelated caches.
+
+Dynamic families match exactly one target segment, leaving nested searched-user
+metadata paths untouched. Generation advances even with no entries. Future
+course/department renaming or academic reassignment must invalidate joined profile
+and overview data. Existing course/department active toggles do not change joins.
+Current overview attendance totals are cached summaries; attendance validation
+and live location endpoints are unchanged. No new frontend refresh events added.
+
+Four new tests and extensions of account/profile, supervision, lifecycle,
+attendance/cron, document and weekly tests cover TTLs, viewer isolation, current
+access, partial failures, counts and invalidation. All 117 staged tests pass;
+database and storage are mocked. User confirmed installation with 117 passing
+tests. Production performance
+has not been benchmarked. Existing single-process restrictions apply.
+
+### Weekly narratives
+
+User requirement: daily narratives were dropped; school requires weekly only.
+Do not implement daily-narrative caching or restore that feature. Legacy daily
+source files still exist in this checkout; this phase does not delete them.
+
+Three GET views use a 30-second TTL under /eu-connect/api:
+/weekly-narratives/history, /searched-user/weekly-narratives/:searchedUserId,
+and /internship-records/weekly-narratives/:internshipId. Identity, authorization
+context and the full URL separate users, targets, internshipId, page and limit.
+History statistics and response shapes are unchanged. This-week statistics can
+lag the week boundary by at most the TTL; oversized narratives bypass caching.
+
+Record-specific reads call weeklyNarrativesCacheHit after verifyRecordAccess on
+every request, including hits. Searched-student reads retain the existing role
+check and ongoing/non-deleted internship filter; they do not currently verify
+supervisor or department ownership. Personal reads retain user_id filtering.
+This phase changes no existing ownership, pagination or validation business rule.
+
+invalidateWeeklyNarrativesCache clears all three views across users and filters.
+Creation and edits are autocommit writes: invalidate only after nonzero affected
+rows. Deletion invalidates only after transaction commit. All six internship
+lifecycle commits also invalidate because ongoing status and deletion affect
+searched results and record access. Zero-row writes, errors and failed commits
+preserve entries. No review endpoint exists for weekly narratives.
+
+The helper uses exact paths for personal history and one-segment dynamic target
+families; similar names and nested paths are excluded. It always advances the
+generation to prevent stale in-flight cache refill. It does not clear daily data.
+No frontend refresh/socket events were added. Single-process constraints apply.
+
+Six added mocked-database tests cover TTLs, statistics, pagination, isolation,
+current record access, all three writes, failed commits/zero-row writes, errors,
+empty results and exact invalidation. Existing lifecycle tests cover weekly
+invalidation too. All 113 staged tests passed; files are present in the checkout. Production
+performance and live database behavior have not been verified.
+
+### Historical evaluation lists and summaries
+
+Five views cache for 30 seconds under /eu-connect/api:
+/student-past-evaluations/:studentId, /evaluations/all, /evaluations/disputed,
+/evaluations/submitted and /internship-records/evaluations/:internshipId.
+Full URL, identity, role and academic context partition entries. Existing score
+aggregation, dates, status labels, reviewer fields and empty response shapes are
+preserved. Pending eligibility, current complete-evaluation and print reads remain
+uncached; criteria retain their independent five-minute cache.
+
+Record-specific summaries call evaluationHistoryCacheHit only after the existing
+verifyRecordAccess database check on every request, including hits. The searched
+past-student route retains existing role checks but has no ownership/department
+restriction in its controller. This phase does not redesign those permissions.
+Personal all/disputed/submitted lists retain identity-scoped SQL filters.
+
+invalidateEvaluationHistoryCache clears all five families for every viewer and
+query after both submission types, student-evaluation deletion, response
+(completed/disputed), restoration, and staff review commits. Internship lifecycle
+commits and profile edits also invalidate joined company/access and actor/reviewer
+data. Invalidation precedes socket delivery; failed commits preserve entries.
+Dynamic paths match exactly one target segment; print and similar paths are not
+matched. Generation advances even with no entries to prevent stale in-flight fill.
+
+Existing criterion writes create or toggle active state, while historical joins
+do not filter active state. Future criterion/category renaming or deletion must
+invalidate evaluation history; adding criteria does not alter existing scores.
+No new refresh/socket mechanism or evaluation business-rule change was added.
+
+Seven new tests cover five reads, score grouping, TTLs, viewer/target/query
+isolation, current record access, all six write handlers (including both response
+decisions), rollback, rejected writes, empty/error reads and exact invalidation.
+Existing profile/lifecycle tests also verify history invalidation. All 107 staged
+tests pass using mocked SQL; live database/performance behavior is unverified.
+These files are present in the current checkout. Existing process-local limits apply.
+
 ### Document metadata and completion counts
 
 Four GET views use a 30-second TTL under /eu-connect/api:
@@ -160,7 +342,8 @@ cleanup. No new socket events or frontend refresh mechanism is introduced.
 Five new tests plus existing writer/lifecycle/account test extensions cover the
 four reads, counts, TTL, isolation, current record authorization, invalidation,
 approval, errors and empty results. All 100 staged tests pass; SQL/storage are
-mocked and installation is pending. Existing single-process restrictions apply.
+mocked. The user confirmed installation with all 100 tests passing. Existing
+single-process restrictions apply.
 
 ### Department and admin internship lists
 
@@ -248,8 +431,7 @@ The user confirmed this phase was applied with all 86 tests passing.
 
 Four GET routes cache for 60 seconds: /reports/academic-years,
 /reports/hte-annual/companies, /reports/hte-annual/company and /reports/annex-c
-(all under /eu-connect/api). Saved /reports/annex-c/:reportId detail reads stay
-uncached. Full query strings and user/role/department context partition entries.
+(all under /eu-connect/api). Saved /reports/annex-c/:reportId details now also cache for 60 seconds. Full query strings and user/role/department context partition entries.
 
 The three Registrar-restricted controllers call reportCacheHit only AFTER their
 existing validation and database-backed isRegistrarHeadOrAdmin check. Never move
@@ -436,15 +618,20 @@ Test files:
 - `tests/announcements-cache.test.js`
 - `tests/alumni-cache.test.js`
 - `tests/reports-cache.test.js`
+- `tests/activity-log-names.test.js`
 - `tests/past-internships-cache.test.js`
 - `tests/reference-cache.test.js`
 - `tests/staff-internships-cache.test.js`
 - `tests/document-metadata-cache.test.js`
+- `tests/evaluation-history-cache.test.js`
+- `tests/weekly-narratives-cache.test.js`
+- `tests/profile-overview-cache.test.js`
+- `tests/attendance-history-cache.test.js`
 
-Latest staged result: **100 tests, 100 passed, 0 failed**. Last user-confirmed
-installed result: **95 tests, 95 passed, 0 failed**. Report tests cover current
-Registrar authorization on hits, query/context isolation, TTLs, uncached saved
-details, annual writes and rollback, and failed post-commit rereads. Existing
+Latest staged result: **130 tests, 130 passed, 0 failed**. Last user-confirmed
+installed result: **129 tests, 129 passed, 0 failed**. Report tests cover current
+Registrar authorization on hits, query/context isolation, TTLs, saved
+detail isolation, annual writes and rollback, and failed post-commit rereads. Existing
 profile and internship tests now verify HTE invalidation too. Alumni tests cover both TTLs,
 query/context isolation, all nine mutation commit/rollback paths, socket ordering,
 ownership checks, read errors and empty results. Announcement tests additionally
@@ -460,14 +647,31 @@ invalidation, failed writes, user/role isolation and cross-controller dependenci
 Run the full existing suite afterward. Do not start the production server or
 run cron jobs against the live database just to test a cache change.
 
+## Activity-log user names
+
+Reviewed current activity-log writers for user IDs embedded in descriptions.
+Account deactivation/reactivation directly interpolated accountId; forced internship
+completion used studentId as a fallback. These three paths now resolve first_name
+and last_name through config/activityLogNames.js using the transaction connection.
+Descriptions persist a name snapshot; actor_id, target_id and metadata IDs stay
+unchanged. Whitespace is trimmed; partial names work. Missing names/query failures
+use "User name unavailable", never an ID. Lookup failure is supplementary and does
+not fail the business write. Existing commit/invalidation behavior is preserved.
+
+Other description IDs identify documents/evaluations/internship/alumni records;
+these are not user IDs and were not replaced. Existing persisted descriptions are
+not rewritten by this installer. Historical correction requires a separately scoped
+backfill with reviewed mappings; current names may differ from names at event time.
+Three new tests cover names/fallbacks, persisted account descriptions with intact
+IDs, and forced completion metadata. Full staged result: 129 passed, 0 failed.
+
 ## Next work
 
-1. Apply this package with `Apply-DocumentMetadataCache.ps1`, verify all 100 tests,
-   and restart the backend if automatic reload is not enabled. Update installation
-   status after the user provides the result.
-2. Measure current cache effectiveness before selecting further endpoints.
-   Trace permissions, joins and mutation dependencies before selecting coverage.
-3. Measure cache hit rates and database query time before expanding indefinitely.
+1. Confirm the installed department dashboard query phase passes `node --test`
+   in the backend checkout and compare representative live responses if possible.
+2. Inspect schema, indexes and query plans for the remaining Priority 1 endpoints
+   before rewriting joins, grouping or search behavior.
+3. Measure cache effectiveness and database query time before further tuning.
 
 Keep authentication, clock-in/out validation and live attendance reads uncached.
 Multiple API instances need shared cache invalidation before relying on the local
@@ -519,7 +723,633 @@ phases; build a fresh baseline from the destination checkout.
 
 Completed phases include accounts, logs, notifications, departments/courses,
 criteria, postings, dashboards, announcements, alumni/company directory, HTE
-reports, past internships, reference lookups and staff internship lists.
-Latest user-confirmed result: 95 passing tests after `Apply-StaffInternshipsCache.ps1`.
-`Apply-DocumentMetadataCache.ps1` updates this handoff and caching.md and awaits
-application. Use verified current files and paths when continuing elsewhere.
+reports, past internships, reference lookups, staff lists, document metadata,
+evaluation history, weekly narratives, searched profiles/overviews and historical
+attendance. Latest user-confirmed result: 123 tests after
+`Apply-AttendanceHistoryCache.ps1`. `Apply-AnnualDetailsCache.ps1` updates this
+handoff and caching.md and awaits application. Preserve weekly-only narrative
+scope and uncached live attendance.
+
+Latest code package: Apply-DepartmentDashboardQueryOptimization.ps1 (installed by matching file hashes; backend test output not yet supplied). Last user-confirmed test result: 129 passed after activity-log name fixes.
+
+## Query optimization: Priority 1, phase 1 (2026-09-30)
+
+The department dashboard query optimization has been applied to the backend
+checkout: its controller and focused test hashes match the prepared bundle.
+The user has not yet supplied the backend test output for this installation.
+The separate staging copy passed 130 tests with mocked database connections.
+
+`GET /eu-connect/api/department-head-dashboard-stats` now obtains total,
+ongoing and pending internship counts from one conditional aggregate over the
+same latest-academic-record join. It retains separate manual-alumni and unread-
+announcement counts and returns the same JSON fields. The internship portion
+uses one query rather than three; this does not establish a production speedup.
+
+`GET /eu-connect/api/department-head-dashboard-data` and
+`GET /eu-connect/api/average-shift-hours` project only the academic fields used
+by their joins. Their filtering, grouping, ordering, and response mapping are
+unchanged. No database schema, indexes, cache keys or invalidation were changed.
+
+The focused test is `tests/dashboard-query-optimization.test.js`. Existing
+caching tests use mocked SQL results, so they do not prove live MySQL result
+or performance equivalence. Before larger rewrites, inspect current schema and
+indexes, collect `EXPLAIN ANALYZE` plans against representative data, and compare
+old/new JSON responses including types, nulls, duplicates, pagination and order.
+
+This was the phase-1 scope. Later sections record the completed account,
+internship, HTE, alumni, search, and map optimizations. Phase 9 addresses the
+weekly average calculation while retaining the existing SQL row query.
+
+## Query optimization: Priority 1, phase 2 (accounts list; installed)
+
+`GET /eu-connect/api/accounts` now uses a narrower `UNION ALL` query for its
+total count. The page query and all response fields remain unchanged. The count
+query retains all three role branches, the same role/status and substring-search
+filters, and the academic/background LEFT JOINs that can multiply rows. It omits
+course and department detail joins, which are needed only to display rows and
+join by their unique IDs. The existing count response therefore keeps the same
+`totalRecords` and `totalPages` semantics when a user has multiple academic rows.
+
+The focused test is `tests/accounts-query-optimization.test.js`. The staged suite
+passed 131 tests with mocked database connections. Live schema, `EXPLAIN` plans,
+and old/new response comparisons have not been supplied, so production speed
+and MySQL result equivalence remain unverified. Do not replace `%search%` with
+full-text search or deduplicate users as part of this phase; either would change
+the current frontend-visible result.
+
+The account controller and focused test match the installed bundle by SHA-256.
+Backend test output from this installation has not yet been supplied. Remaining
+Priority 1 areas include HTE reports, alumni/company directory, user search,
+student map, attendance averages, and department dashboard query plans.
+
+## Query optimization: Priority 1, phase 3 (department internship list; installed)
+
+`GET /eu-connect/api/internship-records/department` now uses one conditional
+aggregate for its filtered pagination total and four status cards. It formerly
+used separate total and grouped-status scans; the paginated row query remains
+unchanged. The aggregate applies status and substring-search filters only to
+`total`; cards still count all non-deleted records in the viewer's department,
+or all departments for an admin. It retains the same latest-academic-record,
+profile, and course joins so filtering and row multiplicity stay aligned.
+
+The latest-academic derived table projects only user, department, course, and
+student-number columns needed by this endpoint. The response's fields, page
+size, ordering, role checks, and cache behavior remain unchanged. The focused
+test is `tests/department-internship-query-optimization.test.js`; all 133 staged
+tests pass with mocked database connections. Live MySQL equivalence and speed
+still require schema/index review, query plans, and representative old/new JSON
+comparisons. Install with `Apply-DepartmentInternshipQueryOptimization.ps1` and
+record the backend test result after application.
+
+`GET /eu-connect/api/internships/all` and `/internships/active/all` already use
+one SELECT each. They return unbounded joined rows, including repeated student
+academic matches where those exist. Pagination or deduplication would change
+their frontend contract; review indexes and real query plans before altering
+those SQL statements.
+
+The department internship controller and focused test match the installed
+bundle by SHA-256. Backend test output from that installation was not supplied.
+
+## Query optimization: Priority 1, phase 4 (internship postings; installed)
+
+`GET /eu-connect/api/internship-postings` now computes the requester's
+`isFavorited` flag with a correlated `EXISTS` in its paginated postings query.
+The separate favorites batch query is removed, reducing a nonempty page from
+four database queries to three. The existing favorite/not-favorite filters,
+total count, ordering, pagination, ownership flag, course list, and JSON fields
+remain the same. The internal `favorite_for_requester` SQL alias is removed
+before sending JSON. Course links still load in one batch and are mapped once
+by posting ID, preserving their database row order and duplicates.
+
+Only the postings read controller and its read tests changed. Posting writes,
+transactions, notifications, cache TTL, and invalidation remain untouched.
+The expanded postings test covers filter parameter order, viewer-specific
+favorites, JSON field shape, course ordering, and three-query behavior. All
+134 staged tests pass with mocked database connections. Live MySQL speed and
+exact result equivalence need representative response comparisons and an
+index/query-plan review, especially for `(student_id, posting_id)` favorites.
+Install with `Apply-InternshipPostingsQueryOptimization.ps1`, then record the
+backend test result after application.
+
+The postings controller, test, and handoff match the installed bundle by
+SHA-256. The backend test output from that installation was not supplied.
+
+## Query optimization: Priority 1, phase 5 (HTE company reads; installed)
+
+The live MariaDB view `internship_records_with_ay` selects from
+`internship_records` and derives `academic_year` from `date_started` and
+`semester` with a CASE expression. Every record for a matching four-digit
+academic year starts in either its first or second calendar year. The HTE
+company count, page, intern-batch, and both detail-mode queries now add a
+redundant two-year `date_started` range while retaining the view's exact
+`academic_year = ?` test. The range is omitted for years outside 1000-9997,
+avoiding invalid date bounds while preserving the original predicate.
+
+Live `EXPLAIN FORMAT=JSON` showed the existing
+`idx_internship_records_status_date` used `status` and `deleted_at` before this
+change, then also used `date_started` with the bound. The current database has
+only three internship records, so this is an index access improvement for
+larger data, not a demonstrated speedup today. Eight old/new query pairs over
+the available academic year returned exactly equal MySQL rows. The staged
+suite passed 137 tests, including focused parameter/response checks.
+
+`GET /eu-connect/api/reports/academic-years` remains unchanged: it already
+performs a single DISTINCT read from the view. Its computed-year temporary
+sort cannot be removed safely without a schema/index change, which is outside
+this read-query phase. Company-key hashing, grouping, search, pagination,
+intern ordering, JSON shapes, authorization, caching, and mutations are
+unchanged. Install with `Apply-HteQueryOptimization.ps1`; record the backend
+test result after application.
+
+## Query optimization: Priority 1, phase 6 (alumni and company directory; installed)
+
+`GET /eu-connect/api/alumni-internships` now gets the total company-group
+count from `COUNT(*) OVER()` on each populated grouped page. This removes the
+separate `COUNT(DISTINCT LOWER(TRIM(company_name)))` query on normal pages:
+three SQL reads rather than four. The live `company_name` column is NOT NULL,
+so the window total matches the distinct-company count. Three live filter
+cases returned the same group rows and totals. Empty pages still run the old
+count as a fallback. A page beyond the end now returns an empty 200 result
+with the correct total; previously its empty `IN ()` query returned 500.
+
+`GET /eu-connect/api/company-directory` folds internship rows into the
+directory before fetching alumni rows, releasing the first result array before
+the second is loaded. The latest-academic derived table now projects only
+`user_id` and `course_id`. The existing JavaScript company normalization,
+first-seen display spelling, course insertion order, count, and popularity
+sort remain unchanged. Both SQL reads are still unbounded; this phase reduces
+peak retained result data rather than database row scans. Do not move the
+grouping into SQL without proving collation, spelling, and ordering
+equivalence against representative data.
+
+Only the alumni read controller, its existing read tests, and this handoff
+changed. Mutations, cache TTL/invalidation, authorization, and normal response
+shapes remain unchanged. The staged suite passes 138 tests. The live database
+has only two manual alumni and three internship rows, so no production-scale
+speedup has been measured. Install with
+`Apply-AlumniDirectoryQueryOptimization.ps1` and record backend tests after
+application.
+
+## Query optimization: Priority 1, phase 7 (user search; installed)
+
+`GET /eu-connect/api/search-users` retains its four `%term%` name/company
+conditions, all joins, latest-academic-row selection, and `LIMIT 10`. The
+latest-academic derived table now selects only `user_id`, `course_id`, and
+`department_id` instead of `sai1.*`. This reduces its intermediate row width
+without changing the result. The live schema already has a `(user_id, id)`
+academic index. Six old/new live query pairs returned identical ordered rows;
+the query plan retained the same join order and estimated cost.
+
+A per-user MAX(id) lookup had a lower estimated cost but changed the optimizer
+join order and the first 10 results for a common term, because this endpoint
+has no `ORDER BY`. It was not adopted. The leading-wildcard predicates and OR
+across joined company tables still require broad search work; ordinary B-tree
+indexes cannot make arbitrary substring matches selective. A larger search
+redesign needs an explicit ordering/semantic contract and representative data.
+
+Only the read SQL projection, focused test, and this handoff changed. Search
+history writes, authorization, query validation, and JSON shape remain the
+same. The staged suite passes 139 tests. Install with
+`Apply-UserSearchQueryOptimization.ps1`; no measured production speedup is
+claimed from the current 17-profile database.
+
+## Query optimization: Priority 1, phase 8 (student map; installed)
+
+`GET /eu-connect/api/student-map` now consumes the existing ordered prepared
+query as a mysql2 row stream with a 64-row high-water mark. It groups each row
+directly into the final response, so it no longer retains a separate full SQL
+result array alongside the map groups. The latest-academic derived table
+projects only `user_id` and `course_id`, which are its only used columns.
+
+The internship status/deletion filters, joins, company/location key, first-row
+display fields, intern ordering, percentage calculation, region ordering,
+permissions, and JSON shape are unchanged. The live old/new controller
+responses were identical (two companies, one region), and the old prepared
+result rows matched the new prepared stream. The staged suite passes 141
+tests, including grouped-response, forbidden-role, and stream-error checks.
+
+This is a peak-memory improvement, not a reduction in database rows. The
+endpoint still returns every matching intern, so final response memory and
+network size grow with the result. The live database has only two ongoing
+internships, so no production-scale memory or latency gain was measured.
+Install with `Apply-StudentMapQueryOptimization.ps1`; record backend tests
+after application.
+
+## Query optimization: Priority 1, phase 9 (attendance averages; installed)
+
+`GET /eu-connect/api/average-shift-hours` now calculates the UTC Monday-week
+bucket directly from the clock-in timestamp rather than scanning every week
+for every attendance row. This changes bucketing work from O(rows × weeks) to
+O(rows) and avoids allocating a week-end Date for each comparison. The SQL,
+row iteration order, 15-second cache, current-week range, empty-week output,
+and JavaScript `Number(...).toFixed(2)` rounding are unchanged. Seventy live
+department/month old-new response pairs matched exactly; 142 staged tests pass.
+
+Do not replace this calculation with a plain SQL `AVG(total_hours)` without
+changing the output contract. `total_hours` is FLOAT. mysql2 returns a parsed
+value such as `0.005`, while MariaDB SUM/AVG of the stored FLOAT yields about
+`0.004999999888`; the current JavaScript rounding gives 0.01 and SQL-backed
+rounding would give 0.00. A value of `3.335` also differs (3.33 versus 3.34).
+The current UTC week buckets and mysql2 `+08:00` date conversion need to be
+kept in sync if bucketing ever moves to SQL. This phase improves CPU work but
+still transfers individual attendance rows; a larger database/contract change
+would be needed to guarantee equivalent SQL-side aggregation.
+
+Install with `Apply-AttendanceAverageQueryOptimization.ps1` and record the
+backend test result after application.
+
+## Query optimization: Priority 2, phase 1 (other dashboard statistics; installed)
+
+`GET /eu-connect/api/dashboard-stats` now uses one SELECT containing four
+independent scalar counts rather than four queued statements. Each count keeps
+its original table, joins, and filters, so this reduces database round trips
+but not table scans. `GET /eu-connect/api/employer-dashboard-stats` now uses
+one SELECT rather than five; one conditional aggregate counts ongoing and
+finished internships in one employer-scoped scan. `GET
+/eu-connect/api/admin-dashboard-stats` now uses one SELECT rather than four;
+one users/roles scan counts employers, students, and inactive/suspended users.
+The roles join is LEFT so inactive/suspended users without a matching role
+still count, as in the original standalone query. Its ongoing-internship count
+remains independent.
+
+The live schema has relevant single-column indexes for these counts. No index
+or mutation was changed because the current tables are small and no
+production-scale benefit from a new composite index was established. All 37
+live old/new controller responses matched. The staging suite passed 145
+tests; the checkout before this phase passed 142. Authentication, 15-second
+cache behavior, invalidation, error status, and JSON shape remain unchanged.
+
+Install with `Apply-OtherDashboardStatsQueryOptimization.ps1` and record the
+backend test result after application.
+
+## Query optimization: Priority 2, phase 2 (dashboard data; installed)
+
+`GET /eu-connect/api/student-dashboard-data` replaces
+`DATE(created_at) = CURDATE()` with the equivalent session-day range
+`created_at >= CURDATE() AND created_at < CURDATE() + INTERVAL 1 DAY` for its
+today-attendance lookup. It keeps the first-row `LIMIT 1`, the independent
+latest-status and location reads, and the uncached live response. The live
+schema currently has no `created_at` index, so the plan still uses the
+internship index. The range makes an appropriate future date index usable.
+Twenty stored day/user/internship comparisons selected the same first row.
+
+`GET /eu-connect/api/employer-dashboard-data` keeps its unbounded joined
+intern list, including multiple rows where academic records multiply a join.
+The first five posted jobs retain their `created_at DESC` order and JSON
+fields. An uncorrelated count in that page query supplies `totalPages`,
+removing one database statement; an empty first page has total zero. The
+internal `total_postings` alias is removed from response jobs. Independent
+error fallbacks and the 15-second cache behavior remain intact. A larger
+intern-list reduction would require a frontend pagination contract.
+
+`GET /eu-connect/api/admin-dashboard-data` narrows its latest-academic
+derived row to `user_id` and `department_id`. User growth, role distribution,
+department grouping, recent activity, section fallbacks, and response fields
+remain separate and unchanged. No schema, indexes, mutation, or cache rule
+changed. All 37 live old/new dashboard-data controller responses matched;
+the staged suite passed 149 tests. The live tables are small, so no
+production-scale latency gain was measured.
+
+Install with `Apply-DashboardDataQueryOptimization.ps1` and record backend
+tests after application.
+
+## Query optimization: Priority 2, phase 3 (internship lists; installed)
+
+`GET /eu-connect/api/internships/my-past-internships` now counts each record's
+documents with a correlated, indexed count. This removes the document join and
+temporary `GROUP BY` result. It keeps the same `file_count`, status filter,
+ordering, response fields, and 60-second cache behavior. Live old/new SQL
+returned identical JSON for the current past-record owner; the database has
+only one matching row, so this is a correctness check, not a performance
+benchmark. The existing `internship_documents(internship_id)` index supports
+the count.
+
+`GET /eu-connect/api/internships/all` removes repeated projections of
+`internship_position` and `description` in both student and staff branches.
+Those columns were selected twice under the same names, and the driver returned
+one JSON field per name. Live old/new JSON matched for both student owners and
+the staff list. This reduces transferred SQL fields for an unbounded response
+without changing its rows, order, fields, role checks, or cache behavior.
+
+`GET /eu-connect/api/internships/active/all` already uses its status index and
+indexed joins, and was left unchanged. Both broad lists remain unbounded and
+retain academic join multiplicity; paginating or deduplicating them requires a
+frontend contract change. No schema or mutation path changed. The focused test
+is `tests/internship-lists-query-optimization.test.js`; all 151 staged tests
+pass. No production-scale latency improvement was measured. The changes were
+applied with `Apply-InternshipListsQueryOptimization.ps1`.
+
+## Query optimization: Priority 2, phase 4 (posting lists; installed)
+
+`GET /eu-connect/api/internship-postings` now includes the filtered total as
+an uncorrelated count in its paginated SELECT. Populated pages use two database
+statements instead of three: page plus total, then the existing batch of course
+links. An empty first page returns total zero; an empty later page runs a
+fallback count to preserve the total and totalPages for out-of-range requests.
+The internal `total_postings` field is removed from response rows. Filters,
+parameter order, favorites, owner flags, course order, sorting, pagination,
+cache behavior, and errors retain their existing response contract.
+
+`GET /eu-connect/api/posted-jobs` applies the same count-in-page pattern. A
+populated page uses one statement instead of two, while an empty later page
+uses a fallback count. The internal `total_records` field is removed from each
+job before JSON serialization; `totalRecords`, `totalPages`, and `currentPage`
+remain identical. Live comparisons matched all 33 posting-list and three
+posted-job old/new responses. All 154 staged tests passed, including pagination
+and cache behavior. Writes, invalidation, and 30-second TTLs did not change.
+
+The current `internship_postings` table has only its primary and employer-ID
+indexes. Its general page still scans and sorts rows; employer pages use the
+employer index and sort. Indexes on `(deleted_at, created_at)` and
+`(employer_id, deleted_at, created_at)` are candidates for a separate schema
+phase when table growth or representative measurements justify them. There is
+no migration framework in this checkout, and only 50 postings in the live
+table, so no index or production-scale latency claim was added here. The
+existing posting-course and favorites indexes support those lookups.
+
+Applied with `Apply-PostingListsQueryOptimization.ps1`.
+
+## Query optimization: Priority 2, phase 5 (announcement history; installed)
+
+`GET /eu-connect/api/announcements/history` now carries the original regular
+announcement count in the paginated regular-row SELECT. A populated regular
+page uses two database statements instead of three: the unchanged pinned read
+and the regular page with count. If the regular page is empty, the original
+standalone count query still runs. This fallback also applies to page one:
+the count query deliberately has fewer joins than the display query, so an
+empty display page does not always imply a zero total.
+
+The internal `total_regular` column is removed before JSON serialization.
+Pinned ordering, regular pagination and ordering, category/search filters,
+author-department visibility for students and department heads, admin access,
+employer exclusion from Department posts, response fields, errors, and 30-second
+cache behavior remain unchanged. Live old/new controller comparisons matched
+84 responses across roles, departments, filters, and pages. All 156 staged
+tests passed. Announcement writes and cache invalidation were not changed.
+
+The current announcements table has only its primary, category, and author
+indexes. The regular page still scans and sorts its 11-row source table. A
+future `(is_pinned, created_at)` index may help a much larger table; no schema
+change or production-scale latency claim was made in this phase.
+
+Applied with `Apply-AnnouncementHistoryQueryOptimization.ps1`.
+
+## Query optimization: Priority 2, phase 6 (activity-log lists; installed)
+
+`GET /eu-connect/api/activity-logs/mine` now carries the actor's total in the
+paginated row query. Populated pages use one database statement instead of
+two. Empty pages still run the original count to preserve pagination totals.
+The internal `total_logs` value is omitted from response rows.
+
+`GET /eu-connect/api/activity-logs` likewise carries the filtered total in
+its page query, and combines its three unfiltered distinct-value lookups into
+one `UNION ALL` statement. Populated admin pages therefore use two statements
+instead of five; empty pages use a fallback count for three statements. The
+combined lookup still makes three distinct scans, so this is a round-trip
+reduction, not a claim that those scans disappeared. Option ordering and null
+values remain as before.
+
+The admin filters, joined actor names, page sizes, descending date order,
+response JSON, authorization, deletion behavior, and 30-second caches remain
+unchanged. Twenty-one live old/new responses matched; all 159 staged tests
+passed. The live activity-log table has 75 rows and only primary and actor-ID
+indexes. Both lists still sort by date; `(actor_id, created_at)` and a date
+index are candidates for a later schema phase when larger data and measurements
+justify them. No schema or write path changed.
+
+Applied with `Apply-ActivityLogsQueryOptimization.ps1`.
+
+## Query optimization: Priority 2, phase 7 (notifications; installed)
+
+`GET /eu-connect/api/notifications` now uses one conditional aggregate for
+the recipient's all-inbox total, pending-request-scope total, and global unread
+count. The inbox row query is unchanged. Every uncached request therefore uses
+two database statements instead of three and one recipient count scan instead
+of two. The aggregate uses the existing `notifications(user_id)` index.
+
+The `requests` scope still counts only `supervisor_request_submitted` rows;
+`unreadCount` still covers the whole inbox. Empty and out-of-range pages retain
+their totals and the minimum `totalPages` of one. Sender fields, actionable
+supervisor status, ordering, page/limit parsing, response JSON, authorization,
+15-second cache, and all mutation invalidation remain unchanged. The separate
+counts matched for all 17 current recipients and a missing recipient; 60 live
+old/new endpoint responses matched. All 161 staged tests passed.
+
+The live inbox still sorts each recipient's rows by `created_at` using only a
+`user_id` index. A composite `(user_id, created_at)` index is a candidate for
+a future schema phase if inbox volume grows. No schema or write path changed.
+
+Applied with `Apply-NotificationsQueryOptimization.ps1`.
+
+## Query optimization: Priority 2, phase 8 (attendance history; installed)
+
+`GET /eu-connect/api/dtr/history` now carries the exact personal,
+internship-specific total in its paginated row query. The `dtr.*` projection
+preserves the former `SELECT *` fields; the internal `total_dtrs` value is
+removed before JSON serialization. Populated pages use one database statement
+instead of two. An empty page still runs the original count query.
+
+`GET /eu-connect/api/searched-user/dtrs/:studentId` likewise carries its
+total with the paginated rows, retaining the original join to ongoing,
+non-deleted internships in both the page and count. Populated pages use one
+statement instead of two; empty pages retain the original count fallback.
+Thirty live old/new responses matched across users, limits, offsets, and empty
+pages. All 164 staged tests passed.
+
+`GET /eu-connect/api/internship-records/dtr/:internshipId` already makes one
+bounded `LIMIT 500` history read after `verifyRecordAccess`; its query and
+authorization were left unchanged. The three 30-second history cache rules,
+open-shift bypass, ordering, response shapes, and mutation invalidation remain
+unchanged. No schema or write path changed.
+
+The live `daily_time_records` table has 21 rows and only user-ID and
+internship-ID secondary indexes. The current plans still sort dates, and the
+record-specific read scans this small table. Composite indexes such as
+`(user_id, internship_id, created_at)` and `(internship_id, clock_in)` are
+candidates for a later schema phase if larger data justifies their write cost.
+No production-scale latency improvement was measured.
+
+Applied with `Apply-AttendanceHistoryQueryOptimization.ps1`.
+
+## Query optimization: Priority 2, phase 9 (weekly narrative history; installed)
+
+`GET /eu-connect/api/weekly-narratives/history` now joins its existing
+aggregate statistics to the paginated narrative read. A populated page uses
+one database statement instead of two. The count, maximum week, trimmed-space
+word calculation, and `YEARWEEK(..., 1)` this-week count remain identical.
+Internal aggregate columns are removed from narrative JSON. An empty page
+still runs the original aggregate query so stats and pagination remain correct.
+
+`GET /eu-connect/api/searched-user/weekly-narratives/:searchedUserId` carries
+its total with the page rows while keeping the ongoing, non-deleted internship
+join. A populated page uses one statement instead of two; empty pages retain
+the original count fallback. Twenty-four live old/new responses matched
+across users, pages, limits, and empty results. All 167 staged tests passed.
+
+`GET /eu-connect/api/internship-records/weekly-narratives/:internshipId`
+already makes one `LIMIT 100` read after `verifyRecordAccess`; it was left
+unchanged. The three 30-second cache rules, ordering, response shapes,
+authorization, and write invalidation remain unchanged. The live table has
+only two narratives and already indexes `(user_id, internship_id)` and
+`internship_id`; its date/week sorts remain. Composite ordering indexes are
+candidates for a later schema phase if table growth justifies them. No schema,
+write path, or production-scale latency claim changed here.
+
+Applied with `Apply-WeeklyHistoryQueryOptimization.ps1`.
+
+## Query optimization: Priority 3, phase 1 (evaluation reads; installed)
+
+The seven requested reads now group joined score rows with per-evaluation
+category maps instead of searching the accumulated category array for every
+row: `/student-evaluations/:studentId`, `/student-past-evaluations/:studentId`,
+`/evaluations/all`, `/evaluations/disputed`, `/evaluations/pending`, and
+`/internship-records/evaluations/:internshipId`. The submitted list
+`/evaluations/submitted` now buckets scores by master once instead of filtering
+all scores once per master. Category order, totals, dates, status labels,
+reviewer fields, response shapes, SQL filters and record authorization stay
+unchanged. Four new tests exercise all seven endpoints with repeated and
+interleaved score rows; the full suite passed **171/171**.
+
+No SQL, index, schema, write path, or cache invalidation was changed. Read-only
+live schema inspection confirmed indexes on both score tables'
+`evaluation_master_id`, student-evaluation masters' `internship_record_id`,
+employer-evaluation masters' `internship_record_id` and `student_id`,
+internship records' `user_id`, and profiles' `user_id`. The live tables contain
+about two student-evaluation masters and one employer-evaluation master.
+Composite filter/order indexes are possible future candidates only after
+larger representative data and `EXPLAIN` show a real bottleneck. No
+production-scale latency improvement was measured.
+
+`/student-evaluations/:studentId` retains its existing first-internship
+payload selection and joined-row category behavior. Restricting its query to
+one internship could change response data and needs a separate contract review.
+
+## Query optimization: Priority 3, phase 2 (evaluation printing; reviewed)
+
+`GET /eu-connect/api/evaluations/student/:evaluationId/print` already makes a
+primary-key header lookup followed by one score lookup only after student
+ownership and completed-status checks. Live `EXPLAIN` for an existing
+evaluation uses the evaluation and internship primary keys, indexed profile
+and academic-user joins, and the department primary key. The score query uses
+the existing `student_evaluation_scores(evaluation_master_id)` index and
+criteria primary key; it sorts the matching scores by category and criterion
+ID. Current data has two scored evaluations with at most 29 scores each.
+
+No SQL, index, controller, route, response, or cache change was justified by
+that plan. A new regression test covers print JSON, category/item ordering,
+missing evaluations, ownership, incomplete status, and non-student denial.
+The full suite passed **172/172**. Revisit the sort only if realistic cohort
+data or latency measurements show it is material.
+
+## Query optimization: Priority 3, phase 3 (profiles; installed)
+
+For `GET /eu-connect/api/account/user`, the student branch now selects that
+user's maximum academic-record ID through a correlated lookup instead of a
+derived table grouping every user's academic records. It retains the exact
+latest-ID rule, joins, response columns, 404 behavior, and 300-second cache.
+The live schema already has `(user_id, id)` on `student_academic_info`.
+Old/new result rows matched for all seven current academic-profile owners;
+the new `EXPLAIN` plan uses a keyed user lookup and optimizes the scalar
+maximum subquery away. One regression test covers the student projection and
+single-ID query parameter.
+
+`GET /eu-connect/api/searched-user/:searchedUserId` was reviewed without a
+query change. Its live plan starts from the requested user's primary key and
+uses keyed profile, academic, internship, department-head and employer joins.
+It returns one target and performs a supplementary supervision lookup only
+for relevant viewer/target role pairs. Existing tests cover viewer-specific
+supervision, cache isolation, and partial-lookup cache bypass. The current
+academic table has seven rows with no per-user history yet; changing the
+searched route's unspecific academic-row selection would change its contract
+once a student has multiple rows. No index, write path or cache rule changed.
+The full suite passed **173/173**; no production-scale speedup was measured.
+
+## Query optimization: Priority 3, phase 4 (internship overview; installed)
+
+`GET /eu-connect/api/internship-records/overview/:internshipId` now returns
+the DTR, weekly narrative and document counts as indexed scalar subqueries
+in its detail statement. It also selects the latest academic record for the
+record's student with a correlated `MAX(id)` lookup using the existing
+`student_academic_info(user_id, id)` index. The three separate count queries
+and the all-user latest-academic derived table are gone. Each uncached
+request executes three fewer database statements; an admin request now uses
+the access check and one detail query. Department heads still execute their
+additional department-access check.
+
+Read-only old/new query results matched for all three current internship
+records. Live `EXPLAIN` shows indexed `internship_id` reads for each count;
+the academic maximum subquery is optimized away. The 30-second cache still
+runs after `verifyRecordAccess`, including on hits. Count meanings,
+percentage rounding, response fields, errors, write invalidation and access
+rules are unchanged. One new query-contract test and the updated cache mock
+cover the consolidated row; **174/174** tests pass. No schema or write path
+changed, and no production-scale latency improvement was measured.
+
+## Query optimization: Priority 3, phase 5 (search history; installed)
+
+`GET /eu-connect/api/search-history` now looks up each searched user's latest
+academic row through a correlated `MAX(id)` on the existing
+`student_academic_info(user_id, id)` index instead of joining a grouped
+derived table. The history viewer/type filter, `updated_at DESC` ordering,
+10-row limit, polymorphic non-user rows, response fields and errors are
+unchanged. Old/new result arrays matched for all eight current viewer/type
+pairs. Two new tests cover the query contract, empty results, and validation;
+**176/176** tests pass. No route, write path or cache was changed.
+
+Live `EXPLAIN` uses the existing `search_history(user_id, type, created_at)`
+index for filtering but still sorts by `updated_at`. A future
+`(user_id, type, updated_at)` index is worth considering only after realistic
+history growth and timing evidence; the live table currently has ten rows.
+The old derived query was already optimized as a lateral lookup in the
+current database, so this simplification is not a measured speedup. No
+schema change was made.
+
+## Query optimization: Priority 3, phase 6 (document lists; installed)
+
+`GET /eu-connect/api/searched-user/files/:searchedUserId` now carries the
+global requirement-type count in its internship query, eliminating one
+statement for every nonempty internship list. It buckets accepted/unmarked
+documents by `internship_id` once instead of filtering the full document
+array for each internship. Internship order, per-internship file order,
+distinct requirement counting (including the original null behavior),
+completion rounding, response fields, empty results, and 30-second cache
+are unchanged. Read-only old/new results matched for all 17 current users:
+two with internship records and 15 empty results.
+
+`GET /eu-connect/api/internships/files`,
+`/searched-user/employer-uploaded-files/:searchedUserId`, and
+`/internship-records/documents/:internshipId` already use one scoped document
+query each. Live plans use existing `internship_documents(user_id)` or
+`(internship_id)` indexes and primary-key metadata joins. Their SQL and
+response shapes were left unchanged, as were record access checks before
+cache hits. Two new tests cover all four endpoint contracts and grouped
+counts; the existing cache mock now supplies the count in the internship
+row. **178/178** tests pass.
+
+The live document table has 16 rows. Each list still sorts by `created_at`
+after its scoped lookup; composite filter/order indexes should be considered
+only with representative growth and measured latency. No schema, write path,
+cache rule or production-scale performance claim changed here.
+
+## Query optimization: Priority 3, phase 7 (saved annual reports; installed)
+
+`GET /eu-connect/api/reports/annex-c` now carries the filtered report total
+with each populated page row. A populated page uses the paginated report and
+batched-entry queries instead of a separate count, page, and entries query.
+The internal `total_reports` field is removed from JSON. Empty pages run the
+original filtered count as a fallback; an out-of-range page now returns an
+empty `reports` array with the correct total instead of building invalid
+`IN ()` SQL. Year/search filters, degree-program ordering, page/limit rules,
+entry grouping and response fields are preserved. Five live old/new SQL
+cases matched for nonempty and empty pages; three new tests cover populated,
+empty/out-of-range, and detail contracts. **181/181** tests pass.
+
+`GET /eu-connect/api/reports/annex-c/:reportId` remains a primary-key parent
+read followed by an indexed `report_id` entries read ordered by `sort_order`.
+Live data has two saved reports with three entries each; its sort is small.
+No detail query or index change was justified. Both reads retain their
+database-backed Registrar/admin check before the 60-second cache lookup,
+and annual mutation invalidation is unchanged. The existing
+`(academic_year, degree_program)` report index supports the list filter and
+order. No schema or write path changed, and no production-scale speedup was
+measured.

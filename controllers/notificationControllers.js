@@ -53,18 +53,18 @@ export const getAllNotifications = async (req, res) => {
       [...params, limit, offset],
     );
 
-    const [[{ total: totalRecords }]] = await connection.execute(
-      `SELECT COUNT(*) AS total FROM notifications n WHERE ${whereClause}`,
-      params,
-    );
-
     // Unread count is always global (not scoped to the current tab) — it
     // drives the header badge, which should reflect the whole inbox.
-    const [[{ unread_count: unreadCount }]] = await connection.execute(
-      `SELECT COUNT(*) AS unread_count FROM notifications WHERE user_id = ? AND is_read = 0`,
+    const [[counts]] = await connection.execute(
+      `SELECT COUNT(*) AS all_total,
+              COUNT(CASE WHEN type = 'supervisor_request_submitted' THEN 1 END) AS request_total,
+              COUNT(CASE WHEN is_read = 0 THEN 1 END) AS unread_count
+       FROM notifications WHERE user_id = ?`,
       [userId],
     );
 
+    const totalRecords = scope === "requests" ? counts.request_total : counts.all_total;
+    const unreadCount = counts.unread_count;
     const totalPages = Math.ceil(totalRecords / limit) || 1;
 
     const notifications = results.map((n) => ({

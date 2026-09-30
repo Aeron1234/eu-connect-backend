@@ -1,3 +1,5 @@
+import { invalidateAttendanceHistoryCache } from "../config/attendanceHistoryCache.js";
+import { invalidateProfileOverviewCache } from "../config/profileOverviewCache.js";
 import { invalidateDepartmentInternshipsCache } from "../config/staffInternshipsCache.js";
 import { invalidateDashboardCache } from "../config/dashboardCache.js";
 import { db } from "../config/db.js";
@@ -45,22 +47,28 @@ export const getAllDTRs = async (req, res) => {
       return res.status(400).json({ error: "Internship ID is required" });
     }
 
-    const [rows] = await connection.execute(
-      `SELECT * FROM daily_time_records 
-       WHERE user_id = ? AND internship_id = ?
+    const [pageRows] = await connection.execute(
+      `SELECT dtr.*,
+              (SELECT COUNT(*) FROM daily_time_records
+               WHERE user_id = ? AND internship_id = ?) AS total_dtrs
+       FROM daily_time_records dtr
+       WHERE dtr.user_id = ? AND dtr.internship_id = ?
        ORDER BY created_at DESC
        LIMIT ? OFFSET ?
        `,
-      [id, internshipId, limit, offset],
+      [id, internshipId, id, internshipId, limit, offset],
     );
 
-    const [countResult] = await connection.execute(
-      `SELECT COUNT(*) AS total FROM daily_time_records
-        WHERE user_id = ? AND internship_id = ?`,
-      [id, internshipId],
-    );
-
-    const totalRecords = countResult[0].total;
+    let totalRecords = pageRows[0]?.total_dtrs;
+    if (pageRows.length === 0) {
+      const [[{ total }]] = await connection.execute(
+        `SELECT COUNT(*) AS total FROM daily_time_records
+          WHERE user_id = ? AND internship_id = ?`,
+        [id, internshipId],
+      );
+      totalRecords = total;
+    }
+    const rows = pageRows.map(({ total_dtrs, ...row }) => row);
     const totalPages = Math.ceil(totalRecords / limit);
 
     res.status(200).json({
@@ -206,6 +214,8 @@ export const clockIn = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateAttendanceHistoryCache();
+    invalidateProfileOverviewCache();
     invalidateDashboardCache();
     invalidateDepartmentInternshipsCache();
 
@@ -346,6 +356,8 @@ export const clockOut = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateAttendanceHistoryCache();
+    invalidateProfileOverviewCache();
     invalidateDashboardCache();
     invalidateDepartmentInternshipsCache();
 
@@ -410,6 +422,8 @@ export const deleteDTR = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateAttendanceHistoryCache();
+    invalidateProfileOverviewCache();
     invalidateDashboardCache();
     invalidateDepartmentInternshipsCache();
     res.status(200).json({

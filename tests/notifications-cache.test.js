@@ -25,8 +25,7 @@ beforeEach(() => {
     async beginTransaction() {}, async commit() {}, async rollback() {}, release() {},
     async execute(sql, params = []) {
       queries++;
-      if (sql.includes("AS unread_count")) return [[{ unread_count: 2 }]];
-      if (sql.includes("COUNT(*)")) return [[{ total: 1 }]];
+      if (sql.includes("AS unread_count")) return [[{ all_total: 1, request_total: 1, unread_count: 2 }]];
       if (sql.trim().startsWith("SELECT")) return [[{ notification_id: 1, sender_id: "sender", sender_first_name: params[0], type: "supervisor_request_submitted", supervisor_request_status: "pending", is_read: 0 }]];
       return [{ affectedRows }];
     },
@@ -58,13 +57,13 @@ test("notification GET reuses data, isolates users/page/limit/scope and keeps au
   const get = await client(t);
   const first = await (await get()).json();
   assert.equal(first.unreadCount, 2); assert.equal(first.data[0].actionable, true);
-  assert.deepEqual(await (await get()).json(), first); assert.equal(queries, 3);
+  assert.deepEqual(await (await get()).json(), first); assert.equal(queries, 2);
   const bob = await (await get(url, "bob")).json(); assert.equal(bob.data[0].sender.first_name, "bob");
   for (const query of ["?page=2", "?limit=20", "?scope=requests"]) assert.equal((await get(url + query)).status, 200);
-  assert.equal(queries, 15);
+  assert.equal(queries, 10);
   assert.equal((await get(url, null)).status, 401);
   assert.equal((await get(url, "alice", "invalid-role")).status, 403);
-  assert.equal(queries, 15);
+  assert.equal(queries, 10);
 });
 
 test("mark-one, mark-all and delete clear all recipient pages without flushing others", async (t) => {
@@ -116,10 +115,11 @@ test("supervisor acceptance/rejection invalidates before socket delivery; rollba
       connection.commit = async () => { assert.ok(cache.has("bob")); if (decision === "failed-commit") throw new Error("commit failed"); committed = true; };
       const io = { to() { return { emit() { assert.ok(committed); assert.equal(cache.has("bob"), false); emitted++; } }; } };
       const res = response();
+      cache.set("searched-supervision",{path:"/eu-connect/api/searched-user/alice",userId:"bob",body:{}});
       await respondToSupervisorRequest({ verifiedUser: { id: "bob" }, params: { requestId: "r" }, body: { decision: decision === "failed-commit" ? "accept" : decision }, app: { get: () => io } }, res);
       assert.equal(res.statusCode, decision === "failed-commit" ? 500 : 200);
       assert.equal(emitted, decision === "failed-commit" ? 0 : 1);
-      assert.equal(cache.has("bob"), decision === "failed-commit");
+      assert.equal(cache.has("bob"), decision === "failed-commit");assert.equal(cache.has("searched-supervision"),decision === "failed-commit");
     }
   } finally { console.error = log; }
 });

@@ -1,3 +1,4 @@
+import { cacheAttendanceHistory } from "../middleware/attendance-history-cache.js";
 import { cacheRoute } from "../middleware/cache-middleware.js";
 import express from "express";
 import multer from "multer";
@@ -32,6 +33,7 @@ searchedUserRoutes.get(
   verifyUser,
   verifyRole(["student", "employer", "department_head", "admin"]),
   generalLimiter,
+  cacheRoute(30),
   getSearchedUser,
 );
 
@@ -40,6 +42,7 @@ searchedUserRoutes.get(
   verifyUser,
   verifyRole(["employer", "department_head", "admin"]),
   generalLimiter,
+  cacheAttendanceHistory,
   getSearchedStudentDTRs,
 );
 

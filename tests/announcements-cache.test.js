@@ -32,17 +32,21 @@ beforeEach(() => {
     if (sql.includes("SELECT * FROM announcement_categories")) return [mode === "empty" ? [] : [{ id: 1, name: "General" }]];
     assert.ok(sql.includes("authorDept.department_id = ?"));
     const regular = sql.includes("LIMIT ? OFFSET ?");
-    const filters = regular ? params.slice(0, -2) : params;
+    const filters = regular ? params.slice((params.length - 2) / 2, -2) : params;
     const [role, duplicateRole, department] = filters.slice(-3);
     assert.equal(duplicateRole, role);
     let rows = mode === "empty" ? [] : fixtures.filter(row => row.category !== "Department" || (role !== "employer" && (role === "admin" || row.department === department)));
     let index = 0;
     if (sql.includes("ac.name = ?")) { const category = filters[index++]; rows = rows.filter(row => row.category === category); }
     if (sql.includes("a.title LIKE ?")) { const search = filters[index].replaceAll("%", ""); rows = rows.filter(row => row.title.includes(search)); }
-    const count = sql.includes("COUNT(*)");
+    const count = sql.trim().startsWith("SELECT COUNT(*) AS total");
     rows = rows.filter(row => row.is_pinned === (!regular && !count));
     if (count) return [[{ total: rows.length }]];
-    if (regular) rows = rows.slice(params.at(-1), params.at(-1) + params.at(-2));
+    if (regular) {
+      const total = rows.length;
+      rows = rows.slice(params.at(-1), params.at(-1) + params.at(-2))
+        .map(row => ({ ...row, total_regular: total }));
+    }
     return [structuredClone(rows)];
   };
   connection = {
@@ -88,7 +92,7 @@ function request(data = {}) {
 
 test("feed caches for 30 seconds and categories for five minutes", async (t) => {
   const get = await client(t);
-  for (const [path, ttl, queries] of [["history", 30000, 3], ["categories", 300000, 1]]) {
+  for (const [path, ttl, queries] of [["history", 30000, 2], ["categories", 300000, 1]]) {
     const before = calls; const first = await get(path); assert.equal(first.status, 200);
     const body = await first.json(); assert.deepEqual(await (await get(path)).json(), body); assert.equal(calls, before + queries);
     const key = cache.keys().find(key => cache.get(key).path === base + path);
@@ -103,16 +107,16 @@ test("role, user and department keys preserve announcement visibility on hits", 
     const first = await (await get(path, role, department)).json(); assert.deepEqual(first.regular.map(row => row.id), ids);
     const before = calls; assert.deepEqual(await (await get(path, role, department)).json(), first); assert.equal(calls, before);
   }
-  const before = calls; await get("history?category=Department", "student", 1, "other"); assert.equal(calls, before + 3);
+  const before = calls; await get("history?category=Department", "student", 1, "other"); assert.equal(calls, before + 2);
   assert.equal((await get("history", "unknown")).status, 403); assert.equal((await get("categories", "student", 1, null)).status, 401);
 });
 
 test("search/category/page variants remain separate, including pinned and regular data", async (t) => {
   const get = await client(t);
-  for (const path of ["history", "history?page=2", "history?search=Dept", "history?category=General", "history?category=Department"]) {
-    const before = calls; const res = await get(path); assert.equal(res.status, 200); assert.equal(calls, before + 3);
+  for (const [path, queries] of [["history", 2], ["history?page=2", 3], ["history?search=Dept", 2], ["history?category=General", 3], ["history?category=Department", 2]]) {
+    const before = calls; const res = await get(path); assert.equal(res.status, 200); assert.equal(calls, before + queries);
     const data = await res.json(); assert.ok(Array.isArray(data.pinned)); assert.ok(Array.isArray(data.regular));
-    await get(path); assert.equal(calls, before + 3);
+    await get(path); assert.equal(calls, before + queries);
   }
 });
 
@@ -157,7 +161,11 @@ test("profile-name writes invalidate joined author names only after commit", asy
       cache.flushAll(); seed(); mode = failed ? "commit-failure" : "success"; const res = response();
       cache.set("hte-profile", {path:"/eu-connect/api/reports/hte-annual/companies",userId:"admin",body:{}});
       cache.set("staff-profile",{path:"/eu-connect/api/internship-records/department",userId:"head",body:{}});
+      cache.set("evaluation-profile",{path:"/eu-connect/api/evaluations/all",userId:"student",body:[]});
+      cache.set("searched-profile",{path:"/eu-connect/api/searched-user/student",userId:"staff",body:{}});
       await updateUserInfo(request({ first_name: "Renamed" }), res);
+      assert.equal(cache.has("searched-profile"),failed);
+      assert.equal(cache.has("evaluation-profile"),failed);
       assert.equal(cache.has("staff-profile"),failed);
       assert.equal(cache.has("hte-profile"), failed);
       assert.equal(res.statusCode, failed ? 500 : 200); assert.equal(cache.has("feed-a"), failed); assert.ok(cache.has("categories"));

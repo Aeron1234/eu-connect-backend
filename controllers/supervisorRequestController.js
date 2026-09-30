@@ -1,3 +1,4 @@
+import { invalidateProfileOverviewCache } from "../config/profileOverviewCache.js";
 import { invalidateNotificationsCache } from "../config/notificationsCache.js";
 import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
 import { db } from "../config/db.js";
@@ -176,6 +177,7 @@ export const requestSupervisor = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateProfileOverviewCache();
     invalidateNotificationsCache();
 
     invalidateActivityLogsCache();
@@ -263,6 +265,7 @@ export const cancelSupervisorRequest = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateProfileOverviewCache();
     invalidateNotificationsCache();
 
     invalidateActivityLogsCache();
@@ -394,6 +397,7 @@ export const respondToSupervisorRequest = async (req, res) => {
       }
 
       await connection.commit();
+    invalidateProfileOverviewCache();
       invalidateNotificationsCache();
 
       invalidateActivityLogsCache();
@@ -459,6 +463,7 @@ export const respondToSupervisorRequest = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateProfileOverviewCache();
     invalidateNotificationsCache();
 
     invalidateActivityLogsCache();

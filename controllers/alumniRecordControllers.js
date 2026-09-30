@@ -402,24 +402,10 @@ export const getAlumniInternships = async (req, res) => {
     );
     const academicYears = yearRows.map((r) => r.academic_year);
 
-    const [[{ total }]] = await connection.execute(
-      `SELECT COUNT(DISTINCT LOWER(TRIM(air.company_name))) AS total
-       FROM alumni_internship_records air
-       ${whereClause}`,
-      params,
-    );
-
-    if (total === 0) {
-      return res.status(200).json({
-        data: [],
-        academicYears,
-        pagination: { page: pageNum, limit: pageSize, total: 0, totalPages: 0 },
-      });
-    }
-
     const [companyPage] = await connection.execute(
       `SELECT LOWER(TRIM(air.company_name)) AS normalized_name,
-              MIN(air.company_name) AS company_name
+              MIN(air.company_name) AS company_name,
+              COUNT(*) OVER() AS total
        FROM alumni_internship_records air
        ${whereClause}
        GROUP BY LOWER(TRIM(air.company_name))
@@ -427,6 +413,29 @@ export const getAlumniInternships = async (req, res) => {
        LIMIT ? OFFSET ?`,
       [...params, pageSize, offset],
     );
+
+    if (companyPage.length === 0) {
+      // A page beyond the end has no window row to carry the total. Keep the
+      // original distinct-company count for this uncommon case.
+      const [[{ total }]] = await connection.execute(
+        `SELECT COUNT(DISTINCT LOWER(TRIM(air.company_name))) AS total
+         FROM alumni_internship_records air
+         ${whereClause}`,
+        params,
+      );
+      return res.status(200).json({
+        data: [],
+        academicYears,
+        pagination: {
+          page: pageNum,
+          limit: pageSize,
+          total,
+          totalPages: Math.ceil(total / pageSize),
+        },
+      });
+    }
+
+    const total = companyPage[0].total;
 
     const normalizedNames = companyPage.map((c) => c.normalized_name);
     const placeholders = normalizedNames.map(() => "?").join(",");
@@ -502,12 +511,28 @@ export const getCompanyDirectory = async (req, res) => {
   try {
     connection = await db.getConnection();
 
+    // Fold each source before loading the next one. First-seen spelling and
+    // course insertion order are part of the existing response.
+    const directory = {};
+    function addEntry(companyName, courseName) {
+      const normalized = companyName.trim().toLowerCase();
+      if (!directory[normalized]) {
+        directory[normalized] = {
+          company_name: companyName,
+          intern_count: 0,
+          courses: new Set(),
+        };
+      }
+      directory[normalized].intern_count += 1;
+      if (courseName) directory[normalized].courses.add(courseName);
+    }
+
     // 1. Real students — current and past, any branch/location
-    const [realRows] = await connection.execute(
+    let [realRows] = await connection.execute(
       `SELECT ir.company_name, c.course_name
        FROM internship_records ir
        INNER JOIN (
-         SELECT sai1.*
+         SELECT sai1.user_id, sai1.course_id
          FROM student_academic_info AS sai1
          INNER JOIN (
            SELECT user_id, MAX(id) AS max_id
@@ -519,31 +544,18 @@ export const getCompanyDirectory = async (req, res) => {
        WHERE ir.deleted_at IS NULL AND ir.status IN ('ongoing', 'finished')`,
     );
 
+    realRows.forEach((r) => addEntry(r.company_name, r.course_name));
+    realRows = null;
+
     // 2. Manually-entered alumni
-    const [alumniRows] = await connection.execute(
+    let [alumniRows] = await connection.execute(
       `SELECT air.company_name, c.course_name
        FROM alumni_internship_records air
        LEFT JOIN courses c ON air.course_id = c.id`,
     );
 
-    // Merge both sources under one normalized company key
-    const directory = {};
-
-    function addEntry(companyName, courseName) {
-      const normalized = companyName.trim().toLowerCase();
-      if (!directory[normalized]) {
-        directory[normalized] = {
-          company_name: companyName, // first-seen casing wins for display
-          intern_count: 0,
-          courses: new Set(),
-        };
-      }
-      directory[normalized].intern_count += 1;
-      if (courseName) directory[normalized].courses.add(courseName);
-    }
-
-    realRows.forEach((r) => addEntry(r.company_name, r.course_name));
     alumniRows.forEach((r) => addEntry(r.company_name, r.course_name));
+    alumniRows = null;
 
     const companies = Object.values(directory)
       .map((c) => ({

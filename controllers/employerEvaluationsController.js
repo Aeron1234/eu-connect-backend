@@ -1,3 +1,4 @@
+import { invalidateEvaluationHistoryCache } from "../config/evaluationHistoryCache.js";
 import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
 import { db } from "../config/db.js";
 import { newUUID } from "../config/helpers.js";
@@ -90,6 +91,7 @@ export const getPendingStudentEvaluations = async (req, res) => {
     }
 
     const evaluationsGroup = {};
+    const categoryGroups = new Map();
 
     rows.forEach((row) => {
       const evalId = row.evaluation_id;
@@ -123,12 +125,12 @@ export const getPendingStudentEvaluations = async (req, res) => {
           comments: row.comments || "",
           breakdown: [],
         };
+        categoryGroups.set(evalId, new Map());
       }
 
       // 2. Accumulate criteria points dynamically into our summary categories
-      let existingCategory = evaluationsGroup[evalId].breakdown.find(
-        (b) => b.label === row.breakdown_label,
-      );
+      const categories = categoryGroups.get(evalId);
+      const existingCategory = categories.get(row.breakdown_label);
 
       const currentScore = Number(row.breakdown_score);
 
@@ -136,11 +138,13 @@ export const getPendingStudentEvaluations = async (req, res) => {
         existingCategory.score += currentScore;
         existingCategory.max += POINTS_PER_CRITERION;
       } else {
-        evaluationsGroup[evalId].breakdown.push({
+        const category = {
           label: row.breakdown_label,
           score: currentScore,
           max: POINTS_PER_CRITERION,
-        });
+        };
+        evaluationsGroup[evalId].breakdown.push(category);
+        categories.set(row.breakdown_label, category);
       }
     });
 
@@ -289,6 +293,7 @@ export const createEmployerEvaluation = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateEvaluationHistoryCache();
 
     invalidateActivityLogsCache();
 
@@ -341,10 +346,16 @@ export const getStudentSubmittedEvaluations = async (req, res) => {
       masterIds,
     );
 
+    const scoresByMaster = new Map();
+    for (const score of scores) {
+      if (!scoresByMaster.has(score.evaluation_master_id)) {
+        scoresByMaster.set(score.evaluation_master_id, []);
+      }
+      scoresByMaster.get(score.evaluation_master_id).push(score);
+    }
+
     const records = masters.map((m) => {
-      const masterScores = scores.filter(
-        (s) => s.evaluation_master_id === m.id,
-      );
+      const masterScores = scoresByMaster.get(m.id) || [];
 
       const categoryMap = {};
       masterScores.forEach((s) => {

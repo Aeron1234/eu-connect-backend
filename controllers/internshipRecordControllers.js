@@ -1,3 +1,11 @@
+import { getActivityLogUserName } from "../config/activityLogNames.js";
+import { attendanceHistoryCacheHit } from "../middleware/attendance-history-cache.js";
+import { invalidateAttendanceHistoryCache } from "../config/attendanceHistoryCache.js";
+import { internshipOverviewCacheHit } from "../middleware/internship-overview-cache.js";
+import { invalidateProfileOverviewCache } from "../config/profileOverviewCache.js";
+import { invalidateWeeklyNarrativesCache } from "../config/weeklyNarrativesCache.js";
+import { evaluationHistoryCacheHit } from "../middleware/evaluation-history-cache.js";
+import { invalidateEvaluationHistoryCache } from "../config/evaluationHistoryCache.js";
 import { documentMetadataCacheHit } from "../middleware/document-metadata-cache.js";
 import { invalidateDocumentMetadataCache } from "../config/documentMetadataCache.js";
 import { invalidateStaffInternshipsCache } from "../config/staffInternshipsCache.js";
@@ -53,11 +61,9 @@ export const getMyPastInternshipRecords = async (req, res) => {
       `SELECT 
          ir.id, ir.company_name, ir.internship_position, ir.status,
          ir.date_started, ir.date_ended,
-         COUNT(doc.id) AS file_count
+         (SELECT COUNT(*) FROM internship_documents doc WHERE doc.internship_id = ir.id) AS file_count
        FROM internship_records ir
-       LEFT JOIN internship_documents doc ON doc.internship_id = ir.id
        WHERE ir.user_id = ? AND ir.status != 'ongoing'
-       GROUP BY ir.id
        ORDER BY ir.date_ended DESC, ir.created_at DESC`,
       [userId],
     );
@@ -98,7 +104,7 @@ export const getAllUserInternships = async (req, res) => {
 
     if (role === "student") {
       const [rows] = await db.execute(
-        `SELECT ir.id, ir.created_at, ir.company_name, ir.company_address, ir.internship_position, ir.company_website, ir.description, ir.status, ir.internship_position, ir.description, ir.date_started, ir.date_ended, ir.total_hours, up.first_name, up.last_name, c.course_name, r.short_name
+        `SELECT ir.id, ir.created_at, ir.company_name, ir.company_address, ir.internship_position, ir.company_website, ir.description, ir.status, ir.date_started, ir.date_ended, ir.total_hours, up.first_name, up.last_name, c.course_name, r.short_name
         FROM internship_records AS ir
        INNER JOIN user_profiles AS up ON ir.user_id = up.user_id
        INNER JOIN student_academic_info AS sai ON ir.user_id = sai.user_id
@@ -117,7 +123,7 @@ export const getAllUserInternships = async (req, res) => {
 
     if (role === "department_head" || role === "admin") {
       const [rows] = await db.execute(
-        `SELECT ir.id, ir.user_id, ir.created_at, ir.company_name, ir.company_address, ir.internship_position, ir.company_website, ir.description, ir.status, ir.internship_position, ir.description, ir.date_started, ir.date_ended, ir.total_hours, ir.lat, ir.lon, up.first_name, up.last_name, c.course_name, r.short_name AS region_name
+        `SELECT ir.id, ir.user_id, ir.created_at, ir.company_name, ir.company_address, ir.internship_position, ir.company_website, ir.description, ir.status, ir.date_started, ir.date_ended, ir.total_hours, ir.lat, ir.lon, up.first_name, up.last_name, c.course_name, r.short_name AS region_name
         FROM internship_records AS ir
        INNER JOIN user_profiles AS up ON ir.user_id = up.user_id
        INNER JOIN student_academic_info AS sai ON ir.user_id = sai.user_id
@@ -291,6 +297,10 @@ export const createInternshipRecord = async (req, res) => {
     );
 
     await connection.commit();
+    invalidateAttendanceHistoryCache();
+    invalidateProfileOverviewCache();
+    invalidateWeeklyNarrativesCache();
+    invalidateEvaluationHistoryCache();
     invalidateDocumentMetadataCache();
     invalidateStaffInternshipsCache();
     invalidatePastInternshipsCache();
@@ -478,6 +488,10 @@ export const approveInternshipRecord = async (req, res) => {
     );
 
     await connection.commit();
+    invalidateAttendanceHistoryCache();
+    invalidateProfileOverviewCache();
+    invalidateWeeklyNarrativesCache();
+    invalidateEvaluationHistoryCache();
     invalidateDocumentMetadataCache();
     invalidateStaffInternshipsCache();
     invalidatePastInternshipsCache();
@@ -675,7 +689,7 @@ export const markInternshipFinished = async (req, res) => {
         "internship_record_force_finished",
         "internship_records",
         internshipId,
-        `${personInChargeName} marked the internship record for ${company_name} (student: ${alumniName ?? studentId}) as finished.`,
+        `${personInChargeName} marked the internship record for ${company_name} (student: ${await getActivityLogUserName(connection, studentId)}) as finished.`,
         JSON.stringify({
           student_id: studentId,
           company_name,
@@ -686,6 +700,10 @@ export const markInternshipFinished = async (req, res) => {
     );
 
     await connection.commit();
+    invalidateAttendanceHistoryCache();
+    invalidateProfileOverviewCache();
+    invalidateWeeklyNarrativesCache();
+    invalidateEvaluationHistoryCache();
     invalidateDocumentMetadataCache();
     invalidateStaffInternshipsCache();
     invalidatePastInternshipsCache();
@@ -891,6 +909,10 @@ export const finishInternshipRecord = async (req, res) => {
     );
 
     await connection.commit();
+    invalidateAttendanceHistoryCache();
+    invalidateProfileOverviewCache();
+    invalidateWeeklyNarrativesCache();
+    invalidateEvaluationHistoryCache();
     invalidateDocumentMetadataCache();
     invalidateStaffInternshipsCache();
     invalidatePastInternshipsCache();
@@ -954,37 +976,41 @@ export const getDepartmentInternshipRecords = async (req, res) => {
 
     if (departmentInternshipsCacheHit(req, res, userDepartmentId)) return;
 
-    const conditions = ["ir.deleted_at IS NULL"];
-    const params = [];
+    const scopedConditions = ["ir.deleted_at IS NULL"];
+    const scopedParams = [];
 
     if (role === "department_head") {
-      conditions.push("sai.department_id = ?");
-      params.push(userDepartmentId);
+      scopedConditions.push("sai.department_id = ?");
+      scopedParams.push(userDepartmentId);
     }
 
+    const filterConditions = [];
+    const filterParams = [];
     if (status) {
-      conditions.push("ir.status = ?");
-      params.push(status);
+      filterConditions.push("ir.status = ?");
+      filterParams.push(status);
     }
 
     if (search) {
-      conditions.push(
+      filterConditions.push(
         `(up.first_name LIKE ? OR up.last_name LIKE ? 
           OR sai.student_number LIKE ? 
           OR ir.company_name LIKE ? 
           OR c.course_name LIKE ?)`,
       );
       const term = `%${search}%`;
-      params.push(term, term, term, term, term);
+      filterParams.push(term, term, term, term, term);
     }
 
-    const whereClause = conditions.join(" AND ");
+    const whereClause = [...scopedConditions, ...filterConditions].join(" AND ");
+    const pageParams = [...scopedParams, ...filterParams];
 
     const baseFrom = `
       FROM internship_records ir
       INNER JOIN user_profiles up ON ir.user_id = up.user_id
       INNER JOIN (
-        SELECT sai1.*
+        SELECT sai1.user_id, sai1.department_id, sai1.course_id,
+               sai1.student_number
         FROM student_academic_info AS sai1
         INNER JOIN (
           SELECT user_id, MAX(id) AS max_id
@@ -995,9 +1021,20 @@ export const getDepartmentInternshipRecords = async (req, res) => {
       INNER JOIN courses c ON sai.course_id = c.id
     `;
 
-    const [[{ total }]] = await connection.execute(
-      `SELECT COUNT(*) AS total ${baseFrom} WHERE ${whereClause}`,
-      params,
+    // The total applies status/search while the status cards remain scoped
+    // only to non-deleted records in the requester's department.
+    const totalExpression = filterConditions.length
+      ? `COUNT(CASE WHEN ${filterConditions.join(" AND ")} THEN 1 END)`
+      : "COUNT(*)";
+    const [[summary]] = await connection.execute(
+      `SELECT ${totalExpression} AS total,
+              COUNT(CASE WHEN ir.status = 'pending' THEN 1 END) AS pending,
+              COUNT(CASE WHEN ir.status = 'ongoing' THEN 1 END) AS ongoing,
+              COUNT(CASE WHEN ir.status = 'finished' THEN 1 END) AS finished,
+              COUNT(CASE WHEN ir.status = 'rejected' THEN 1 END) AS rejected
+       ${baseFrom}
+       WHERE ${scopedConditions.join(" AND ")}`,
+      [...filterParams, ...scopedParams],
     );
 
     const [records] = await connection.execute(
@@ -1012,31 +1049,18 @@ export const getDepartmentInternshipRecords = async (req, res) => {
        WHERE ${whereClause}
        ORDER BY ir.updated_at DESC
        LIMIT ? OFFSET ?`,
-      [...params, pageSize, offset],
+      [...pageParams, pageSize, offset],
     );
 
     // Stats — scoped by department, independent of the current status/search
     // filter, so the count cards always reflect department-wide totals
-    const statsConditions = ["ir.deleted_at IS NULL"];
-    const statsParams = [];
-
-    if (role === "department_head") {
-      statsConditions.push("sai.department_id = ?");
-      statsParams.push(userDepartmentId);
-    }
-
-    const [statsRows] = await connection.execute(
-      `SELECT ir.status, COUNT(*) AS count
-       ${baseFrom}
-       WHERE ${statsConditions.join(" AND ")}
-       GROUP BY ir.status`,
-      statsParams,
-    );
-
-    const stats = { pending: 0, ongoing: 0, finished: 0, rejected: 0 };
-    statsRows.forEach((row) => {
-      if (stats[row.status] !== undefined) stats[row.status] = row.count;
-    });
+    const total = summary.total;
+    const stats = {
+      pending: summary.pending,
+      ongoing: summary.ongoing,
+      finished: summary.finished,
+      rejected: summary.rejected,
+    };
 
     const data = records.map((r) => ({
       id: r.id,
@@ -1141,6 +1165,10 @@ export const restoreInternshipRecord = async (req, res) => {
     );
 
     await connection.commit();
+    invalidateAttendanceHistoryCache();
+    invalidateProfileOverviewCache();
+    invalidateWeeklyNarrativesCache();
+    invalidateEvaluationHistoryCache();
     invalidateDocumentMetadataCache();
     invalidateStaffInternshipsCache();
     invalidatePastInternshipsCache();
@@ -1205,6 +1233,10 @@ export const deleteInternshipRecord = async (req, res) => {
     }
 
     await connection.commit();
+    invalidateAttendanceHistoryCache();
+    invalidateProfileOverviewCache();
+    invalidateWeeklyNarrativesCache();
+    invalidateEvaluationHistoryCache();
     invalidateDocumentMetadataCache();
     invalidateStaffInternshipsCache();
     invalidatePastInternshipsCache();
@@ -1239,6 +1271,8 @@ export const getInternshipRecordOverview = async (req, res) => {
       role,
     );
 
+    if (internshipOverviewCacheHit(req, res)) return;
+
     const [rows] = await connection.execute(
       `SELECT 
          ir.user_id AS student_id, ir.company_name, ir.internship_position, ir.status,
@@ -1248,18 +1282,19 @@ export const getInternshipRecordOverview = async (req, res) => {
          sai.student_number,
          c.course_name,
          supervisor.first_name AS supervisor_first_name,
-         supervisor.last_name AS supervisor_last_name
+         supervisor.last_name AS supervisor_last_name,
+         (SELECT COUNT(*) FROM daily_time_records WHERE internship_id = ir.id) AS dtr_count,
+         (SELECT COUNT(*) FROM weekly_narratives WHERE internship_id = ir.id) AS narrative_count,
+         (SELECT COUNT(*) FROM internship_documents WHERE internship_id = ir.id) AS document_count
        FROM internship_records ir
        INNER JOIN user_profiles up ON ir.user_id = up.user_id
-       INNER JOIN (
-         SELECT sai1.*
-         FROM student_academic_info AS sai1
-         INNER JOIN (
-           SELECT user_id, MAX(id) AS max_id
-           FROM student_academic_info
-           GROUP BY user_id
-         ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
-       ) AS sai ON ir.user_id = sai.user_id
+       INNER JOIN student_academic_info sai
+         ON sai.user_id = ir.user_id
+        AND sai.id = (
+          SELECT MAX(sai_latest.id)
+          FROM student_academic_info sai_latest
+          WHERE sai_latest.user_id = ir.user_id
+        )
        INNER JOIN courses c ON sai.course_id = c.id
        LEFT JOIN user_profiles supervisor ON ir.employer_id = supervisor.user_id
        WHERE ir.id = ?`,
@@ -1267,19 +1302,6 @@ export const getInternshipRecordOverview = async (req, res) => {
     );
 
     const data = rows[0];
-
-    const [[dtrCount]] = await connection.execute(
-      `SELECT COUNT(*) AS count FROM daily_time_records WHERE internship_id = ?`,
-      [internshipId],
-    );
-    const [[narrativeCount]] = await connection.execute(
-      `SELECT COUNT(*) AS count FROM daily_narratives WHERE internship_id = ?`,
-      [internshipId],
-    );
-    const [[documentCount]] = await connection.execute(
-      `SELECT COUNT(*) AS count FROM internship_documents WHERE internship_id = ?`,
-      [internshipId],
-    );
 
     const totalHours = Number(data.total_hours) || 0;
     const accumulatedHours = Number(data.accumulated_hours) || 0;
@@ -1303,9 +1325,9 @@ export const getInternshipRecordOverview = async (req, res) => {
       accumulated_hours: accumulatedHours,
       percent_complete:
         totalHours > 0 ? Math.round((accumulatedHours / totalHours) * 100) : 0,
-      dtr_count: dtrCount.count,
-      narrative_count: narrativeCount.count,
-      document_count: documentCount.count,
+      dtr_count: data.dtr_count,
+      narrative_count: data.narrative_count,
+      document_count: data.document_count,
     });
   } catch (error) {
     if (error.status)
@@ -1325,6 +1347,7 @@ export const getInternshipRecordDtr = async (req, res) => {
 
     connection = await db.getConnection();
     await verifyRecordAccess(connection, internshipId, requesterId, role);
+    if (attendanceHistoryCacheHit(req, res)) return;
 
     const [rows] = await connection.execute(
       `SELECT id, total_hours, clock_in, clock_out, lat_in, lon_in, lat_out, lon_out,
@@ -1355,6 +1378,7 @@ export const getInternshipRecordEvaluations = async (req, res) => {
 
     connection = await db.getConnection();
     await verifyRecordAccess(connection, internshipId, requesterId, role);
+    if (evaluationHistoryCacheHit(req, res)) return;
 
     const POINTS_PER_CRITERION = 5;
 
@@ -1426,6 +1450,7 @@ export const getInternshipRecordEvaluations = async (req, res) => {
 
     function groupRows(rows, type, actorLabel, { useRowStatus = false } = {}) {
       const group = {};
+      const categoryGroups = new Map();
 
       rows.forEach((row) => {
         const evalId = row.evaluation_id;
@@ -1463,11 +1488,11 @@ export const getInternshipRecordEvaluations = async (req, res) => {
             review_notes: row.review_notes || null,
             breakdown: [],
           };
+          categoryGroups.set(evalId, new Map());
         }
 
-        let existingCategory = group[evalId].breakdown.find(
-          (b) => b.label === row.breakdown_label,
-        );
+        const categories = categoryGroups.get(evalId);
+        const existingCategory = categories.get(row.breakdown_label);
 
         const currentScore = Number(row.breakdown_score);
 
@@ -1475,11 +1500,13 @@ export const getInternshipRecordEvaluations = async (req, res) => {
           existingCategory.score += currentScore;
           existingCategory.max += POINTS_PER_CRITERION;
         } else {
-          group[evalId].breakdown.push({
+          const category = {
             label: row.breakdown_label,
             score: currentScore,
             max: POINTS_PER_CRITERION,
-          });
+          };
+          group[evalId].breakdown.push(category);
+          categories.set(row.breakdown_label, category);
         }
       });
 

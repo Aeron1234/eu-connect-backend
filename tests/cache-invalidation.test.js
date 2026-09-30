@@ -42,10 +42,12 @@ after(async () => { db.getConnection = originalGetConnection; cache.close(); awa
 test("avatar mutations invalidate both the profile and every admin's list", async () => {
   for (const handler of [updateUserAvatar, deleteUserAvatar]) {
     seed(); mockConnection();
+    cache.set("searched-avatar",{path:"/eu-connect/api/searched-user/alice",userId:"staff",body:{}});
     const res = response();
     await handler({ verifiedUser: { id: "alice" }, body: { avatar: AVAILABLE_AVATARS[0] } }, res);
     assert.equal(res.statusCode, 200);
     assert.equal(cache.has("target"), false);
+    assert.equal(cache.has("searched-avatar"), false);
     assert.equal(cache.has("list1"), false);
     assert.equal(cache.has("list2"), false);
     assert.equal(cache.has("other"), true);
