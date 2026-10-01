@@ -9,6 +9,7 @@ import {
   forgotPassword,
   setPassword,
 } from "../controllers/authControllers.js";
+import { createSocketTicket } from "../controllers/socketAuthController.js";
 
 const authRoutes = express.Router();
 
@@ -19,4 +20,5 @@ authRoutes.get("/auth/me", verifyUser, me);
 authRoutes.post("/auth/forgot-password", strictLimiter, forgotPassword);
 authRoutes.patch("/auth/set-password", verifyUser, setPassword);
 authRoutes.post("/auth/refresh", refreshLimiter, refresh);
+authRoutes.post("/auth/socket-ticket", verifyUser, createSocketTicket);
 export default authRoutes;

@@ -9,6 +9,7 @@ import { createServer } from "http";
 import { Server } from "socket.io";
 import cron from "node-cron";
 import cookieParser from "cookie-parser";
+import { registerNotificationSockets } from "./config/socketAuth.js";
 import { autoCloseStaleShifts } from "./config/autoCloseStaleShifts.js";
 import { refreshTokensCleanUp } from "./config/refreshTokensCleanUp.js";
 
@@ -129,18 +130,7 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Socket.io Events
-io.on("connection", (socket) => {
-  console.log("A user connected:", socket.id);
-
-  socket.on("join", (userId) => {
-    socket.join(`user-${userId}`);
-  });
-
-  socket.on("disconnect", () => {
-    console.log("User disconnected:", socket.id);
-  });
-});
+registerNotificationSockets(io);
 
 // ---------------------------------------------------------------------------
 // Cron Jobs

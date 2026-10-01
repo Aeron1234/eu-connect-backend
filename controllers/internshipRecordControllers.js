@@ -39,7 +39,8 @@ export const getActiveInternship = async (req, res) => {
 
     const [rows] = await db.execute(
       `SELECT * FROM internship_records
-       WHERE user_id = ? AND (status = "ongoing" OR status = "pending")
+       WHERE user_id = ? AND deleted_at IS NULL
+         AND (status = "ongoing" OR status = "pending")
        LIMIT 1`,
       [id],
     );
@@ -63,7 +64,7 @@ export const getMyPastInternshipRecords = async (req, res) => {
          ir.date_started, ir.date_ended,
          (SELECT COUNT(*) FROM internship_documents doc WHERE doc.internship_id = ir.id) AS file_count
        FROM internship_records ir
-       WHERE ir.user_id = ? AND ir.status != 'ongoing'
+       WHERE ir.user_id = ? AND ir.deleted_at IS NULL AND ir.status != 'ongoing'
        ORDER BY ir.date_ended DESC, ir.created_at DESC`,
       [userId],
     );
@@ -84,7 +85,7 @@ export const getAllActiveInternships = async (req, res) => {
        INNER JOIN student_academic_info AS sai ON ir.user_id = sai.user_id
        INNER JOIN courses AS c ON sai.course_id = c.id
        INNER JOIN regions AS r ON ir.region_id = r.id
-       WHERE ir.status = "ongoing"
+       WHERE ir.status = "ongoing" AND ir.deleted_at IS NULL
        `,
     );
 
@@ -110,7 +111,7 @@ export const getAllUserInternships = async (req, res) => {
        INNER JOIN student_academic_info AS sai ON ir.user_id = sai.user_id
        INNER JOIN courses AS c ON sai.course_id = c.id
        INNER JOIN regions AS r ON ir.region_id = r.id
-       WHERE ir.user_id = ?
+       WHERE ir.user_id = ? AND ir.deleted_at IS NULL
        ORDER BY ir.created_at DESC
        `,
         [userId],
@@ -129,6 +130,7 @@ export const getAllUserInternships = async (req, res) => {
        INNER JOIN student_academic_info AS sai ON ir.user_id = sai.user_id
        INNER JOIN courses AS c ON sai.course_id = c.id
        INNER JOIN regions AS r ON ir.region_id = r.id
+       WHERE ir.deleted_at IS NULL
        ORDER BY ir.created_at DESC
        `,
       );
@@ -385,7 +387,7 @@ export const approveInternshipRecord = async (req, res) => {
            GROUP BY user_id
          ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
        ) AS sai ON ir.user_id = sai.user_id
-       WHERE ir.id = ? FOR UPDATE`,
+       WHERE ir.id = ? AND ir.deleted_at IS NULL FOR UPDATE`,
       [internshipId],
     );
 
@@ -1131,7 +1133,7 @@ export const restoreInternshipRecord = async (req, res) => {
            GROUP BY user_id
          ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
        ) AS sai ON ir.user_id = sai.user_id
-       WHERE ir.id = ? FOR UPDATE`,
+       WHERE ir.id = ? AND ir.deleted_at IS NULL FOR UPDATE`,
       [internshipId],
     );
 
@@ -1185,6 +1187,96 @@ export const restoreInternshipRecord = async (req, res) => {
     if (connection) await connection.rollback();
     console.error("Restore internship record error:", error);
     res.status(500).json({ error: "Failed to restore internship record." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const deleteOwnInternshipRecord = async (req, res) => {
+  let connection;
+  try {
+    const { id: studentId, role } = req.verifiedUser;
+    const { internshipId } = req.params;
+
+    if (role !== "student") {
+      return res.status(403).json({ error: "Only students can delete their own internship records." });
+    }
+    if (!internshipId) {
+      return res.status(400).json({ error: "internshipId is required." });
+    }
+
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    const [rows] = await connection.execute(
+      `SELECT id, user_id, status, deleted_at, company_name
+       FROM internship_records WHERE id = ? FOR UPDATE`,
+      [internshipId],
+    );
+    const record = rows[0];
+    if (!record || record.deleted_at !== null) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Internship record not found." });
+    }
+    if (record.user_id !== studentId) {
+      await connection.rollback();
+      return res.status(403).json({ error: "You can only delete your own internship records." });
+    }
+    if (!["pending", "rejected"].includes(record.status)) {
+      await connection.rollback();
+      return res.status(409).json({ error: "Only pending or rejected internship records can be deleted." });
+    }
+
+    const [result] = await connection.execute(
+      `UPDATE internship_records SET deleted_at = NOW(), updated_at = NOW()
+       WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND status IN ('pending', 'rejected')`,
+      [internshipId, studentId],
+    );
+    if (result.affectedRows !== 1) {
+      await connection.rollback();
+      return res.status(409).json({ error: "The internship record changed. Please refresh and try again." });
+    }
+
+    // A withdrawn pending request must not remain actionable in staff inboxes.
+    await connection.execute(
+      `DELETE FROM notifications WHERE link_uuid = ? AND type = 'internship_record_request'`,
+      [internshipId],
+    );
+
+    const studentName = await getActivityLogUserName(connection, studentId);
+    await connection.execute(
+      `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        studentId,
+        role,
+        "internship_record_deleted",
+        "internship_records",
+        internshipId,
+        `${studentName} deleted a ${record.status} internship record for ${record.company_name}.`,
+        JSON.stringify({ company_name: record.company_name, previous_status: record.status }),
+      ],
+    );
+
+    await connection.commit();
+    invalidateAttendanceHistoryCache();
+    invalidateProfileOverviewCache();
+    invalidateWeeklyNarrativesCache();
+    invalidateEvaluationHistoryCache();
+    invalidateDocumentMetadataCache();
+    invalidateStaffInternshipsCache();
+    invalidatePastInternshipsCache();
+    invalidateHteReportsCache();
+    invalidateAlumniCache();
+    invalidateDashboardCache();
+    invalidateNotificationsCache();
+    invalidateActivityLogsCache();
+
+    return res.status(200).json({ success: true, message: "Internship record deleted." });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Delete own internship record error:", error);
+    return res.status(500).json({ error: "Failed to delete internship record." });
   } finally {
     if (connection) connection.release();
   }

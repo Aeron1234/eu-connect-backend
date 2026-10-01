@@ -7,6 +7,7 @@ import { verifyRole } from "../middleware/verifyRole.js";
 import {
   approveInternshipRecord,
   createInternshipRecord,
+  deleteOwnInternshipRecord,
   deleteInternshipRecord,
   downloadInternshipRecordFile,
   finishInternshipRecord,
@@ -126,6 +127,14 @@ internshipRecordRoutes.patch(
   verifyRole(["department_head", "admin"]),
   generalLimiter,
   restoreInternshipRecord,
+);
+
+internshipRecordRoutes.delete(
+  "/internship-records/mine/:internshipId",
+  verifyUser,
+  verifyRole(["student"]),
+  mediumLimiter,
+  deleteOwnInternshipRecord,
 );
 
 internshipRecordRoutes.delete(

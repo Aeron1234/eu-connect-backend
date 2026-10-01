@@ -2,6 +2,19 @@
 
 Updated: 2026-10-01 (Asia/Manila).
 
+## Live notification socket authentication
+
+Socket.IO connections now require a 30-second, socket-only ticket from
+`POST /eu-connect/api/auth/socket-ticket`. That endpoint requires a verified
+access token and derives the ticket's user ID from it. `config/socketAuth.js`
+verifies the ticket on every handshake, joins only `user-<verified ID>`, and
+disconnects the socket when the underlying access token expires. There is no
+client-selected `join` event. The frontend `ims` project obtains tickets through
+its same-origin `POST /api/socket-ticket` route, which refreshes the HttpOnly
+session if needed and never returns the API access token to browser JavaScript.
+The client requests a new ticket for each reconnection. Keep the frontend and
+backend changes deployed together; older clients cannot join notification rooms.
+
 ## Purpose and scope
 
 This file records the backend analysis and caching work completed in the prior

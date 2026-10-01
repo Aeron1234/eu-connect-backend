@@ -59,7 +59,8 @@ export const getStudentDashboardData = async (req, res) => {
     try {
       const [rows] = await connection.execute(
         `SELECT * FROM internship_records
-         WHERE user_id = ? AND (status = 'ongoing' OR status = 'pending')
+         WHERE user_id = ? AND deleted_at IS NULL
+           AND (status = 'ongoing' OR status = 'pending')
          LIMIT 1`,
         [userId],
       );
@@ -418,7 +419,7 @@ export const getDepartmentHeadDashboardStats = async (req, res) => {
              GROUP BY user_id
            ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
          ) AS sai ON ir.user_id = sai.user_id
-         WHERE sai.department_id = ?`,
+         WHERE sai.department_id = ? AND ir.deleted_at IS NULL`,
         [departmentId],
       ),
       connection.execute(
