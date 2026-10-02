@@ -71,11 +71,14 @@ authorization on cache hits, deletion, rollback and a cross-controller insert.
 
 ## Notifications
 
-`GET /notifications` uses a 15-second TTL after authentication, role validation
-and rate limiting. Keys include the verified user and full query string, so page,
-limit and scope variants cannot mix. The response includes the inbox-wide unread
-count, so marking one/all as read or deleting a notification invalidates every
-cached page and scope for that recipient after the successful database write.
+`GET /notifications` and `GET /notifications/unread-count` use a 15-second TTL
+after authentication, role validation and rate limiting. The count-only route
+returns `{ unreadCount }` from a recipient-scoped aggregate, without fetching
+or joining inbox rows. Keys include the verified user and full query string, so
+page, limit and scope variants cannot mix. The inbox response still includes
+the inbox-wide unread count for the full notifications page. Marking one/all as
+read or deleting a notification invalidates both routes for that recipient
+after the successful database write.
 
 `invalidateNotificationsCache(userId)` targets one recipient; omitting the ID
 clears all notification entries. Broadcast and cross-controller transactions use

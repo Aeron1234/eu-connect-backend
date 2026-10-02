@@ -6,4 +6,5 @@ import { invalidateRouteCache } from "./cache.js";
 export function invalidateNotificationsCache(userId) {
   invalidateDashboardCache(userId);
   invalidateRouteCache("/eu-connect/api/notifications", userId);
+  invalidateRouteCache("/eu-connect/api/notifications/unread-count", userId);
 }

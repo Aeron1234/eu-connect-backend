@@ -66,12 +66,60 @@ test("notification GET reuses data, isolates users/page/limit/scope and keeps au
   assert.equal(queries, 10);
 });
 
+test("unread-count GET runs only a recipient count and caches it separately", async (t) => {
+  const get = await client(t);
+  const countUrl = url + "/unread-count";
+  const sql = [];
+  connection.execute = async (statement, params) => {
+    if (statement.trim().startsWith("UPDATE")) return [{ affectedRows: 1 }];
+    sql.push({ statement, params });
+    return [[{ unread_count: params[0] === "alice" ? 2 : 5 }]];
+  };
+
+  assert.deepEqual(await (await get(countUrl)).json(), { unreadCount: 2 });
+  assert.deepEqual(await (await get(countUrl)).json(), { unreadCount: 2 });
+  assert.deepEqual(await (await get(countUrl, "bob")).json(), { unreadCount: 5 });
+  assert.equal(sql.length, 2);
+  assert.ok(sql.every(({ statement }) =>
+    statement.includes("WHERE user_id = ? AND is_read = 0") &&
+    !statement.includes("JOIN") && !statement.includes("LIMIT")));
+  assert.equal((await get(countUrl, null)).status, 401);
+  assert.equal((await get(countUrl, "alice", "invalid-role")).status, 403);
+  assert.equal(sql.length, 2);
+
+  const countKeys = cache.keys().filter((key) =>
+    cache.get(key)?.path === countUrl);
+  assert.equal(countKeys.length, 2);
+  const expiry = cache.getTtl(countKeys[0]);
+  assert.ok(expiry > Date.now() + 14000 && expiry <= Date.now() + 15000);
+
+  assert.equal((await get(url + "/1", "alice", "student", "PATCH")).status, 200);
+  assert.equal(cache.keys().filter((key) => cache.get(key)?.path === countUrl).length, 1);
+  invalidateNotificationsCache();
+  assert.equal(cache.keys().length, 0);
+});
+
+test("unread-count query errors do not enter the cache", async (t) => {
+  const get = await client(t);
+  const log = console.error;
+  try {
+    console.error = () => {};
+    connection.execute = async () => { throw new Error("offline"); };
+    assert.equal((await get(url + "/unread-count")).status, 500);
+    assert.equal(cache.keys().length, 0);
+  } finally {
+    console.error = log;
+  }
+});
+
 test("mark-one, mark-all and delete clear all recipient pages without flushing others", async (t) => {
   const call = await client(t);
   for (const [path, method] of [[url + "/1", "PATCH"], [url, "PATCH"], [url + "/1", "DELETE"]]) {
     cache.flushAll(); seed();
+    cache.set("alice-count", { userId: "alice", path: url + "/unread-count", body: {} });
+    cache.set("bob-count", { userId: "bob", path: url + "/unread-count", body: {} });
     assert.equal((await call(path, "alice", "student", method)).status, 200);
-    assert.deepEqual(cache.keys().sort(), ["bob", "profile"]);
+    assert.deepEqual(cache.keys().sort(), ["bob", "bob-count", "profile"]);
   }
 });
 

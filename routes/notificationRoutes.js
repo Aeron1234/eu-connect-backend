@@ -6,12 +6,22 @@ import { verifyRole } from "../middleware/verifyRole.js";
 import {
   deleteNotification,
   getAllNotifications,
+  getUnreadNotificationCount,
   markAsAllReadNotification,
   markAsReadNotification,
 } from "../controllers/notificationControllers.js";
 import { generalLimiter } from "../middleware/rateLimiter.js";
 
 const notificationRoutes = express.Router();
+
+notificationRoutes.get(
+  "/notifications/unread-count",
+  verifyUser,
+  verifyRole(["student", "employer", "department_head", "admin"]),
+  generalLimiter,
+  cacheRoute(15),
+  getUnreadNotificationCount,
+);
 
 notificationRoutes.get(
   "/notifications",

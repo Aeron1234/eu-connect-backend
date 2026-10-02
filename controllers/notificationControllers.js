@@ -1,6 +1,25 @@
 import { invalidateNotificationsCache } from "../config/notificationsCache.js";
 import { db } from "../config/db.js";
 
+export const getUnreadNotificationCount = async (req, res) => {
+  try {
+    const userId = req.verifiedUser?.id;
+    if (!userId) {
+      return res.status(401).json({ error: "Unauthorized access." });
+    }
+
+    const [[row]] = await db.execute(
+      `SELECT COUNT(*) AS unread_count
+       FROM notifications WHERE user_id = ? AND is_read = 0`,
+      [userId],
+    );
+    return res.status(200).json({ unreadCount: row.unread_count });
+  } catch (error) {
+    console.error("Get unread notification count error:", error);
+    return res.status(500).json({ error: "Database query failed", success: false });
+  }
+};
+
 export const getAllNotifications = async (req, res) => {
   let connection;
   try {

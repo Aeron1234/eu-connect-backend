@@ -2,6 +2,19 @@
 
 Updated: 2026-10-01 (Asia/Manila).
 
+## Header notification count and lazy inbox
+
+`GET /eu-connect/api/notifications/unread-count` returns only
+`{ unreadCount }` for the verified recipient using one count query. It has the
+same auth, role, limiter, and 15-second private cache policy as the inbox.
+`invalidateNotificationsCache` clears both the count route and the existing
+`/notifications` route after successful writes and committed cross-controller
+changes. The inbox response still carries its count for `/notifications`.
+The frontend header no longer awaits an inbox fetch. Its bell requests the
+count on mount and on relevant events; the full inbox is fetched when the
+desktop dropdown opens or the mobile link navigates to `/notifications`.
+The dropdown shows skeleton rows while loading and a retry on read failure.
+
 ## Live notification socket authentication
 
 Socket.IO connections now require a 30-second, socket-only ticket from
@@ -127,7 +140,7 @@ All paths below are relative to `/eu-connect/api`.
 | -------------------- | ------------------------------------------------------------------------------- | ----------- |
 | Accounts             | `/avatars`, `/account/user`, `/accounts`, `/create-account-form-data`, `/roles` | 60 seconds  |
 | Activity logs        | `/activity-logs/mine`, `/activity-logs`                                         | 30 seconds  |
-| Notifications        | `/notifications`                                                                | 15 seconds  |
+| Notifications        | `/notifications`, `/notifications/unread-count`                                 | 15 seconds  |
 | Departments/courses  | `/departments`, `/courses`                                                      | 300 seconds |
 | Criteria admin lists | `/criteria/employer-evaluation`, `/criteria/student-evaluation`                 | 300 seconds |
 | Criteria forms       | `/evaluation-criterias`, `/student-evaluation/criteria`                         | 300 seconds |
