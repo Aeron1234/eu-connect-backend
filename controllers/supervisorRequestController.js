@@ -86,7 +86,7 @@ export const requestSupervisor = async (req, res) => {
     await connection.beginTransaction();
 
     const [internships] = await connection.execute(
-      `SELECT id, employer_id FROM internship_records 
+      `SELECT id, employer_id, company_name FROM internship_records
        WHERE user_id = ? AND status = 'ongoing' LIMIT 1 FOR UPDATE`,
       [studentId],
     );
@@ -161,7 +161,7 @@ export const requestSupervisor = async (req, res) => {
           "supervisor_request_sent",
           "supervisor_requests",
           requestId,
-          `${senderName} requested a new supervisor for internship record ${internship.id}.`,
+          `${senderName} requested a new supervisor for their internship at ${internship.company_name}.`,
           JSON.stringify({
             internship_id: internship.id,
             employer_id: employerId,
@@ -329,7 +329,7 @@ export const respondToSupervisorRequest = async (req, res) => {
     // Re-check the internship is still ongoing — it could have changed
     // between when the request was sent and now
     const [internships] = await connection.execute(
-      `SELECT id, status FROM internship_records WHERE id = ? FOR UPDATE`,
+      `SELECT id, status, company_name FROM internship_records WHERE id = ? FOR UPDATE`,
       [request.internship_id],
     );
 
@@ -382,7 +382,7 @@ export const respondToSupervisorRequest = async (req, res) => {
             "supervisor_request_rejected",
             "supervisor_requests",
             requestId,
-            `${senderName} declined a supervisor request for internship record ${request.internship_id}.`,
+            `${senderName} declined a supervisor request for the internship at ${internships[0].company_name}.`,
             JSON.stringify({
               internship_id: request.internship_id,
               student_id: request.student_id,
@@ -448,7 +448,7 @@ export const respondToSupervisorRequest = async (req, res) => {
           "supervisor_request_accepted",
           "supervisor_requests",
           requestId,
-          `${senderName} accepted a supervisor request for internship record ${request.internship_id}.`,
+          `${senderName} accepted a supervisor request for the internship at ${internships[0].company_name}.`,
           JSON.stringify({
             internship_id: request.internship_id,
             student_id: request.student_id,

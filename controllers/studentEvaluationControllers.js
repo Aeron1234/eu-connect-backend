@@ -618,7 +618,7 @@ export const deleteStudentEvaluation = async (req, res) => {
           "student_evaluation_deleted",
           "student_evaluation_masters",
           evaluationId,
-          `${isAdmin ? "Admin" : "Supervisor"} deleted a pending evaluation for internship record ${evaluation.internship_id}.`,
+          `${isAdmin ? "Admin" : "Supervisor"} deleted a pending evaluation for the internship at ${evaluation.company}.`,
           JSON.stringify({
             internship_id: evaluation.internship_id,
             student_id: evaluation.student_id,
@@ -983,7 +983,11 @@ export const reviewDisputedEvaluation = async (req, res) => {
     // reviewing doesn't require ownership of the internship, since this
     // is a staff-side action, not the student's own
     const [evaluationCheck] = await connection.execute(
-      `SELECT status FROM student_evaluation_masters WHERE id = ? FOR UPDATE`,
+      `SELECT m.status,
+              (SELECT ir.company_name FROM internship_records ir
+               WHERE ir.id = m.internship_record_id) AS company_name
+       FROM student_evaluation_masters m
+       WHERE m.id = ? FOR UPDATE`,
       [evaluationId],
     );
 
@@ -1023,7 +1027,7 @@ export const reviewDisputedEvaluation = async (req, res) => {
           "student_evaluation_reviewed",
           "student_evaluation_masters",
           evaluationId,
-          `${role === "admin" ? "Admin" : "Department head"} marked disputed evaluation ${evaluationId} as reviewed.`,
+          `${role === "admin" ? "Admin" : "Department head"} marked the disputed evaluation for ${evaluationCheck[0].company_name || "the associated internship"} as reviewed.`,
           JSON.stringify({ has_review_notes: Boolean(review_notes) }),
         ],
       );

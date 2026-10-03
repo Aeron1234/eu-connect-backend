@@ -1064,7 +1064,7 @@ export const deleteSearchedStudentFile = async (req, res) => {
     await connection.beginTransaction();
 
     const [rows] = await connection.execute(
-      `SELECT id, user_id, path, uploaded_by_id, verification_status FROM internship_documents WHERE id = ? FOR UPDATE`,
+      `SELECT id, user_id, file_name, path, uploaded_by_id, verification_status FROM internship_documents WHERE id = ? FOR UPDATE`,
       [fileId],
     );
 
@@ -1125,7 +1125,7 @@ export const deleteSearchedStudentFile = async (req, res) => {
           "internship_document_deleted",
           "internship_documents",
           String(fileId),
-          `${role === "employer" ? "Employer" : role} deleted document ${fileId} belonging to ${studentName}.`,
+          `${role === "employer" ? "Employer" : role} deleted document "${doc.file_name}" belonging to ${studentName}.`,
           JSON.stringify({
             document_owner_id: searchedUserId,
             uploaded_by_id: doc.uploaded_by_id,

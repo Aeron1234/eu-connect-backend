@@ -17,9 +17,9 @@ const { signAccessToken } = await import("../config/jwt.js");
 const internships = await import("../controllers/internshipRecordControllers.js");
 const originalGetConnection = db.getConnection;
 const base = "/eu-connect/api/";
-let calls, connection, mode, status, committed, emitted;
+let calls, connection, mode, status, committed, emitted, activityLog;
 beforeEach(() => {
-  cache.flushAll(); calls = 0; mode = "success"; status = "ongoing"; committed = false; emitted = 0;
+  cache.flushAll(); calls = 0; mode = "success"; status = "ongoing"; committed = false; emitted = 0; activityLog = null;
   connection = {
     async beginTransaction() {}, async rollback() {}, release() {},
     async commit() {
@@ -28,8 +28,9 @@ beforeEach(() => {
       committed = true;
     },
     async query() { return [{ affectedRows: 1 }]; },
-    async execute(sql) {
+    async execute(sql, params) {
       calls++;
+      if (sql.includes("INSERT INTO activity_logs")) activityLog = params;
       if (mode === "read-error") throw new Error("offline");
       if (!sql.trim().startsWith("SELECT")) return [{ affectedRows: 1, insertId: 1 }];
       if (mode === "empty") return sql.includes("COUNT(DISTINCT") ? [[{ total: 0 }]] : [[]];
@@ -42,6 +43,7 @@ beforeEach(() => {
       if (sql.includes("FOR UPDATE") && mode === "missing") return [[]];
       if (sql.includes("FROM dept_heads_background_info WHERE")) return [[{ department_id: mode === "wrong-department" ? 2 : 1 }]];
       return [[{ id: "record", user_id: "student", department_id: 1, course_id: 1, status, deleted_at: null,
+        alumni_name: "Graduate",
         company_name: "Company", company_address: "City", industry: "IT", internship_position: "Intern",
         total_hours: 100, accumulated_hours: 100, date_started: "2025-08-01", academic_year: "2025-2026",
         first_name: "Test", last_name: "User" }]];
@@ -125,6 +127,19 @@ test("manual alumni writes clear every page of both views only after commit", as
   for (const handler of [alumni.addAlumniInternshipRecord, alumni.updateAlumniInternshipRecord, alumni.deleteAlumniInternshipRecord]) {
     cache.flushAll(); seed(); const res = response(); await handler(request(), res);
     assert.ok(res.statusCode < 300); assert.deepEqual(cache.keys(), ["profile"]);
+  }
+});
+
+test("alumni edits and deletes log the alumni and company while retaining record IDs", async () => {
+  for (const handler of [alumni.updateAlumniInternshipRecord, alumni.deleteAlumniInternshipRecord]) {
+    seed();
+    const res = response();
+    await handler(request(), res);
+    assert.equal(res.statusCode, 200);
+    assert.equal(activityLog[4], "record");
+    assert.match(activityLog[5], /Graduate at Company/);
+    assert.ok(!activityLog[5].includes("record record"));
+    cache.flushAll();
   }
 });
 

@@ -543,3 +543,13 @@ Three new tests and expanded annual write/rollback checks cover detail TTLs,
 viewer/report/query separation, current Registrar access, missing/error reads,
 post-commit invalidation and exact route matching. Full staged suite: 126 passed,
 0 failed. Database is mocked; live performance is unverified. Installation pending.
+# Cache monitoring
+
+The admin-only `GET /eu-connect/api/cache/metrics` reports process-local cache
+activity without exposing cache keys, user IDs, query strings or response bodies.
+It is read-only and sends `Cache-Control: private, no-store`. Counts are cumulative
+since `startedAt`; a flush does not reset them. Compare two snapshots only when
+their `startedAt` values match. The frontend `/admin/cache-monitoring` page does
+this for its optional 30-second refresh and resets the interval view if the
+backend process changes. Storage byte counts are NodeCache estimates, not actual
+heap usage. The endpoint does not measure database query latency.

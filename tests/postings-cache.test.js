@@ -15,9 +15,9 @@ const { default: dashboardRoutes } = await import("../routes/dashboardRoutes.js"
 const { signAccessToken } = await import("../config/jwt.js");
 const originalGetConnection = db.getConnection;
 const base = "/eu-connect/api/";
-let calls, connection, mode, existingFavorite;
+let calls, connection, mode, existingFavorite, activityLog;
 beforeEach(() => {
-  cache.flushAll(); calls = 0; mode = "success"; existingFavorite = false;
+  cache.flushAll(); calls = 0; mode = "success"; existingFavorite = false; activityLog = null;
   connection = {
     async beginTransaction() {}, async rollback() {}, release() {},
     async commit() {
@@ -27,6 +27,7 @@ beforeEach(() => {
     async query() { return [{ affectedRows: 1 }]; },
     async execute(sql, params = []) {
       calls++;
+      if (sql.includes("INSERT INTO activity_logs")) activityLog = params;
       if (mode === "db-error") throw new Error("offline");
       if (sql.trim().startsWith("SELECT COUNT(*) AS total")) return [[{ total: mode === "empty" ? 0 : 1 }]];
       if (sql.includes("SELECT id FROM courses")) return [[{ id: 1 }]];
@@ -125,6 +126,24 @@ test("creation, edits, course-only edits and deletion clear both lists for every
   for (const [handler, data] of [[posts.createInternshipPosting, body], [posts.updateInternshipPosting, { status: "filled" }], [posts.updateInternshipPosting, { course_ids: [1] }], [posts.deleteInternshipPosting, {}]]) {
     cache.flushAll(); seed(); const res = response(); await handler(request("owner", "employer", data), res);
     assert.ok(res.statusCode < 300); assert.deepEqual(cache.keys(), ["profile"]);
+  }
+});
+
+test("posting edits and moderation deletes log the position, with IDs in structured fields", async () => {
+  for (const [handler, role, data] of [
+    [posts.updateInternshipPosting, "employer", { position: "Intern" }],
+    [posts.deleteInternshipPosting, "admin", {}],
+  ]) {
+    seed();
+    const res = response();
+    await handler(request(role === "admin" ? "admin" : "owner", role, data), res);
+    assert.equal(res.statusCode, 200);
+    assert.equal(activityLog[4], "p");
+    assert.match(activityLog[5], /posting "Intern" at Company/);
+    assert.ok(!activityLog[5].includes("posting p"));
+    assert.ok(!activityLog[5].includes("employer owner"));
+    if (role === "admin") assert.equal(JSON.parse(activityLog[6]).employer_id, "owner");
+    cache.flushAll();
   }
 });
 

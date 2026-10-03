@@ -5,7 +5,7 @@ import { once } from "node:events";
 import cache from "../config/cache.js";
 import { db } from "../config/db.js";
 import { invalidateNotificationsCache } from "../config/notificationsCache.js";
-import { cancelSupervisorRequest, respondToSupervisorRequest } from "../controllers/supervisorRequestController.js";
+import { requestSupervisor, cancelSupervisorRequest, respondToSupervisorRequest } from "../controllers/supervisorRequestController.js";
 import { deleteStudentEvaluation } from "../controllers/studentEvaluationControllers.js";
 
 process.env.ACCESS_TOKEN_SECRET = "test-notifications-access";
@@ -148,16 +148,35 @@ test("cancelled supervisor requests invalidate joined actionable state only afte
   assert.equal(res.statusCode, 200); assert.deepEqual(cache.keys(), ["profile"]);
 });
 
+test("new supervisor requests log the company with request and internship IDs kept separately", async () => {
+  let activityLog;
+  connection.execute = async (sql, params) => {
+    if (sql.includes("FROM internship_records")) return [[{ id: 1, employer_id: "former", company_name: "Accenture" }]];
+    if (sql.includes("FROM user_profiles")) return [[{ first_name: "Alice", last_name: "Student" }]];
+    if (sql.includes("INSERT INTO activity_logs")) activityLog = params;
+    return [{ affectedRows: 1 }];
+  };
+  const io = { to: () => ({ emit() {} }) };
+  const res = response();
+  await requestSupervisor({ verifiedUser: { id: "alice" }, body: { employerId: "bob" }, app: { get: () => io } }, res);
+  assert.equal(res.statusCode, 201);
+  assert.match(activityLog[5], /Accenture/);
+  assert.doesNotMatch(activityLog[5], /internship record 1/);
+  assert.equal(activityLog[4], res.body.id);
+  assert.equal(JSON.parse(activityLog[6]).internship_id, 1);
+});
+
 test("supervisor acceptance/rejection invalidates before socket delivery; rollback preserves cache", async () => {
   const log = console.error;
   try {
     console.error = () => {};
     for (const decision of ["accept", "reject", "failed-commit"]) {
-      cache.flushAll(); seed(); let committed = false; let emitted = 0;
-      connection.execute = async sql => {
+      cache.flushAll(); seed(); let committed = false; let emitted = 0; let activityLog;
+      connection.execute = async (sql, params) => {
         if (sql.includes("FROM supervisor_requests")) return [[{ id: "r", student_id: "alice", employer_id: "bob", internship_id: 1, status: "pending" }]];
-        if (sql.includes("FROM internship_records")) return [[{ id: 1, status: "ongoing" }]];
+        if (sql.includes("FROM internship_records")) return [[{ id: 1, status: "ongoing", company_name: "Accenture" }]];
         if (sql.includes("FROM user_profiles")) return [[{ first_name: "Bob", last_name: "Employer" }]];
+        if (sql.includes("INSERT INTO activity_logs")) activityLog = params;
         return [{ affectedRows: 1 }];
       };
       connection.commit = async () => { assert.ok(cache.has("bob")); if (decision === "failed-commit") throw new Error("commit failed"); committed = true; };
@@ -166,6 +185,10 @@ test("supervisor acceptance/rejection invalidates before socket delivery; rollba
       cache.set("searched-supervision",{path:"/eu-connect/api/searched-user/alice",userId:"bob",body:{}});
       await respondToSupervisorRequest({ verifiedUser: { id: "bob" }, params: { requestId: "r" }, body: { decision: decision === "failed-commit" ? "accept" : decision }, app: { get: () => io } }, res);
       assert.equal(res.statusCode, decision === "failed-commit" ? 500 : 200);
+      assert.match(activityLog[5], /Accenture/);
+      assert.doesNotMatch(activityLog[5], /internship record 1/);
+      assert.equal(activityLog[4], "r");
+      assert.equal(JSON.parse(activityLog[6]).internship_id, 1);
       assert.equal(emitted, decision === "failed-commit" ? 0 : 1);
       assert.equal(cache.has("bob"), decision === "failed-commit");assert.equal(cache.has("searched-supervision"),decision === "failed-commit");
     }

@@ -380,7 +380,7 @@ export const updateInternshipPosting = async (req, res) => {
     await connection.beginTransaction();
 
     const [rows] = await connection.execute(
-      `SELECT id, employer_id, deleted_at FROM internship_postings WHERE id = ? FOR UPDATE`,
+      `SELECT id, employer_id, position, company_name, deleted_at FROM internship_postings WHERE id = ? FOR UPDATE`,
       [postingId],
     );
 
@@ -513,7 +513,7 @@ export const updateInternshipPosting = async (req, res) => {
           "internship_posting_updated",
           "internship_postings",
           postingId,
-          `Employer updated posting ${postingId} (${changedFields.join(", ") || "no fields"}).`,
+          `Employer updated posting "${updatedPosting.position}" at ${updatedPosting.company_name} (${changedFields.join(", ") || "no fields"}).`,
           JSON.stringify({ changed_fields: changedFields }),
         ],
       );
@@ -564,7 +564,7 @@ export const deleteInternshipPosting = async (req, res) => {
     await connection.beginTransaction();
 
     const [rows] = await connection.execute(
-      `SELECT id, employer_id, deleted_at FROM internship_postings WHERE id = ? FOR UPDATE`,
+      `SELECT id, employer_id, position, company_name, deleted_at FROM internship_postings WHERE id = ? FOR UPDATE`,
       [postingId],
     );
 
@@ -606,10 +606,8 @@ export const deleteInternshipPosting = async (req, res) => {
           "internship_posting_deleted",
           "internship_postings",
           postingId,
-          isAdmin && !isOwner
-            ? `Admin deleted posting ${postingId} (created by employer ${posting.employer_id}).`
-            : `Employer deleted posting ${postingId}.`,
-          null,
+          `${isAdmin && !isOwner ? "Admin" : "Employer"} deleted posting "${posting.position}" at ${posting.company_name}.`,
+          JSON.stringify({ employer_id: posting.employer_id }),
         ],
       );
     } catch (logError) {

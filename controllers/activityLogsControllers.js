@@ -50,14 +50,14 @@ export const getMyActivityLogs = async (req, res) => {
   }
 };
 
-// GET — admin view, all logs, 50 per page, filterable, with unique
+// GET — admin view, all logs, 15 per page, filterable, with unique
 // action/actor_role/target_type values included for building the filter UI
 export const getAllActivityLogs = async (req, res) => {
   let connection;
   try {
     const { action, actorRole, targetType, search, page = 1 } = req.query;
 
-    const pageSize = 50;
+    const pageSize = 15;
     const pageNum = Math.max(1, parseInt(page) || 1);
     const offset = (pageNum - 1) * pageSize;
 
@@ -90,23 +90,14 @@ export const getAllActivityLogs = async (req, res) => {
     const [rows] = await connection.execute(
       `SELECT al.id, al.actor_id, al.actor_role, al.action, al.target_type, 
               al.target_id, al.description, al.metadata, al.created_at,
-              up.first_name, up.last_name,
-              (SELECT COUNT(*) FROM activity_logs ${whereClause}) AS total_logs
+              up.first_name, up.last_name
        FROM activity_logs al
        LEFT JOIN user_profiles up ON al.actor_id = up.user_id
        ${whereClause}
        ORDER BY al.created_at DESC
        LIMIT ? OFFSET ?`,
-      [...params, ...params, pageSize, offset],
+      [...params, pageSize, offset],
     );
-
-    let total = rows[0]?.total_logs;
-    if (rows.length === 0) {
-      [[{ total }]] = await connection.execute(
-        `SELECT COUNT(*) AS total FROM activity_logs ${whereClause}`,
-        params,
-      );
-    }
 
     const [filterRows] = await connection.execute(
       `SELECT DISTINCT 'action' AS filter_type, action AS filter_value
@@ -117,6 +108,33 @@ export const getAllActivityLogs = async (req, res) => {
        SELECT DISTINCT 'target_type', target_type FROM activity_logs
        ORDER BY filter_type ASC, filter_value ASC`,
     );
+
+    const [[summary]] = await connection.execute(
+      `SELECT COUNT(*) AS total_events,
+              COUNT(DISTINCT actor_id) AS active_users
+       FROM activity_logs ${whereClause}`,
+      params,
+    );
+    const [topActions] = await connection.execute(
+      `SELECT action AS name, COUNT(*) AS event_count
+       FROM activity_logs ${whereClause}
+       GROUP BY action
+       ORDER BY event_count DESC, action ASC
+       LIMIT 1`,
+      params,
+    );
+    const [topModules] = await connection.execute(
+      `SELECT target_type AS name, COUNT(*) AS event_count
+       FROM activity_logs ${whereClause}
+       GROUP BY target_type
+       ORDER BY event_count DESC, target_type ASC
+       LIMIT 1`,
+      params,
+    );
+
+    const topStat = (row) => row
+      ? { name: row.name, count: Number(row.event_count) }
+      : null;
 
     const data = rows.map((r) => ({
       id: r.id,
@@ -138,11 +156,17 @@ export const getAllActivityLogs = async (req, res) => {
         actorRoles: filterRows.filter((r) => r.filter_type === "actor_role").map((r) => r.filter_value),
         targetTypes: filterRows.filter((r) => r.filter_type === "target_type").map((r) => r.filter_value),
       },
+      stats: {
+        totalEvents: Number(summary.total_events),
+        activeUsers: Number(summary.active_users),
+        mostCommonAction: topStat(topActions[0]),
+        mostActiveModule: topStat(topModules[0]),
+      },
       pagination: {
         page: pageNum,
         limit: pageSize,
-        total,
-        totalPages: Math.ceil(total / pageSize),
+        total: Number(summary.total_events),
+        totalPages: Math.ceil(Number(summary.total_events) / pageSize),
       },
     });
   } catch (error) {

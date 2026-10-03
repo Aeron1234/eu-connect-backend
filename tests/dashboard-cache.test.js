@@ -33,7 +33,10 @@ beforeEach(() => {
   connection = {
     async beginTransaction() {}, async rollback() {}, release() {},
     async commit() { assert.ok(cache.has("alice")); if (failCommit) throw new Error("failed commit"); },
-    async query() { return [{ affectedRows: 1 }]; },
+    async query(sql) {
+      if (sql.trim().startsWith("SELECT")) return [[{ id: 1, internship_id: 1, worked_seconds: 28800, break_total_seconds: 0 }]];
+      return [{ affectedRows: 1 }];
+    },
     async execute(sql) {
       calls++;
       if (sql.includes("COUNT(*)")) return [[{ count: 1, total: 1 }]];
@@ -131,7 +134,9 @@ test("stale-shift cron clears summary caches after commit but preserves them on 
   const log = console.log; const error = console.error;
   try {
     console.log = () => {}; console.error = () => {};
-    connection.execute = async () => [[{ id: 1, internship_id: 1 }]];
+    connection.execute = async sql => sql.trim().startsWith("SELECT")
+      ? [[{ id: 1, internship_id: 1, worked_seconds: 28800, break_total_seconds: 0 }]]
+      : [{ affectedRows: 1 }];
     for (const fail of [false, true]) {
       cache.flushAll(); seed(); failCommit = fail;
       cache.set("overview-hours",{path:"/eu-connect/api/internship-records/overview/i",userId:"staff",body:{}});

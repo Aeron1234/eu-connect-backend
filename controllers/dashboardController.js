@@ -103,7 +103,7 @@ export const getStudentDashboardData = async (req, res) => {
       // Latest clock-in/out status
       try {
         const [statusRows] = await connection.execute(
-          `SELECT id, clock_in, clock_out 
+          `SELECT id, clock_in, clock_out, status
            FROM daily_time_records 
            WHERE user_id = ? AND internship_id = ? 
            ORDER BY id DESC 
@@ -115,8 +115,11 @@ export const getStudentDashboardData = async (req, res) => {
         } else {
           const lastRecord = statusRows[0];
           dtrStatus =
-            lastRecord.clock_out === null
-              ? { status: "CLOCKED_IN", record: lastRecord }
+            lastRecord.clock_in != null && lastRecord.clock_out === null
+              ? {
+                  status: lastRecord.status === "on-break" ? "ON_BREAK" : "CLOCKED_IN",
+                  record: lastRecord,
+                }
               : { status: "CLOCKED_OUT", record: lastRecord };
         }
       } catch (err) {

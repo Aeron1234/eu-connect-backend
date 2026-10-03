@@ -4,6 +4,7 @@ import { invalidateDepartmentInternshipsCache } from "../config/staffInternships
 import { invalidateDashboardCache } from "../config/dashboardCache.js";
 import { db } from "../config/db.js";
 import { isWithinRadius } from "../config/helpers.js";
+import { getMaxShiftHours } from "../config/shiftLimits.js";
 
 export const getTodayDTR = async (req, res) => {
   let connection;
@@ -93,7 +94,7 @@ export const getLatestDtrStatus = async (req, res) => {
     const { internshipId } = req.query;
 
     const [records] = await connection.execute(
-      `SELECT id, clock_in, clock_out 
+      `SELECT id, clock_in, clock_out, status
        FROM daily_time_records 
        WHERE user_id = ? AND internship_id = ? 
        ORDER BY id DESC 
@@ -109,8 +110,11 @@ export const getLatestDtrStatus = async (req, res) => {
     const lastRecord = records[0];
 
     // Check if the last session is still open
-    if (lastRecord.clock_out === null) {
-      return res.status(200).json({ status: "CLOCKED_IN", record: lastRecord });
+    if (lastRecord.clock_in != null && lastRecord.clock_out === null) {
+      return res.status(200).json({
+        status: lastRecord.status === "on-break" ? "ON_BREAK" : "CLOCKED_IN",
+        record: lastRecord,
+      });
     }
 
     return res.status(200).json({ status: "CLOCKED_OUT", record: lastRecord });
@@ -142,7 +146,7 @@ export const clockIn = async (req, res) => {
     const [openRecords] = await connection.execute(
       `SELECT id FROM daily_time_records 
        WHERE user_id = ? AND clock_out IS NULL 
-       LIMIT 1`,
+       LIMIT 1 FOR UPDATE`,
       [userId],
     );
 
@@ -235,11 +239,94 @@ export const clockIn = async (req, res) => {
   }
 };
 
+async function changeBreakState(req, res, starting) {
+  let connection;
+  try {
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    const [rows] = await connection.execute(
+      `SELECT id, clock_in, status, break_started_at FROM daily_time_records
+       WHERE user_id = ? AND clock_in IS NOT NULL AND clock_out IS NULL
+       ORDER BY id DESC LIMIT 1 FOR UPDATE`,
+      [req.verifiedUser.id],
+    );
+    if (rows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        error: "No active shift found. Clock in first.",
+      });
+    }
+
+    const record = rows[0];
+    if (record.clock_in == null) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        error: "No active shift found. Clock in first.",
+      });
+    }
+
+    const valid = starting
+      ? record.status === "present" && record.break_started_at == null
+      : record.status === "on-break" && record.break_started_at != null;
+    if (!valid) {
+      await connection.rollback();
+      return res.status(409).json({
+        success: false,
+        error: starting ? "Break is already active." : "No active break to resume.",
+      });
+    }
+
+    const [result] = await connection.execute(
+      starting
+        ? `UPDATE daily_time_records
+           SET status = 'on-break', break_started_at = NOW()
+           WHERE id = ? AND clock_in IS NOT NULL AND clock_out IS NULL AND status = 'present'
+             AND break_started_at IS NULL`
+        : `UPDATE daily_time_records
+           SET break_total_seconds = break_total_seconds +
+                 GREATEST(0, TIMESTAMPDIFF(SECOND, break_started_at, NOW())),
+               break_started_at = NULL, status = 'present'
+           WHERE id = ? AND clock_in IS NOT NULL AND clock_out IS NULL AND status = 'on-break'
+             AND break_started_at IS NOT NULL`,
+      [record.id],
+    );
+    if (result.affectedRows !== 1) {
+      throw new Error("Break state update failed.");
+    }
+
+    await connection.commit();
+    invalidateAttendanceHistoryCache();
+    invalidateProfileOverviewCache();
+    invalidateDashboardCache();
+
+    return res.status(200).json({
+      success: true,
+      status: starting ? "ON_BREAK" : "CLOCKED_IN",
+      message: starting ? "Break started." : "Duty resumed.",
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error(starting ? "Start break error:" : "Resume duty error:", error);
+    return res.status(500).json({
+      success: false,
+      error: starting ? "Server error starting break." : "Server error resuming duty.",
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+}
+
+export const startBreak = (req, res) => changeBreakState(req, res, true);
+export const resumeDuty = (req, res) => changeBreakState(req, res, false);
+
 export const clockOut = async (req, res) => {
-  const MAX_SHIFT_HOURS = process.env.MAX_SHIFT_HOURS; // adjust to your school/DOLE policy
   let connection;
 
   try {
+    const maxShiftHours = getMaxShiftHours();
     connection = await db.getConnection();
     const { id: userId } = req.verifiedUser;
     const { lat_out, lon_out } = req.body;
@@ -258,6 +345,9 @@ export const clockOut = async (req, res) => {
          dtr.id AS dtr_id, 
          dtr.internship_id, 
          dtr.clock_in, 
+         dtr.status,
+         dtr.break_started_at,
+         dtr.break_total_seconds,
          ir.lat AS company_lat, 
          ir.lon AS company_lon,
          dl.lat AS dtr_lat,
@@ -267,7 +357,7 @@ export const clockOut = async (req, res) => {
        INNER JOIN internship_records ir ON dtr.internship_id = ir.id
        LEFT JOIN dtr_locations dl ON ir.id = dl.internship_id
        WHERE dtr.user_id = ? AND dtr.clock_out IS NULL 
-       LIMIT 1`,
+       LIMIT 1 FOR UPDATE`,
       [userId],
     );
 
@@ -279,6 +369,13 @@ export const clockOut = async (req, res) => {
     }
 
     const record = activeRecords[0];
+    if (record.status === "on-break" || record.break_started_at != null) {
+      await connection.rollback();
+      return res.status(409).json({
+        error: "Resume duty before clocking out.",
+        success: false,
+      });
+    }
 
     // 2. Fallback Logic: Prefer dtr_locations, fallback to internship_records (radius default: 150m)
     const targetLat = record.dtr_lat ?? record.company_lat;
@@ -312,8 +409,8 @@ export const clockOut = async (req, res) => {
 
     // 4. Calculate Shift Hours
     const [timeResult] = await connection.execute(
-      `SELECT TIMESTAMPDIFF(SECOND, ?, NOW()) / 3600 AS hours`,
-      [record.clock_in],
+      `SELECT GREATEST(0, TIMESTAMPDIFF(SECOND, ?, NOW()) - ?) / 3600 AS hours`,
+      [record.clock_in, Number(record.break_total_seconds) || 0],
     );
 
     const rawHours = Number(timeResult[0]?.hours) || 0;
@@ -323,10 +420,10 @@ export const clockOut = async (req, res) => {
     let flagged = false;
     let flagReason = null;
 
-    if (rawHours > MAX_SHIFT_HOURS) {
+    if (rawHours > maxShiftHours) {
       flagged = true;
-      flagReason = `Shift exceeded ${MAX_SHIFT_HOURS}h cap (raw: ${rawHours.toFixed(2)}h). Possible forgotten clock-out.`;
-      finalHours = MAX_SHIFT_HOURS;
+      flagReason = `Shift exceeded ${maxShiftHours}h cap (raw: ${rawHours.toFixed(2)}h). Possible forgotten clock-out.`;
+      finalHours = maxShiftHours;
     }
 
     // 6. Update Daily Time Record

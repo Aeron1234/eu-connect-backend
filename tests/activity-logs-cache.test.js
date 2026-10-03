@@ -31,6 +31,9 @@ beforeEach(() => {
         { filter_type: "actor_role", filter_value: "student" },
         { filter_type: "target_type", filter_value: "internship" },
       ]];
+      if (sql.includes("COUNT(DISTINCT actor_id)")) return [[{ total_events: 1, active_users: 1 }]];
+      if (sql.includes("GROUP BY action")) return [[{ name: "created", event_count: 1 }]];
+      if (sql.includes("GROUP BY target_type")) return [[{ name: "internship", event_count: 1 }]];
       if (sql.includes("FOR UPDATE")) return [[{ id: 1, actor_id: "alice" }]];
       if (sql.trim().startsWith("SELECT")) return [[{ id: 1, actor_id: sql.includes("WHERE actor_id") ? params[0] : "alice", description: "activity", total_logs: 1 }]];
       return [{ affectedRows: 1 }];
@@ -77,14 +80,14 @@ test("personal log route caches reads and isolates users and pages", async (t) =
 test("admin log route caches filters but still enforces authentication and role", async (t) => {
   const get = await client(t);
   await get(base + "?action=created", "admin", "admin");
-  assert.equal(queries, 2);
+  assert.equal(queries, 5);
   await get(base + "?action=created", "admin", "admin");
-  assert.equal(queries, 2);
+  assert.equal(queries, 5);
   assert.equal((await get(base + "?action=created", "admin", "student")).status, 403);
   assert.equal((await get(base + "?action=created", null)).status, 401);
-  assert.equal(queries, 2);
+  assert.equal(queries, 5);
   await get(base + "?action=deleted", "admin", "admin");
-  assert.equal(queries, 4);
+  assert.equal(queries, 10);
 });
 
 test("committed log deletion clears both views and leaves unrelated caches", async (t) => {

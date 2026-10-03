@@ -1,6 +1,61 @@
 # EU Connect backend — agent handoff
 
-Updated: 2026-10-01 (Asia/Manila).
+Updated: 2026-10-03 (Asia/Manila).
+
+## Admin activity-log summary
+
+`GET /eu-connect/api/activity-logs` returns 15 rows per page and includes
+`stats` for the same action, actor-role, target-type, and description-search
+filters as its pagination total. Stats are total events, distinct active actors,
+most common action, and most active target module; ties sort by name. The
+frontend `/admin/activity-logs` displays these four cards above the filters.
+Stats and list remain behind admin authorization and the existing 30-second
+private route cache. The personal `/activity-logs/mine` page size remains 10.
+
+## Cache monitoring
+
+`GET /eu-connect/api/cache/metrics` is an admin-only, read-only endpoint behind
+`verifyUser`, `verifyRole` and `generalLimiter`. It sends `private, no-store` and
+is never cached. The frontend `/admin/cache-monitoring` page calls it through a
+server action with the existing access token, offers manual or optional 30-second
+refresh, and compares snapshots only when their `startedAt` process identity
+matches. The page keeps the last good snapshot when a refresh fails.
+
+The endpoint reports process-lifetime hit/miss/store, bypass and skip reasons,
+cache errors, invalidation/expiry counts, route-template buckets, current key
+capacity and approximate storage/process memory. Route labels never include IDs,
+queries, tokens or bodies. Metrics are per API process, reset on restart, and do
+not measure database latency. A cache flush does not reset the counters. Cache
+read/write failures still fall back to the normal controller response.
+
+## Duty breaks
+
+Apply `docs/attendance-breaks.sql` before deploying break-enabled backend code.
+Student-only `POST /dtr/break/start` and `PATCH /dtr/break/resume` transition the
+one open DTR with a non-null `clock_in` between `present` and `on-break`. Both
+endpoints reject requests without an active clock-in, and the dashboard shows
+the break button only when that record exists. The row stores the current
+`break_started_at` and accumulated `break_total_seconds`; all timestamps and
+duration calculations use database time. A student must resume before manual
+clock-out. Clock-out subtracts completed breaks before the eight-hour cap, and
+auto-close uses net duty time with `MAX_SHIFT_WALL_HOURS` (default: cap plus two
+hours) as a safety stop for a forgotten open break. The dashboard's live state
+uses `ON_BREAK`; the historical `status` field stays `present` once closed.
+Overtime crediting is deferred until the school's policy is confirmed.
+
+## Attendance shift cap and auto-close
+
+`config/shiftLimits.js` parses and validates `MAX_SHIFT_HOURS` as a positive
+whole number for both manual clock-out and the hourly auto-close job. Keep the
+cap numeric: a string cap previously made clock-out commit the shift, then fail
+while formatting `shiftHours`. At exactly the cap, a manual clock-out is not
+flagged; a longer shift is capped and flagged. Auto-close now starts at the cap,
+sets `status = 'present'`, and retains `flagged = 1` and `auto_closed = 1` to show
+that the closure was automatic. The job rechecks and locks rows before writing
+or adding hours, so a manual clock-out after the initial scan is not overwritten.
+`docs/attendance-auto-close-backfill.sql` is an optional, narrowly scoped
+one-time correction for historical eight-hour rows marked invalid by the old
+job; review its count before running it against a live database.
 
 ## Header notification count and lazy inbox
 
@@ -534,6 +589,12 @@ The user confirmed this phase was applied with all 80 tests passing.
 ### Activity logs
 
 - Helper: `config/activityLogsCache.js`, `invalidateActivityLogsCache()`.
+- Human-readable `description` values use persisted titles or names, not raw
+  record IDs. This includes announcement titles, posting positions and companies,
+  document file names, evaluation companies, supervisor-request companies and
+  alumni names/companies. Keep IDs in `target_id` and structured `metadata` for
+  joins and debugging. Deletion paths read the label before removing the row;
+  log-write failures remain supplementary to the business mutation.
 - Clears both activity-log routes across users, pages and filters, and now
   invalidates dashboard summaries as well.
 - Wired after successful commits in all current log-producing controllers and

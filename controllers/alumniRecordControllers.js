@@ -248,7 +248,7 @@ export const updateAlumniInternshipRecord = async (req, res) => {
           "alumni_internship_record_updated",
           "alumni_internship_records",
           recordId,
-          `${role === "admin" ? "Admin" : "Department head"} updated alumni record ${recordId} (${changedFields.join(", ") || "no fields"}).`,
+          `${role === "admin" ? "Admin" : "Department head"} updated the alumni record for ${updated[0].alumni_name} at ${updated[0].company_name} (${changedFields.join(", ") || "no fields"}).`,
           JSON.stringify({ changed_fields: changedFields }),
         ],
       );
@@ -288,7 +288,7 @@ export const deleteAlumniInternshipRecord = async (req, res) => {
     await connection.beginTransaction();
 
     const [existing] = await connection.execute(
-      `SELECT department_id FROM alumni_internship_records WHERE id = ? FOR UPDATE`,
+      `SELECT department_id, alumni_name, company_name FROM alumni_internship_records WHERE id = ? FOR UPDATE`,
       [recordId],
     );
 
@@ -340,7 +340,7 @@ export const deleteAlumniInternshipRecord = async (req, res) => {
           "alumni_internship_record_deleted",
           "alumni_internship_records",
           recordId,
-          `${role === "admin" ? "Admin" : "Department head"} deleted alumni record ${recordId}.`,
+          `${role === "admin" ? "Admin" : "Department head"} deleted the alumni record for ${existing[0].alumni_name} at ${existing[0].company_name}.`,
           JSON.stringify({ department_id: existing[0].department_id }),
         ],
       );

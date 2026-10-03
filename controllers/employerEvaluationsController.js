@@ -206,7 +206,7 @@ export const createEmployerEvaluation = async (req, res) => {
     await connection.beginTransaction();
 
     const [records] = await connection.execute(
-      `SELECT id, employer_id FROM internship_records WHERE user_id = ? AND status = 'ongoing' LIMIT 1 FOR UPDATE`,
+      `SELECT id, employer_id, company_name FROM internship_records WHERE user_id = ? AND status = 'ongoing' LIMIT 1 FOR UPDATE`,
       [studentId],
     );
 
@@ -276,7 +276,7 @@ export const createEmployerEvaluation = async (req, res) => {
           "employer_evaluation_submitted",
           "employer_evaluation_masters",
           masterId,
-          `Student submitted a supervisor evaluation for internship record ${internship.id}.`,
+          `Student submitted a supervisor evaluation for their internship at ${internship.company_name}.`,
           JSON.stringify({
             internship_record_id: internship.id,
             employer_id: internship.employer_id,

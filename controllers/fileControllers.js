@@ -87,7 +87,7 @@ export const approveInternshipDocument = async (req, res) => {
     await connection.beginTransaction();
 
     const [rows] = await connection.execute(
-      `SELECT id, user_id, uploaded_by_id, uploaded_by_role, verification_status 
+      `SELECT id, user_id, file_name, uploaded_by_id, uploaded_by_role, verification_status
        FROM internship_documents WHERE id = ? FOR UPDATE`,
       [fileId],
     );
@@ -135,7 +135,7 @@ export const approveInternshipDocument = async (req, res) => {
           "internship_document_accepted",
           "internship_documents",
           String(fileId),
-          `${role === "admin" && !isOwner ? "Admin" : "Student"} accepted document ${fileId} uploaded by employer.`,
+          `${role === "admin" && !isOwner ? "Admin" : "Student"} accepted document "${doc.file_name}" uploaded by employer.`,
           JSON.stringify({ uploaded_by_id: doc.uploaded_by_id }),
         ],
       );
@@ -322,7 +322,7 @@ export const deleteFile = async (req, res) => {
 
     // Look up the record first — never trust a client-supplied path
     const [rows] = await connection.execute(
-      `SELECT id, user_id, path FROM internship_documents WHERE id = ? FOR UPDATE`,
+      `SELECT id, user_id, file_name, path FROM internship_documents WHERE id = ? FOR UPDATE`,
       [fileId],
     );
 
@@ -363,7 +363,7 @@ export const deleteFile = async (req, res) => {
           "internship_document_deleted",
           "internship_documents",
           String(fileId),
-          `${isAdmin && !isOwner ? "Admin" : "Owner"} deleted document ${fileId}.`,
+          `${isAdmin && !isOwner ? "Admin" : "Owner"} deleted document "${doc.file_name}".`,
           JSON.stringify({
             document_owner_id: doc.user_id,
             path: doc.path,

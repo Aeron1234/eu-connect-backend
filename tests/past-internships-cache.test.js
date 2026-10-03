@@ -13,14 +13,15 @@ const searched=await import('../controllers/searchedUserController.js');
 const {supabase}=await import('../config/supabase.js');
 const originalExecute=db.execute,originalConnection=db.getConnection,originalFrom=supabase.storage.from;
 const path='/eu-connect/api/internships/my-past-internships';
-let calls,mode,committed,emitted;
+let calls,mode,committed,emitted,activityLogs;
 beforeEach(()=>{
- cache.flushAll();calls=0;mode='success';committed=false;emitted=0;
+ cache.flushAll();calls=0;mode='success';committed=false;emitted=0;activityLogs=[];
  db.execute=async(sql,params)=>{calls++;if(mode==='read-error')throw Error('offline');return [mode==='empty'?[]:[{id:params[0],company_name:'Company',status:'finished',file_count:2}]];};
- db.getConnection=async()=>({release(){},async beginTransaction(){},async rollback(){},async commit(){assert.ok(cache.has('owner'));if(mode==='commit-error')throw Error('commit');committed=true;},async execute(sql){
+ db.getConnection=async()=>({release(){},async beginTransaction(){},async rollback(){},async commit(){assert.ok(cache.has('owner'));if(mode==='commit-error')throw Error('commit');committed=true;},async execute(sql,params){
+ if(sql.includes('INSERT INTO activity_logs'))activityLogs.push(params);
  if(!sql.trim().startsWith('SELECT'))return [{affectedRows:1,insertId:1}];
  if(mode==='missing')return [[]];
- if(sql.includes('FROM internship_documents'))return [[{id:'doc',user_id:'owner',path:'test.pdf',uploaded_by_id:mode==='forbidden'?'other':'actor',uploaded_by_role:'employer',verification_status:'pending'}]];
+ if(sql.includes('FROM internship_documents'))return [[{id:'doc',user_id:'owner',file_name:'Completion Certificate',path:'test.pdf',uploaded_by_id:mode==='forbidden'?'other':'actor',uploaded_by_role:'employer',verification_status:'pending'}]];
  if(sql.includes('FROM internship_records'))return [[{id:'internship',employer_id:mode==='forbidden'?'other':'actor'}]];
  if(sql.includes('FROM requirement_types'))return [[{id:1,category:'post'}]];
  return [[{first_name:'Test',last_name:'User'}]];
@@ -49,3 +50,15 @@ test('document failed commits preserve owner caches and emit no events',async()=
 test('missing documents, denied uploads and storage failures preserve past lists',async()=>{const error=console.error;console.error=()=>{};try{for(const [handler,employer,failure,code]of [[files.deleteFile,false,'missing',404],[searched.deleteSearchedStudentFile,true,'forbidden',403],[searched.uploadFileToSearchedStudent,true,'forbidden',403],[files.uploadInternshipFile,false,'storage-error',500]]){cache.flushAll();seed();mode=failure;const res=response();await handler(request(employer),res);assert.equal(res.statusCode,code);assert.ok(cache.has('owner'));assert.equal(emitted,0);}}finally{console.error=error;}});
 
 test('document approval clears metadata only after commit',async()=>{const error=console.error;console.error=()=>{};try{for(const failed of [false,true]){cache.flushAll();seed();mode=failed?'commit-error':'success';const res=response();await files.approveInternshipDocument(request(),res);assert.equal(res.statusCode,failed?500:200);assert.equal(cache.has('metadata'),failed);assert.equal(cache.has('overview'),failed);assert.ok(cache.has('owner'));}}finally{console.error=error;}});
+
+test('document approval and both deletion paths log file names with structured IDs',async()=>{
+ for(const [handler,employer] of [[files.approveInternshipDocument,false],[files.deleteFile,false],[searched.deleteSearchedStudentFile,true]]){
+  cache.flushAll();seed();committed=false;activityLogs=[];
+  const res=response();await handler(request(employer),res);
+  assert.equal(res.statusCode,200,JSON.stringify(res.body));
+  assert.equal(activityLogs.length,1);
+  assert.match(activityLogs[0][5],/Completion Certificate/);
+  assert.doesNotMatch(activityLogs[0][5],/document doc|file doc/);
+  assert.equal(activityLogs[0][4],'doc');
+ }
+});

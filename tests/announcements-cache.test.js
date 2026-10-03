@@ -17,10 +17,10 @@ const { signAccessToken } = await import("../config/jwt.js");
 const originalExecute = db.execute;
 const originalGetConnection = db.getConnection;
 const base = "/eu-connect/api/announcements/";
-let calls, connection, mode, pinned, categoryName, committed, emitted, fixtures;
+let calls, connection, mode, pinned, categoryName, committed, emitted, fixtures, activityLog;
 beforeEach(() => {
   cache.flushAll(); calls = 0; mode = "success"; pinned = false;
-  categoryName = "General"; committed = false; emitted = 0;
+  categoryName = "General"; committed = false; emitted = 0; activityLog = null;
   fixtures = [
     { id: 1, category: "General", department: null, is_pinned: true, title: "General" },
     { id: 2, category: "Department", department: 1, is_pinned: false, title: "Dept one" },
@@ -57,11 +57,13 @@ beforeEach(() => {
       committed = true;
     },
     async query() { return [{ affectedRows: 1 }]; },
-    async execute(sql) {
+    async execute(sql, params) {
+      if (sql.includes("INSERT INTO activity_logs")) activityLog = params;
       if (sql.includes("FROM user_profiles")) return [[{ first_name: "Author", last_name: "Name" }]];
       if (sql.includes("SELECT name FROM announcement_categories")) return [mode === "invalid-category" ? [] : [{ name: categoryName }]];
       if (sql.includes("FROM announcements a") && sql.includes("FOR UPDATE")) return [mode === "forbidden" ? [] : [{ category_id: 1, category_name: "General", title: "Old" }]];
-      if (sql.includes("SELECT a.*")) return [[{ id: 1, first_name: "Author", last_name: "Name", category: categoryName }]];
+      if (sql.includes("SELECT title FROM announcements")) return [[{ title: "Old" }]];
+      if (sql.includes("SELECT a.*")) return [[{ id: 1, title: "New", first_name: "Author", last_name: "Name", category: categoryName }]];
       if (sql.includes("FROM dept_heads_background_info")) return [[{ department_id: 1 }]];
       if (sql.includes("SELECT id, email, username FROM users")) return [[{ id: "author", email: "author@example.test", username: "author" }]];
       if (sql.trim().startsWith("SELECT")) return [[{ id: "recipient" }]];
@@ -127,6 +129,22 @@ test("create/edit/delete/pin/unpin clear all feeds after commit and before notif
     assert.ok(cache.has("categories")); assert.ok(cache.has("profile"));
   }
   assert.equal(emitted, 1);
+});
+
+test("announcement edits and deletes log the persisted title while keeping the target ID", async () => {
+  for (const [handler, expected] of [
+    [announcements.updateAnnouncement, 'announcement "New"'],
+    [announcements.deleteAnnouncement, 'announcement "Old"'],
+  ]) {
+    seed();
+    const res = response();
+    await handler(request(), res);
+    assert.equal(res.statusCode, 200);
+    assert.equal(activityLog[4], "1");
+    assert.ok(activityLog[5].includes(expected));
+    assert.ok(!activityLog[5].includes("announcement 1"));
+    cache.flushAll();
+  }
 });
 
 test("general-to-department edit evicts previously visible content before socket refresh", async () => {

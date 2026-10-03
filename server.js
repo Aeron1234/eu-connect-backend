@@ -35,6 +35,7 @@ import authRoutes from "./routes/authRoutes.js";
 import activityLogRoutes from "./routes/activityLogsRoutes.js";
 import departmentAndCoursesRoutes from "./routes/departmentsAndCoursesRoutes.js";
 import dashboardRoutes from "./routes/dashboardRoutes.js";
+import cacheMonitoringRoutes from "./routes/cacheMonitoringRoutes.js";
 import weeklyNarrativeRoutes from "./routes/weeklyNarrativeRoutes.js";
 
 // dotenv.config();
@@ -113,6 +114,7 @@ app.use("/eu-connect/api", alumniRoutes);
 app.use("/eu-connect/api", criteriaRoutes);
 app.use("/eu-connect/api", activityLogRoutes);
 app.use("/eu-connect/api", departmentAndCoursesRoutes);
+app.use("/eu-connect/api", cacheMonitoringRoutes);
 
 // ---------------------------------------------------------------------------
 // Fallback error-handling middleware.

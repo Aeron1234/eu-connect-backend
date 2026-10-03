@@ -503,7 +503,7 @@ export const updateAnnouncement = async (req, res) => {
           "announcement_updated",
           "announcements",
           String(announcementId),
-          `Author updated announcement ${announcementId} (${changedFields.join(", ") || "no fields"}).`,
+          `Author updated announcement "${updatedData[0].title}" (${changedFields.join(", ") || "no fields"}).`,
           JSON.stringify({
             changed_fields: changedFields,
             became_department_category:
@@ -568,6 +568,20 @@ export const deleteAnnouncement = async (req, res) => {
     }
 
     await connection.beginTransaction();
+    // This extra read is only for the audit description. A logging lookup
+    // failure must not prevent an otherwise valid deletion.
+    let announcementLabel = "an announcement";
+    try {
+      const [existingRows] = await connection.execute(
+        `SELECT title FROM announcements WHERE id = ? AND (author_id = ? OR ? = 'admin') FOR UPDATE`,
+        [announcementId, userId, role],
+      );
+      if (existingRows[0]?.title) {
+        announcementLabel = `announcement "${existingRows[0].title}"`;
+      }
+    } catch (lookupError) {
+      console.error("Announcement title lookup failed for activity log:", lookupError);
+    }
     const [result] = await connection.execute(
       `DELETE FROM announcements WHERE id = ? AND (author_id = ? OR ? = 'admin')`,
       [announcementId, userId, role],
@@ -595,7 +609,7 @@ export const deleteAnnouncement = async (req, res) => {
           "announcement_deleted",
           "announcements",
           String(announcementId),
-          `${role === "admin" ? "Admin" : "Author"} deleted announcement ${announcementId}.`,
+          `${role === "admin" ? "Admin" : "Author"} deleted ${announcementLabel}.`,
           null,
         ],
       );

@@ -5,6 +5,8 @@ import { verifyRole } from "../middleware/verifyRole.js";
 import {
   clockIn,
   clockOut,
+  startBreak,
+  resumeDuty,
   deleteDTR,
   getAllDTRs,
   getLatestDtrStatus,
@@ -59,6 +61,22 @@ dtrRoutes.patch(
   verifyRole(["student", "admin"]),
   mediumLimiter,
   clockOut,
+);
+
+dtrRoutes.post(
+  "/dtr/break/start",
+  verifyUser,
+  verifyRole(["student"]),
+  mediumLimiter,
+  startBreak,
+);
+
+dtrRoutes.patch(
+  "/dtr/break/resume",
+  verifyUser,
+  verifyRole(["student"]),
+  mediumLimiter,
+  resumeDuty,
 );
 
 dtrRoutes.delete(
