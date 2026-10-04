@@ -101,7 +101,7 @@ accountRoutes.post(
   verifyUser,
   verifyRole(["admin"]),
   upload.none(),
-  strictLimiter,
+  generalLimiter,
   createUser,
 );
 
