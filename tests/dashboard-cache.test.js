@@ -9,6 +9,7 @@ import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
 import { invalidateNotificationsCache } from "../config/notificationsCache.js";
 import { invalidatePostingFavoritesCache } from "../config/postingsCache.js";
 import { invalidateCriteriaCache } from "../config/criteriaCache.js";
+import { invalidateDashboardCache } from "../config/dashboardCache.js";
 
 process.env.ACCESS_TOKEN_SECRET = "dashboard-test-access";
 process.env.REFRESH_TOKEN_SECRET = "dashboard-test-refresh";
@@ -22,10 +23,12 @@ const { autoCloseStaleShifts } = await import("../config/autoCloseStaleShifts.js
 const originalGetConnection = db.getConnection;
 const prefix = "/eu-connect/api/";
 const targets = [
-  ["dashboard-stats", "student"], ["employer-dashboard-stats", "employer"],
-  ["employer-dashboard-data", "employer"], ["department-head-dashboard-stats", "department_head"],
-  ["department-head-dashboard-data", "department_head"], ["average-shift-hours", "department_head"],
-  ["admin-dashboard-stats", "admin"], ["admin-dashboard-data", "admin"],
+  ["dashboard-stats", "student"],
+  ["employer-dashboard-data", "employer"],
+  ["department-head-dashboard-data", "department_head"],
+  ["department-head-dashboard/hours-tracker", "department_head"],
+  ["average-shift-hours", "department_head"],
+  ["admin-dashboard-data", "admin"],
 ];
 let connection, calls, failCommit;
 beforeEach(() => {
@@ -61,14 +64,14 @@ function seed() {
 }
 function response() { return { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } }; }
 
-test("all eight summaries cache successful responses for fifteen seconds", async (t) => {
+test("all six summaries and tracker pages cache successful responses for fifteen seconds", async (t) => {
   const get = await client(t);
   for (const [path, role] of targets) {
     const first = await get(path, role); assert.equal(first.status, 200, path);
     const body = await first.json(); const before = calls;
     assert.deepEqual(await (await get(path, role)).json(), body); assert.equal(calls, before, path);
   }
-  assert.equal(cache.keys().length, 8);
+  assert.equal(cache.keys().length, 6);
   for (const key of cache.keys()) { const ttl = cache.getTtl(key) - Date.now(); assert.ok(ttl > 10000 && ttl <= 15000); }
 });
 
@@ -80,7 +83,9 @@ test("summary caches isolate user, department and month, and retain authorizatio
     assert.equal((await get(path, "unknown")).status, 403);
     assert.equal((await get(path, role, null)).status, 401);
   }
-  let before = calls; await get("department-head-dashboard-stats", "department_head", "alice", 2); assert.ok(calls > before);
+  let before = calls; await get("department-head-dashboard-data", "department_head", "alice", 2); assert.ok(calls > before);
+  before = calls; await get("department-head-dashboard/hours-tracker?page=2&courseId=3&search=ana", "department_head"); assert.ok(calls > before);
+  before = calls; await get("department-head-dashboard/hours-tracker?page=3&courseId=3&search=ana", "department_head"); assert.ok(calls > before);
   before = calls; await get("average-shift-hours?month=1&year=2026", "department_head"); assert.ok(calls > before);
 });
 
@@ -90,17 +95,27 @@ test("live student attendance overview stays uncached", async (t) => {
   await get("student-dashboard-data", "student"); assert.ok(calls > before); assert.equal(cache.keys().length, 0);
 });
 
-test("partial overview failures return existing fallback responses without caching", async (t) => {
+test("failed stats do not cache, while partial overview failures keep fallbacks uncached", async (t) => {
   const get = await client(t); const execute = connection.execute; const log = console.error;
   try {
     console.error = () => {};
     connection.execute = async () => { calls++; throw new Error("query unavailable"); };
     for (const [path, role] of targets.filter(([path]) => path.endsWith("-data"))) {
-      const first = await get(path, role); assert.equal(first.status, 200);
+      const first = await get(path, role); assert.equal(first.status, 500);
       const before = calls; await get(path, role); assert.ok(calls > before);
     }
     assert.equal(cache.keys().length, 0);
     assert.equal((await get("dashboard-stats", "student")).status, 500);
+    assert.equal(cache.keys().length, 0);
+    connection.execute = async (sql) => {
+      calls++;
+      if (sql.includes("COUNT(*)")) return [[{ count: 1, total: 1 }]];
+      throw new Error("optional query unavailable");
+    };
+    for (const [path, role] of targets.filter(([path]) => path.endsWith("-data"))) {
+      const first = await get(path, role); assert.equal(first.status, 200);
+      const before = calls; await get(path, role); assert.ok(calls > before);
+    }
     assert.equal(cache.keys().length, 0);
   } finally { connection.execute = execute; console.error = log; }
 });
@@ -112,6 +127,15 @@ test("shared writes invalidate summaries while personal counter changes target o
   for (const invalidate of [invalidateNotificationsCache, invalidatePostingFavoritesCache]) {
     cache.flushAll(); seed(); invalidate("alice"); assert.deepEqual(cache.keys().sort(), ["bob", "profile"]);
   }
+});
+
+test("dashboard invalidation clears only the requested user's tracker pages", () => {
+  const path = prefix + "department-head-dashboard/hours-tracker";
+  cache.set("alice-page-1", { userId: "alice", path, body: {} });
+  cache.set("alice-page-2", { userId: "alice", path, body: {} });
+  cache.set("bob-page", { userId: "bob", path, body: {} });
+  invalidateDashboardCache("alice");
+  assert.deepEqual(cache.keys(), ["bob-page"]);
 });
 
 test("attendance deletion invalidates only after successful commit", async () => {

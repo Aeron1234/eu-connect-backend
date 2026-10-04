@@ -149,10 +149,17 @@ The existing single-process restriction and CACHE_ENABLED switch still apply.
 
 ## Dashboard summaries
 
-Eight summary endpoints use a 15-second TTL: `/dashboard-stats`,
-`/employer-dashboard-stats`, `/employer-dashboard-data`,
-`/department-head-dashboard-stats`, `/department-head-dashboard-data`,
-`/average-shift-hours`, `/admin-dashboard-stats` and `/admin-dashboard-data`.
+Six summary and tracker endpoints use a 15-second TTL: `/dashboard-stats`,
+`/employer-dashboard-data`, `/department-head-dashboard-data`,
+`/department-head-dashboard/hours-tracker`, `/average-shift-hours` and
+`/admin-dashboard-data`. Employer, department-head,
+and admin dashboard-data responses include a `stats` object, fetched with their
+other data through one pooled connection. Their former standalone stats routes
+have been removed.
+The department dashboard response includes the first 10 active interns plus
+an all-intern course aggregate for the chart. Later tracker pages and
+course/name filters use the separate hours-tracker route, which is invalidated
+with the other dashboard summaries.
 `/posted-jobs` retains its existing 30-second policy. `/student-dashboard-data`
 stays uncached because it contains live attendance and location information.
 

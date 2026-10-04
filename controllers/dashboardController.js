@@ -197,12 +197,7 @@ export const getStudentDashboardData = async (req, res) => {
 ///////////////////
 //EMPLOYER
 //////////////////
-// Keep standalone — feeds @stats independently
-export const getEmployerDashboardStats = async (req, res) => {
-  let connection;
-  try {
-    connection = await db.getConnection();
-    const { id: employerId } = req.verifiedUser;
+async function loadEmployerDashboardStats(connection, employerId) {
 
     // Count both intern states in one employer-scoped scan. The other counters
     // are independent scalar subqueries in the same statement.
@@ -225,35 +220,23 @@ export const getEmployerDashboardStats = async (req, res) => {
       [employerId, employerId, employerId, employerId],
     );
 
-    res.status(200).json({
-      success: true,
-      stats: {
-        internshipPosts: counts.posting_count || 0,
-        unreadAnnouncements: counts.announcement_count || 0,
-        internsHandled: {
-          current: counts.ongoing_count || 0,
-          past: counts.finished_count || 0,
-        },
-        documentsUploaded: counts.document_count || 0,
+    return {
+      internshipPosts: counts.posting_count || 0,
+      unreadAnnouncements: counts.announcement_count || 0,
+      internsHandled: {
+        current: counts.ongoing_count || 0,
+        past: counts.finished_count || 0,
       },
-    });
-  } catch (error) {
-    console.error("Failed to retrieve employer dashboard statistics:", error);
-    res.status(500).json({
-      error: "Database metrics aggregation failed",
-      success: false,
-    });
-  } finally {
-    if (connection) connection.release();
-  }
-};
+      documentsUploaded: counts.document_count || 0,
+    };
+}
 
-// Employer dashboard data; stats stay on getEmployerDashboardStats.
 export const getEmployerDashboardData = async (req, res) => {
   let connection;
   try {
     connection = await db.getConnection();
     const { id: employerId } = req.verifiedUser;
+    const stats = await loadEmployerDashboardStats(connection, employerId);
 
     // Interns list is the only remaining piece — wrapped defensively so a
     // bad join here doesn't 500 the whole dashboard.
@@ -315,6 +298,7 @@ export const getEmployerDashboardData = async (req, res) => {
 
     return res.status(200).json({
       success: true,
+      stats,
       interns,
       postedJobs: {
         jobs: postedJobs,
@@ -390,19 +374,7 @@ export const getPostedJobs = async (req, res) => {
 ///////////////////
 //DEPARTMENT HEAD
 //////////////////
-// Keep standalone — feeds @stats independently
-export const getDepartmentHeadDashboardStats = async (req, res) => {
-  let connection;
-  try {
-    connection = await db.getConnection();
-    const { department_id: departmentId } = req.verifiedUser;
-
-    if (!departmentId) {
-      return res
-        .status(400)
-        .json({ error: "No department associated with this account." });
-    }
-
+async function loadDepartmentHeadDashboardStats(connection, departmentId, userId) {
     const [
       [internshipCountsResult],
       [manualAlumniResult],
@@ -435,7 +407,7 @@ export const getDepartmentHeadDashboardStats = async (req, res) => {
         `SELECT COUNT(*) AS count 
          FROM notifications 
          WHERE user_id = ? AND type = 'announcement' AND is_read = 0`,
-        [req.verifiedUser.id],
+        [userId],
       ),
     ]);
 
@@ -443,31 +415,119 @@ export const getDepartmentHeadDashboardStats = async (req, res) => {
       (internshipCountsResult[0].total_count || 0) +
       (manualAlumniResult[0].count || 0);
 
-    res.status(200).json({
-      success: true,
-      stats: {
-        ongoingInternships: internshipCountsResult[0].ongoing_count || 0,
-        internshipRecords: internshipRecordsCount,
-        pendingResponses: internshipCountsResult[0].pending_count || 0,
-        unreadAnnouncements: announcementResult[0].count || 0,
-      },
-    });
-  } catch (error) {
-    console.error(
-      "Failed to retrieve department head dashboard statistics:",
-      error,
-    );
-    res.status(500).json({
-      error: "Database metrics aggregation failed",
-      success: false,
-    });
-  } finally {
-    if (connection) connection.release();
-  }
-};
+    return {
+      ongoingInternships: internshipCountsResult[0].ongoing_count || 0,
+      internshipRecords: internshipRecordsCount,
+      pendingResponses: internshipCountsResult[0].pending_count || 0,
+      unreadAnnouncements: announcementResult[0].count || 0,
+    };
+}
 
-// Consolidated — everything except stats, in one round trip. Each section
-// wrapped independently so one bad query doesn't take down the rest.
+const HOURS_TRACKER_PAGE_SIZE = 10;
+// Remaining duty hours exceed what fits before the end date at 40 hours/week.
+// Use the same database-time rule for each row and the all-student chart.
+const hoursAtRiskCondition = `(
+  COALESCE(ir.total_hours, 0) - COALESCE(ir.accumulated_hours, 0) >
+  GREATEST(COALESCE(TIMESTAMPDIFF(MICROSECOND, CURRENT_TIMESTAMP(6), ir.date_ended), 0), 0)
+  * 40 / 604800000000
+)`;
+const hoursTrackerFrom = `FROM internship_records ir
+  INNER JOIN (
+    SELECT sai1.user_id, sai1.department_id, sai1.course_id
+    FROM student_academic_info AS sai1
+    INNER JOIN (
+      SELECT user_id, MAX(id) AS max_id
+      FROM student_academic_info
+      GROUP BY user_id
+    ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
+  ) AS sai ON ir.user_id = sai.user_id
+  INNER JOIN courses c ON c.id = sai.course_id
+  LEFT JOIN user_profiles up ON up.user_id = ir.user_id`;
+
+function mapHoursStudent(row) {
+  return {
+    id: row.internship_id,
+    student_id: row.student_id,
+    name: `${row.first_name || ""} ${row.last_name || ""}`.trim() || "Unknown",
+    course: row.course,
+    company: row.company_name,
+    accumulated_hours: Number(row.accumulated_hours) || 0,
+    total_hours: Number(row.total_hours) || 0,
+    atRisk: Number(row.at_risk) === 1,
+    date_started: row.date_started,
+    date_ended: row.date_ended,
+  };
+}
+
+async function loadStudentHoursPage(connection, departmentId, { page = 1, courseId, search = "" } = {}) {
+  const filters = ["sai.department_id = ?", "ir.status = 'ongoing'"];
+  const params = [departmentId];
+  if (courseId) {
+    filters.push("sai.course_id = ?");
+    params.push(courseId);
+  }
+  if (search) {
+    filters.push("LOCATE(LOWER(?), LOWER(CONCAT_WS(' ', up.first_name, up.last_name))) > 0");
+    params.push(search);
+  }
+  const where = `WHERE ${filters.join(" AND ")}`;
+  const [[countRow]] = await connection.execute(
+    `SELECT COUNT(*) AS total ${hoursTrackerFrom} ${where}`,
+    params,
+  );
+  const total = Number(countRow?.total) || 0;
+  const totalPages = Math.max(1, Math.ceil(total / HOURS_TRACKER_PAGE_SIZE));
+  let students = [];
+  if (total && page <= totalPages) {
+    const [rows] = await connection.execute(
+      `SELECT ir.id AS internship_id, ir.user_id AS student_id,
+              ir.company_name, ir.accumulated_hours, ir.total_hours,
+              ir.date_started, ir.date_ended, up.first_name, up.last_name,
+              c.short_name AS course,
+              CASE WHEN ${hoursAtRiskCondition} THEN 1 ELSE 0 END AS at_risk
+       ${hoursTrackerFrom} ${where}
+       ORDER BY ir.date_started DESC, ir.id DESC
+       LIMIT ? OFFSET ?`,
+      [...params, HOURS_TRACKER_PAGE_SIZE, (page - 1) * HOURS_TRACKER_PAGE_SIZE],
+    );
+    students = rows.map(mapHoursStudent);
+  }
+  return { students, page, pageSize: HOURS_TRACKER_PAGE_SIZE, total, totalPages };
+}
+
+async function loadHoursDistribution(connection, departmentId) {
+  const [rows] = await connection.execute(
+    `SELECT c.short_name AS course,
+            COUNT(ir.id) AS student_count,
+            SUM(CASE WHEN ir.total_hours > 0
+                     THEN ir.accumulated_hours / ir.total_hours * 100
+                     ELSE 0 END) AS completion_sum,
+            SUM(CASE WHEN ${hoursAtRiskCondition} THEN 1 ELSE 0 END) AS at_risk_count
+     FROM internship_records ir
+     INNER JOIN (
+       SELECT sai1.user_id, sai1.department_id, sai1.course_id
+       FROM student_academic_info AS sai1
+       INNER JOIN (
+         SELECT user_id, MAX(id) AS max_id
+         FROM student_academic_info GROUP BY user_id
+       ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
+     ) AS sai ON ir.user_id = sai.user_id
+     INNER JOIN courses c ON c.id = sai.course_id
+     WHERE sai.department_id = ? AND ir.status = 'ongoing'
+     GROUP BY c.short_name
+     ORDER BY c.short_name ASC`,
+    [departmentId],
+  );
+  return rows.map((row) => ({
+    course: row.course,
+    studentCount: Number(row.student_count) || 0,
+    avgCompletion: Math.round((Number(row.completion_sum) || 0) / Number(row.student_count || 1)),
+    atRiskCount: Number(row.at_risk_count) || 0,
+  }));
+}
+
+// Fetch stats and dashboard sections through one pooled connection. Optional
+// sections retain their independent fallbacks and opt out of response caching.
 export const getDepartmentHeadDashboardData = async (req, res) => {
   let connection;
   try {
@@ -479,6 +539,11 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
         .status(400)
         .json({ error: "No department associated with this account." });
     }
+    const stats = await loadDepartmentHeadDashboardStats(
+      connection,
+      departmentId,
+      req.verifiedUser.id,
+    );
 
     let ongoingPerCourse = [];
     try {
@@ -584,36 +649,20 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
       );
     }
 
-    let hoursTracker = { students: [], courses: [] };
+    let hoursTracker = {
+      students: [], courses: [], page: 1, pageSize: HOURS_TRACKER_PAGE_SIZE,
+      total: 0, totalPages: 1,
+    };
     try {
-      const [studentRows] = await connection.execute(
-        `SELECT
-           ir.id AS internship_id,
-           ir.user_id AS student_id,
-           ir.company_name,
-           ir.accumulated_hours,
-           ir.total_hours,
-           ir.date_started,
-           ir.date_ended,
-           up.first_name,
-           up.last_name,
-           c.short_name AS course
-         FROM internship_records ir
-         INNER JOIN (
-           SELECT sai1.user_id, sai1.department_id, sai1.course_id
-           FROM student_academic_info AS sai1
-           INNER JOIN (
-             SELECT user_id, MAX(id) AS max_id
-             FROM student_academic_info
-             GROUP BY user_id
-           ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
-         ) AS sai ON ir.user_id = sai.user_id
-         INNER JOIN courses c ON c.id = sai.course_id
-         LEFT JOIN user_profiles up ON up.user_id = ir.user_id
-         WHERE sai.department_id = ? AND ir.status = 'ongoing'
-         ORDER BY ir.date_started DESC`,
-        [departmentId],
-      );
+      hoursTracker = {
+        ...hoursTracker,
+        ...(await loadStudentHoursPage(connection, departmentId)),
+      };
+    } catch (err) {
+      res.locals.skipCache = true;
+      console.error("getDepartmentHeadDashboardData: hours page query failed:", err);
+    }
+    try {
       const [courseRows] = await connection.execute(
         `SELECT id, course_name, short_name
          FROM courses
@@ -621,30 +670,18 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
          ORDER BY short_name ASC`,
         [departmentId],
       );
-      hoursTracker = {
-        students: studentRows.map((r) => ({
-          id: r.internship_id,
-          name:
-            `${r.first_name || ""} ${r.last_name || ""}`.trim() || "Unknown",
-          course: r.course,
-          company: r.company_name,
-          accumulated_hours: Number(r.accumulated_hours) || 0,
-          total_hours: Number(r.total_hours) || 0,
-          date_started: r.date_started,
-          date_ended: r.date_ended,
-        })),
-        courses: courseRows.map((c) => ({
-          id: c.id,
-          course_name: c.course_name,
-          short_name: c.short_name,
-        })),
-      };
+      hoursTracker.courses = courseRows;
     } catch (err) {
       res.locals.skipCache = true;
-      console.error(
-        "getDepartmentHeadDashboardData: hours tracker query failed:",
-        err,
-      );
+      console.error("getDepartmentHeadDashboardData: hours courses query failed:", err);
+    }
+
+    let hoursDistribution = [];
+    try {
+      hoursDistribution = await loadHoursDistribution(connection, departmentId);
+    } catch (err) {
+      res.locals.skipCache = true;
+      console.error("getDepartmentHeadDashboardData: hours distribution query failed:", err);
     }
 
     let availableShiftHoursMonths = [];
@@ -679,10 +716,12 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
 
     res.status(200).json({
       success: true,
+      stats,
       ongoingPerCourse,
       studentEvaluationAverages,
       employerEvaluationAverages,
       hoursTracker,
+      hoursDistribution,
       availableShiftHoursMonths,
     });
   } catch (error) {
@@ -691,6 +730,43 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
       error: "Database metrics aggregation failed",
       success: false,
     });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const getDepartmentStudentHoursPage = async (req, res) => {
+  const { department_id: departmentId } = req.verifiedUser;
+  if (!departmentId) {
+    return res.status(400).json({ error: "No department associated with this account." });
+  }
+
+  const rawPage = req.query.page ?? "1";
+  const rawCourseId = req.query.courseId;
+  const rawSearch = req.query.search ?? "";
+  if (
+    typeof rawPage !== "string" || !/^[1-9]\d*$/.test(rawPage) ||
+    !Number.isSafeInteger(Number(rawPage)) || Number(rawPage) > 1000000 ||
+    (rawCourseId !== undefined &&
+      (typeof rawCourseId !== "string" || !/^[1-9]\d*$/.test(rawCourseId) ||
+        !Number.isSafeInteger(Number(rawCourseId)))) ||
+    typeof rawSearch !== "string" || rawSearch.trim().length > 100
+  ) {
+    return res.status(400).json({ error: "Invalid hours tracker filters." });
+  }
+
+  let connection;
+  try {
+    connection = await db.getConnection();
+    const page = await loadStudentHoursPage(connection, departmentId, {
+      page: Number(rawPage),
+      courseId: rawCourseId ? Number(rawCourseId) : undefined,
+      search: rawSearch.trim(),
+    });
+    return res.status(200).json({ success: true, ...page });
+  } catch (error) {
+    console.error("Failed to retrieve department student hours page:", error);
+    return res.status(500).json({ success: false, error: "Student hours lookup failed" });
   } finally {
     if (connection) connection.release();
   }
@@ -793,12 +869,7 @@ export const getAverageShiftHoursByWeek = async (req, res) => {
 //ADMIN
 //////////////////
 
-// Keep standalone — feeds @stats independently
-export const getAdminDashboardStats = async (req, res) => {
-  let connection;
-  try {
-    connection = await db.getConnection();
-
+async function loadAdminDashboardStats(connection) {
     // The left join keeps inactive/suspended users in the count even if their
     // role row is absent; the role counters still require a matching role.
     const [[counts]] = await connection.execute(
@@ -812,25 +883,13 @@ export const getAdminDashboardStats = async (req, res) => {
        LEFT JOIN roles r ON r.id = u.role_id`,
     );
 
-    res.status(200).json({
-      success: true,
-      stats: {
-        ongoingInternships: counts.ongoing_count || 0,
-        employers: counts.employer_count || 0,
-        students: counts.student_count || 0,
-        inactiveOrSuspended: counts.inactive_count || 0,
-      },
-    });
-  } catch (error) {
-    console.error("Failed to retrieve admin dashboard statistics:", error);
-    res.status(500).json({
-      error: "Database metrics aggregation failed",
-      success: false,
-    });
-  } finally {
-    if (connection) connection.release();
-  }
-};
+    return {
+      ongoingInternships: counts.ongoing_count || 0,
+      employers: counts.employer_count || 0,
+      students: counts.student_count || 0,
+      inactiveOrSuspended: counts.inactive_count || 0,
+    };
+}
 
 // Admin dashboard sections stay independent so one failed query does not
 // discard the others.
@@ -838,6 +897,7 @@ export const getAdminDashboardData = async (req, res) => {
   let connection;
   try {
     connection = await db.getConnection();
+    const stats = await loadAdminDashboardStats(connection);
 
     let userGrowth = [];
     try {
@@ -962,6 +1022,7 @@ export const getAdminDashboardData = async (req, res) => {
 
     res.status(200).json({
       success: true,
+      stats,
       userGrowth,
       usersByRole,
       ongoingByDepartment,

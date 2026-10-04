@@ -10,12 +10,10 @@ import {
 } from "../middleware/rateLimiter.js";
 import {
   getAdminDashboardData,
-  getAdminDashboardStats,
   getAverageShiftHoursByWeek,
   getDepartmentHeadDashboardData,
-  getDepartmentHeadDashboardStats,
+  getDepartmentStudentHoursPage,
   getEmployerDashboardData,
-  getEmployerDashboardStats,
   getPostedJobs,
   getStudentDashboardData,
   getStudentDashboardStats,
@@ -48,15 +46,6 @@ dashboardRoutes.get(
 ///////////////////
 
 dashboardRoutes.get(
-  "/employer-dashboard-stats",
-  verifyUser,
-  verifyRole(["employer"]),
-  generalLimiter,
-  cacheRoute(15),
-  getEmployerDashboardStats,
-);
-
-dashboardRoutes.get(
   "/employer-dashboard-data",
   verifyUser,
   verifyRole(["employer"]),
@@ -79,21 +68,21 @@ dashboardRoutes.get(
 ///////////////////
 
 dashboardRoutes.get(
-  "/department-head-dashboard-stats",
-  verifyUser,
-  verifyRole(["department_head"]),
-  generalLimiter,
-  cacheRoute(15),
-  getDepartmentHeadDashboardStats,
-);
-
-dashboardRoutes.get(
   "/department-head-dashboard-data",
   verifyUser,
   verifyRole(["department_head"]),
   generalLimiter,
   cacheRoute(15),
   getDepartmentHeadDashboardData,
+);
+
+dashboardRoutes.get(
+  "/department-head-dashboard/hours-tracker",
+  verifyUser,
+  verifyRole(["department_head"]),
+  paginationLimiter,
+  cacheRoute(15),
+  getDepartmentStudentHoursPage,
 );
 
 dashboardRoutes.get(
@@ -108,15 +97,6 @@ dashboardRoutes.get(
 ///////////////////
 // ADMIN
 ///////////////////
-
-dashboardRoutes.get(
-  "/admin-dashboard-stats",
-  verifyUser,
-  verifyRole(["admin"]),
-  generalLimiter,
-  cacheRoute(15),
-  getAdminDashboardStats,
-);
 
 dashboardRoutes.get(
   "/admin-dashboard-data",

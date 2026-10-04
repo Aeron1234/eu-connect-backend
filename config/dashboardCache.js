@@ -1,9 +1,10 @@
 import { invalidateRouteCache } from "./cache.js";
 
 const routes = [
-  "/dashboard-stats", "/employer-dashboard-stats", "/employer-dashboard-data",
-  "/department-head-dashboard-stats", "/department-head-dashboard-data",
-  "/average-shift-hours", "/admin-dashboard-stats", "/admin-dashboard-data",
+  "/dashboard-stats", "/employer-dashboard-data",
+  "/department-head-dashboard-data", "/department-head-dashboard/hours-tracker",
+  "/average-shift-hours",
+  "/admin-dashboard-data",
 ];
 
 // Cross-role aggregates have many dependencies: conservatively clear all

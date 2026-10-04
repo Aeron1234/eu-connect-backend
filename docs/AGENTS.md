@@ -1,6 +1,35 @@
 # EU Connect backend — agent handoff
 
-Updated: 2026-10-03 (Asia/Manila).
+Updated: 2026-10-05 (Asia/Manila).
+
+## Combined dashboard responses
+
+Employer, department-head, and admin dashboard stats now live in the `stats`
+field of their respective `*-dashboard-data` responses. Each handler acquires
+one pooled database connection for its counts and detail queries. The three
+standalone stats routes were removed; update the frontend with this backend.
+The data routes retain their 15-second private cache and existing data fields.
+Count-query failure returns an error; optional detail-query failures keep their
+existing fallbacks and set `res.locals.skipCache`. Student `/dashboard-stats`
+remains separate from the uncached, live `/student-dashboard-data` response.
+
+## Department student hours pagination
+
+`/department-head-dashboard-data` now returns the first 10 active internship
+rows in `hoursTracker`, with `page`, `pageSize`, `total`, and `totalPages`.
+Its `hoursDistribution` field summarizes **all** active department interns by
+course, so the donut chart does not change as tracker pages change. The
+department-only `GET /department-head-dashboard/hours-tracker` serves later
+pages and optional `courseId` and debounced student-name `search` filters.
+Both reads use the verified department, stable `date_started DESC, id DESC`
+ordering, a 15-second private cache, and dashboard invalidation. The frontend
+uses the student's `student_id` for its profile link and displays accumulated
+hours with one decimal place. Deploy backend and frontend together.
+Both the page rows' `atRisk` flag and the chart's `atRiskCount` use the same
+database-time calculation: remaining hours compared with time to the internship
+end date at 40 possible duty hours per week. The browser renders the returned
+flag rather than recalculating it with its own clock. This keeps the two views
+consistent but does not change the underlying 40-hour policy assumption.
 
 ## Admin activity-log summary
 
@@ -200,7 +229,7 @@ All paths below are relative to `/eu-connect/api`.
 | Criteria admin lists | `/criteria/employer-evaluation`, `/criteria/student-evaluation`                 | 300 seconds |
 | Criteria forms       | `/evaluation-criterias`, `/student-evaluation/criteria`                         | 300 seconds |
 | Internship postings  | `/internship-postings`, `/posted-jobs`                                          | 30 seconds  |
-| Dashboard summaries  | Eight endpoints listed below                                                    | 15 seconds  |
+| Dashboard summaries  | Six endpoints listed below                                                      | 15 seconds  |
 | Announcements | `/announcements/history` | 30 seconds |
 | Announcement categories | `/announcements/categories` | 300 seconds |
 
@@ -665,13 +694,11 @@ Helper: `config/dashboardCache.js`, `invalidateDashboardCache(userId?)`.
 Cached endpoints:
 
 1. `/dashboard-stats`
-2. `/employer-dashboard-stats`
-3. `/employer-dashboard-data`
-4. `/department-head-dashboard-stats`
-5. `/department-head-dashboard-data`
-6. `/average-shift-hours`
-7. `/admin-dashboard-stats`
-8. `/admin-dashboard-data`
+2. `/employer-dashboard-data`
+3. `/department-head-dashboard-data`
+4. `/department-head-dashboard/hours-tracker`
+5. `/average-shift-hours`
+6. `/admin-dashboard-data`
 
 - `/student-dashboard-data` remains uncached because it includes live attendance
   status and location. `/posted-jobs` keeps its independent 30-second TTL.
@@ -826,7 +853,7 @@ checkout: its controller and focused test hashes match the prepared bundle.
 The user has not yet supplied the backend test output for this installation.
 The separate staging copy passed 130 tests with mocked database connections.
 
-`GET /eu-connect/api/department-head-dashboard-stats` now obtains total,
+The department-head stats query (now inside `GET /eu-connect/api/department-head-dashboard-data`) obtains total,
 ongoing and pending internship counts from one conditional aggregate over the
 same latest-academic-record join. It retains separate manual-alumni and unread-
 announcement counts and returns the same JSON fields. The internship portion
@@ -1050,10 +1077,10 @@ backend test result after application.
 `GET /eu-connect/api/dashboard-stats` now uses one SELECT containing four
 independent scalar counts rather than four queued statements. Each count keeps
 its original table, joins, and filters, so this reduces database round trips
-but not table scans. `GET /eu-connect/api/employer-dashboard-stats` now uses
+but not table scans. The employer stats query, now inside `/employer-dashboard-data`, uses
 one SELECT rather than five; one conditional aggregate counts ongoing and
-finished internships in one employer-scoped scan. `GET
-/eu-connect/api/admin-dashboard-stats` now uses one SELECT rather than four;
+finished internships in one employer-scoped scan. The admin dashboard-data
+handler includes one stats SELECT rather than four;
 one users/roles scan counts employers, students, and inactive/suspended users.
 The roles join is LEFT so inactive/suspended users without a matching role
 still count, as in the original standalone query. Its ongoing-internship count
