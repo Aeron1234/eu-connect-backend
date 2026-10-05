@@ -118,8 +118,6 @@ export const getSearchedUser = async (req, res) => {
 
   let connection;
   try {
-    connection = await db.getConnection();
-
     // Joins are role-scoped (AND r.role = '...') rather than unconditional —
     // a department_head's department lives in dept_heads_background_info,
     // not student_academic_info, and an employer's company details live in
@@ -171,7 +169,26 @@ export const getSearchedUser = async (req, res) => {
       LIMIT 1;
     `;
 
-    const [rows] = await connection.execute(query, [searchedUserId]);
+    let rows;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        connection = await db.getConnection();
+        [rows] = await connection.execute(query, [searchedUserId]);
+        break;
+      } catch (error) {
+        if (connection) {
+          connection.release();
+          connection = undefined;
+        }
+        // Reacquire a dropped pooled connection once for this read only.
+        if (
+          attempt > 0 ||
+          !["ECONNRESET", "PROTOCOL_CONNECTION_LOST", "EPIPE"].includes(error?.code)
+        ) {
+          throw error;
+        }
+      }
+    }
     const user = rows[0];
 
     if (!user) {

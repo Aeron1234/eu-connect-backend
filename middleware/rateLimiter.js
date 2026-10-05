@@ -1,7 +1,20 @@
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+
+// Protected routes run verifyUser before their limiter. Use that verified
+// identity so people on the same school network do not share a request budget.
+// Login and other unverified requests still fall back to the client IP.
+const authenticatedOrIpKey = (req) => {
+  const userId = req.verifiedUser?.id;
+  if (userId !== undefined && userId !== null && String(userId).trim()) {
+    return `user:${userId}`;
+  }
+
+  return `ip:${ipKeyGenerator(req.ip)}`;
+};
 
 // This one is for general browsing (Announcements, Profiles)
 export const generalLimiter = rateLimit({
+  keyGenerator: authenticatedOrIpKey,
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100,
   message: {
@@ -14,6 +27,7 @@ export const generalLimiter = rateLimit({
 
 // For GET requests that happen frequently via scrolling/pagination
 export const paginationLimiter = rateLimit({
+  keyGenerator: authenticatedOrIpKey,
   windowMs: 5 * 60 * 1000, // Shorter window (5 mins)
   max: 200, // Very high limit
   message: {
@@ -26,6 +40,7 @@ export const paginationLimiter = rateLimit({
 
 // This one is for "Heavy" actions (Creating records, Uploading files)
 export const strictLimiter = rateLimit({
+  keyGenerator: authenticatedOrIpKey,
   windowMs: 60 * 60 * 1000, // 1 hour
   max: 10, // Students shouldn't need to create more than 10 records an hour
   message: {
@@ -36,6 +51,7 @@ export const strictLimiter = rateLimit({
 
 // For any action that modifies the database
 export const mediumLimiter = rateLimit({
+  keyGenerator: authenticatedOrIpKey,
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 20, // Slightly higher than 'Create' to allow for small edits/fixes
   message: {

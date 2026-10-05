@@ -6,6 +6,7 @@ import { verifyRole } from "../middleware/verifyRole.js";
 import {
   generalLimiter,
   mediumLimiter,
+  paginationLimiter,
   strictLimiter,
 } from "../middleware/rateLimiter.js";
 import {
@@ -19,7 +20,7 @@ const activityLogRoutes = express.Router();
 activityLogRoutes.get(
   "/activity-logs/mine",
   verifyUser,
-  generalLimiter,
+  paginationLimiter,
   cacheRoute(30),
   getMyActivityLogs,
 );
@@ -28,7 +29,7 @@ activityLogRoutes.get(
   "/activity-logs",
   verifyUser,
   verifyRole(["admin"]),
-  generalLimiter,
+  paginationLimiter,
   cacheRoute(30),
   getAllActivityLogs,
 );

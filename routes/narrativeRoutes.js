@@ -58,7 +58,7 @@ narrativeRoutes.get(
   "/searched-user/narratives/:searchedUserId",
   verifyUser,
   verifyRole(["employer", "department_head", "admin"]),
-  generalLimiter,
+  paginationLimiter,
   getSearchedStudentNarratives,
 );
 

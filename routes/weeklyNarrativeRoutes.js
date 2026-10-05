@@ -60,7 +60,7 @@ weeklyNarrativeRoutes.get(
   "/searched-user/weekly-narratives/:searchedUserId",
   verifyUser,
   verifyRole(["employer", "department_head", "admin"]),
-  generalLimiter,
+  paginationLimiter,
   cacheRoute(30),
   getSearchedStudentWeeklyNarratives,
 );

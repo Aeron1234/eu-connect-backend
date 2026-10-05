@@ -19,6 +19,7 @@ import {
 import {
   generalLimiter,
   mediumLimiter,
+  paginationLimiter,
   strictLimiter,
 } from "../middleware/rateLimiter.js";
 import { cacheRoute } from "../middleware/cache-middleware.js";
@@ -73,7 +74,7 @@ accountRoutes.get(
   "/accounts",
   verifyUser,
   verifyRole(["admin"]),
-  generalLimiter,
+  paginationLimiter,
   cacheRoute(60),
   getAllAccounts,
 );

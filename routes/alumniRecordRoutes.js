@@ -6,6 +6,7 @@ import { verifyRole } from "../middleware/verifyRole.js";
 import {
   generalLimiter,
   mediumLimiter,
+  paginationLimiter,
   strictLimiter,
 } from "../middleware/rateLimiter.js";
 
@@ -23,7 +24,7 @@ alumniRoutes.get(
   "/alumni-internships",
   verifyUser,
   verifyRole(["student", "department_head", "admin"]),
-  generalLimiter,
+  paginationLimiter,
   cacheRoute(60),
   getAlumniInternships,
 );

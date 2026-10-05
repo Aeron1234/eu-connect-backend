@@ -10,7 +10,7 @@ import {
   markAsAllReadNotification,
   markAsReadNotification,
 } from "../controllers/notificationControllers.js";
-import { generalLimiter } from "../middleware/rateLimiter.js";
+import { generalLimiter, paginationLimiter } from "../middleware/rateLimiter.js";
 
 const notificationRoutes = express.Router();
 
@@ -27,7 +27,7 @@ notificationRoutes.get(
   "/notifications",
   verifyUser,
   verifyRole(["student", "employer", "department_head", "admin"]),
-  generalLimiter,
+  paginationLimiter,
   cacheRoute(15),
   getAllNotifications,
 );

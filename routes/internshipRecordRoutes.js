@@ -117,7 +117,7 @@ internshipRecordRoutes.get(
   "/internship-records/department",
   verifyUser,
   verifyRole(["department_head", "admin"]),
-  generalLimiter,
+  paginationLimiter,
   getDepartmentInternshipRecords,
 );
 

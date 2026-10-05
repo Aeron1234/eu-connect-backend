@@ -6,6 +6,7 @@ import { verifyRole } from "../middleware/verifyRole.js";
 import {
   generalLimiter,
   mediumLimiter,
+  paginationLimiter,
   strictLimiter,
 } from "../middleware/rateLimiter.js";
 import {
@@ -35,7 +36,7 @@ hteReportRoutes.get(
   "/reports/hte-annual/companies",
   verifyUser,
   verifyRole(["department_head", "admin"]),
-  generalLimiter,
+  paginationLimiter,
   getHteCompanyList,
 );
 
@@ -58,7 +59,7 @@ hteReportRoutes.get(
   "/reports/annex-c",
   verifyUser,
   verifyRole(["department_head", "admin"]),
-  generalLimiter,
+  paginationLimiter,
   getProgramAnnualReports,
 );
 
