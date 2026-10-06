@@ -360,13 +360,14 @@ export const getProgramAnnualReports = async (req, res) => {
   let connection;
   try {
     const {
-      academicYear = getCurrentAcademicYear(),
+      academicYear = "",
       search,
+      status = "",
       page = 1,
       limit = 10,
     } = req.query;
 
-    if (!/^\d{4}-\d{4}$/.test(academicYear)) {
+    if (academicYear && !/^\d{4}-\d{4}$/.test(academicYear)) {
       return res.status(400).json({
         error: "academicYear must be formatted as YYYY-YYYY (e.g. 2026-2027).",
       });
@@ -385,39 +386,62 @@ export const getProgramAnnualReports = async (req, res) => {
       });
     }
 
+    if (status && !["draft", "submitted"].includes(status)) {
+      return res.status(400).json({ error: "Invalid report status." });
+    }
+
     if (reportCacheHit(req, res)) return;
 
     const pageNum = Math.max(1, parseInt(page) || 1);
     const pageSize = Math.max(1, Math.min(50, parseInt(limit) || 10));
     const offset = (pageNum - 1) * pageSize;
 
-    const conditions = ["academic_year = ?"];
-    const params = [academicYear];
+    const conditions = [];
+    const params = [];
+
+    if (academicYear) {
+      conditions.push("academic_year = ?");
+      params.push(academicYear);
+    }
+
+    if (status) {
+      conditions.push("status = ?");
+      params.push(status);
+    }
 
     if (search) {
       conditions.push("degree_program LIKE ?");
       params.push(`%${search}%`);
     }
 
-    const whereClause = conditions.join(" AND ");
+    const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+
+    // Annex C years must come from saved reports, independent of the
+    // internship-record years used by Annex D.
+    const [yearRows] = await connection.execute(
+      `SELECT DISTINCT academic_year FROM program_annual_reports ORDER BY academic_year DESC`,
+    );
+    const availableYears = yearRows.map((row) => row.academic_year);
 
     const [reports] = await connection.execute(
       `SELECT id, academic_year, degree_program, status, prepared_by, certified_by, submitted_at, updated_at,
-              (SELECT COUNT(*) FROM program_annual_reports counted WHERE ${whereClause}) AS total_reports
+              (SELECT COUNT(*) FROM program_annual_reports counted ${whereClause}) AS total_reports
        FROM program_annual_reports
-       WHERE ${whereClause}
-       ORDER BY degree_program ASC
+       ${whereClause}
+       ORDER BY academic_year DESC, degree_program ASC
        LIMIT ? OFFSET ?`,
       [...params, ...params, pageSize, offset],
     );
 
     if (reports.length === 0) {
       const [[{ total }]] = await connection.execute(
-        `SELECT COUNT(*) AS total FROM program_annual_reports WHERE ${whereClause}`,
+        `SELECT COUNT(*) AS total FROM program_annual_reports ${whereClause}`,
         params,
       );
       return res.status(200).json({
         academicYear,
+        status,
+        availableYears,
         reports: [],
         pagination: {
           page: pageNum,
@@ -458,6 +482,8 @@ export const getProgramAnnualReports = async (req, res) => {
 
     res.status(200).json({
       academicYear,
+      status,
+      availableYears,
       reports: reportsWithEntries,
       pagination: {
         page: pageNum,
@@ -530,6 +556,7 @@ export const saveProgramAnnualReport = async (req, res) => {
       preparedBy,
       certifiedBy,
       status,
+      reportId: draftReportId,
     } = req.body;
 
     if (!academicYear || !/^\d{4}-\d{4}$/.test(academicYear)) {
@@ -570,12 +597,30 @@ export const saveProgramAnnualReport = async (req, res) => {
 
     await connection.beginTransaction();
 
-    const [existing] = await connection.execute(
-      `SELECT id FROM program_annual_reports 
-       WHERE academic_year = ? AND degree_program = ? FOR UPDATE`,
-      [academicYear, degreeProgram.trim()],
-    );
+    const [existing] = draftReportId
+      ? await connection.execute(
+          `SELECT id, academic_year, degree_program, status FROM program_annual_reports WHERE id = ? FOR UPDATE`,
+          [draftReportId],
+        )
+      : await connection.execute(
+          `SELECT id FROM program_annual_reports WHERE academic_year = ? AND degree_program = ? FOR UPDATE`,
+          [academicYear, degreeProgram.trim()],
+        );
 
+    if (draftReportId && existing.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Draft report not found." });
+    }
+    if (draftReportId && (existing[0].status !== "draft" ||
+      existing[0].academic_year !== academicYear ||
+      existing[0].degree_program !== degreeProgram.trim())) {
+      await connection.rollback();
+      return res.status(409).json({ error: "Only an unchanged draft can be edited from Reports." });
+    }
+    if (!draftReportId && existing.length > 0) {
+      await connection.rollback();
+      return res.status(409).json({ error: "A report already exists for this year and program. Edit its draft in Reports." });
+    }
     const isNewReport = existing.length === 0;
     let reportId;
 

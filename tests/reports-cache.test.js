@@ -26,7 +26,7 @@ beforeEach(() => {
       calls++;
       if(fail==='read' || (fail==='after-commit' && committed)) throw Error('read offline');
       if(!sql.trim().startsWith('SELECT')) return [{affectedRows:1}];
-      if(sql.includes('FOR UPDATE')) return [existing?[{id:'r',degree_program:'Computing',academic_year:'2026-2027'}]:[]];
+      if(sql.includes('FOR UPDATE')) return [existing?[{id:'r',degree_program:'Computing',academic_year:'2026-2027',status:'draft'}]:[]];
       if(sql.includes('AS total_reports')) return [empty?[]:[{id:'r',academic_year:'2026-2027',degree_program:'Computing',status:'draft',total_reports:1}]];
       if(sql.includes('COUNT(') && !sql.includes('AS intern_count')) return [[{total:empty?0:1}]];
       if(empty) return [[]];
@@ -76,14 +76,14 @@ const req={verifiedUser:{id:'admin',role:'admin'},params:{reportId:'r'},body:{ac
 test('annual creation, update, submission and deletion invalidate all summaries after commit',async()=>{
   for(const kind of ['create','update','submit','delete']){
     cache.flushAll();seed();existing=kind!=='create';const res=response();
-    await (kind==='delete'?reports.deleteProgramAnnualReport:reports.saveProgramAnnualReport)({...req,body:{...req.body,status:kind==='submit'?'submitted':'draft',preparedBy:'Registrar'}},res);
+    await (kind==='delete'?reports.deleteProgramAnnualReport:reports.saveProgramAnnualReport)({...req,body:{...req.body,...(existing?{reportId:'r'}:{}),status:kind==='submit'?'submitted':'draft',preparedBy:'Registrar'}},res);
     assert.equal(res.statusCode,200);assert.ok(committed);assert.deepEqual(cache.keys(),['hte','profile']);
   }
 });
 test('annual rollback, validation, missing and denied writes preserve summaries',async()=>{
   const error=console.error;console.error=()=>{};
   try{
-    for(const kind of ['create','update','delete']){cache.flushAll();seed();fail='commit';existing=kind!=='create';const res=response();await(kind==='delete'?reports.deleteProgramAnnualReport:reports.saveProgramAnnualReport)(req,res);assert.equal(res.statusCode,500);assert.equal(cache.keys().length,6);}
+    for(const kind of ['create','update','delete']){cache.flushAll();seed();fail='commit';existing=kind!=='create';const res=response();await(kind==='delete'?reports.deleteProgramAnnualReport:reports.saveProgramAnnualReport)({...req,body:{...req.body,...(kind==='update'?{reportId:'r'}:{})}},res);assert.equal(res.statusCode,500);assert.equal(cache.keys().length,6);}
     fail='';existing=false;
     for(const [handler,input,status] of [[reports.deleteProgramAnnualReport,req,404],[reports.saveProgramAnnualReport,{...req,body:{}},400],[reports.saveProgramAnnualReport,{...req,verifiedUser:{id:'head',role:'department_head'}},403]]){allowed=false;const res=response();await handler(input,res);assert.equal(res.statusCode,status);assert.ok(cache.has('annual'));assert.ok(cache.has('detail-one'));}
   }finally{console.error=error;}

@@ -35,6 +35,8 @@ test('populated history page carries the original regular count and hides its SQ
   assert.deepEqual(calls[1].params, [...filters, ...filters, 10, 10]);
   assert.match(calls[1].sql, /\(\s*SELECT COUNT\(\*\) AS total[\s\S]*\) AS total_regular/);
   assert.match(calls[1].sql, /authorDept\.department_id = \?/);
+  assert.match(calls[0].sql, /DATE_FORMAT\(a\.event_date, '%Y-%m-%d'\) AS event_date/);
+  assert.match(calls[1].sql, /DATE_FORMAT\(a\.event_date, '%Y-%m-%d'\) AS event_date/);
   assert.deepEqual(res.body, { pinned, regular: [{ id: 2, title: 'Regular' }],
     totalPages: 2, totalRecords: 12, currentPage: 2, currentRegularCount: 1 });
 });

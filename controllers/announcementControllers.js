@@ -3,6 +3,12 @@ import { invalidateNotificationsCache } from "../config/notificationsCache.js";
 import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
 import { db } from "../config/db.js";
 
+function isValidEventDate(value) {
+  if (!/^[1-9]\d{3}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
 export const getAnnouncementCategories = async (req, res) => {
   try {
     const [rows] = await db.execute(`SELECT * FROM announcement_categories`);
@@ -69,7 +75,9 @@ export const getAllAnnouncements = async (req, res) => {
     const departmentJoin = `LEFT JOIN dept_heads_background_info authorDept ON authorDept.user_id = a.author_id`;
 
     const pinnedQuery = `
-      SELECT a.id, a.author_id, a.title, a.content, a.is_pinned, a.created_at, a.updated_at, 
+      SELECT a.id, a.author_id, a.title, a.content,
+             DATE_FORMAT(a.event_date, '%Y-%m-%d') AS event_date,
+             a.is_pinned, a.created_at, a.updated_at,
              r.role, up.first_name, up.last_name,
              ac.id AS category_id, ac.name AS category, ac.color, ac.text_color
       FROM announcements AS a
@@ -91,7 +99,9 @@ export const getAllAnnouncements = async (req, res) => {
     `;
 
     const regularQuery = `
-      SELECT a.id, a.author_id, a.title, a.content, a.is_pinned, a.created_at, a.updated_at, 
+      SELECT a.id, a.author_id, a.title, a.content,
+             DATE_FORMAT(a.event_date, '%Y-%m-%d') AS event_date,
+             a.is_pinned, a.created_at, a.updated_at,
              r.role, up.first_name, up.last_name,
              ac.id AS category_id, ac.name AS category, ac.color, ac.text_color,
              (${countQuery}) AS total_regular
@@ -150,11 +160,18 @@ export const createAnnouncement = async (req, res) => {
 
     const { title, content } = data;
     const category_id = parseInt(data.category_id);
+    const eventDate = typeof data.event_date === "string"
+      ? data.event_date.trim() || null
+      : data.event_date == null ? null : false;
 
     if (!category_id || !title || !content) {
       return res.status(400).json({
         error: "All fields are required.",
       });
+    }
+
+    if (eventDate === false || (eventDate && !isValidEventDate(eventDate))) {
+      return res.status(400).json({ error: "Enter a valid event date (YYYY-MM-DD)." });
     }
 
     await connection.beginTransaction();
@@ -193,10 +210,10 @@ export const createAnnouncement = async (req, res) => {
 
     const [result] = await connection.execute(
       `
-        INSERT INTO announcements (author_id, category_id, title, content)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO announcements (author_id, category_id, title, content, event_date)
+        VALUES (?, ?, ?, ?, ?)
         `,
-      [userId, category_id, title, content],
+      [userId, category_id, title, content, eventDate],
     );
 
     if (result.affectedRows === 0) {
@@ -340,11 +357,19 @@ export const updateAnnouncement = async (req, res) => {
     const { announcementId } = req.params;
     const { id: userId, role } = req.verifiedUser;
 
-    const { category_id, title, content } = req.body;
+    const { category_id, title, content, event_date } = req.body;
     const finalCategoryId = category_id ? Number(category_id) : null;
+    const hasEventDate = Object.hasOwn(req.body, "event_date");
+    const eventDate = typeof event_date === "string"
+      ? event_date.trim() || null
+      : event_date == null ? null : false;
 
     if (!announcementId) {
       return res.status(400).json({ error: "Announcement ID is required" });
+    }
+
+    if (eventDate === false || (eventDate && !isValidEventDate(eventDate))) {
+      return res.status(400).json({ error: "Enter a valid event date (YYYY-MM-DD)." });
     }
 
     await connection.beginTransaction();
@@ -408,9 +433,10 @@ export const updateAnnouncement = async (req, res) => {
          category_id = COALESCE(?, category_id), 
          title = COALESCE(?, title), 
          content = COALESCE(?, content), 
+         event_date = IF(? = 1, ?, event_date),
          updated_at = CURRENT_TIMESTAMP
        WHERE id = ? AND author_id = ?`,
-      [finalCategoryId, title || null, content || null, announcementId, userId],
+      [finalCategoryId, title || null, content || null, hasEventDate ? 1 : 0, eventDate, announcementId, userId],
     );
 
     if (result.affectedRows === 0) {
@@ -494,6 +520,7 @@ export const updateAnnouncement = async (req, res) => {
       if (category_id !== undefined) changedFields.push("category_id");
       if (title !== undefined) changedFields.push("title");
       if (content !== undefined) changedFields.push("content");
+      if (hasEventDate) changedFields.push("event_date");
 
       await connection.execute(
         `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,

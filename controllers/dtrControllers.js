@@ -6,6 +6,23 @@ import { db } from "../config/db.js";
 import { isWithinRadius } from "../config/helpers.js";
 import { getMaxShiftHours } from "../config/shiftLimits.js";
 
+function parseDtrCoordinates(lat, lon) {
+  if (lat == null || lon == null || String(lat).trim() === "" || String(lon).trim() === "") {
+    return null;
+  }
+  if (!["number", "string"].includes(typeof lat) ||
+      !["number", "string"].includes(typeof lon)) {
+    return null;
+  }
+  const latitude = Number(lat);
+  const longitude = Number(lon);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude) ||
+      Math.abs(latitude) > 90 || Math.abs(longitude) > 180) {
+    return null;
+  }
+  return { latitude, longitude };
+}
+
 export const getTodayDTR = async (req, res) => {
   let connection;
   try {
@@ -129,17 +146,18 @@ export const getLatestDtrStatus = async (req, res) => {
 export const clockIn = async (req, res) => {
   let connection;
   try {
-    connection = await db.getConnection();
-
     const { id: userId } = req.verifiedUser;
     const { lat_in, lon_in } = req.body;
+    const requestedInternshipId = req.query?.internshipId;
+    const location = parseDtrCoordinates(lat_in, lon_in);
 
-    if (!lat_in || !lon_in) {
+    if (!location) {
       return res
         .status(400)
-        .json({ error: "Location data is required to clock in." });
+        .json({ error: "A valid current location is required to clock in. Please enable location access and try again." });
     }
 
+    connection = await db.getConnection();
     await connection.beginTransaction();
 
     // Check for open time records
@@ -169,9 +187,10 @@ export const clockIn = async (req, res) => {
          dl.radius_meters
        FROM internship_records ir
        LEFT JOIN dtr_locations dl ON ir.id = dl.internship_id
-       WHERE ir.user_id = ? AND ir.status = 'ongoing' 
+       WHERE ir.user_id = ? AND ir.status = 'ongoing' AND ir.deleted_at IS NULL
+         ${requestedInternshipId ? "AND ir.id = ?" : ""}
        LIMIT 1`,
-      [userId],
+      requestedInternshipId ? [userId, requestedInternshipId] : [userId],
     );
 
     if (internships.length === 0) {
@@ -186,10 +205,18 @@ export const clockIn = async (req, res) => {
     const targetLon = record.dtr_lon ?? record.company_lon;
     const allowedRadius = record.radius_meters ?? 150;
 
+    if (!parseDtrCoordinates(targetLat, targetLon) ||
+        !Number.isFinite(Number(allowedRadius)) || Number(allowedRadius) <= 0) {
+      await connection.rollback();
+      return res.status(409).json({
+        error: "No valid DTR location is configured for this internship. Contact your coordinator.",
+      });
+    }
+
     // 3. Geofence check via isWithinRadius
     const { isWithin, distanceMeters } = isWithinRadius(
-      lat_in,
-      lon_in,
+      location.latitude,
+      location.longitude,
       targetLat,
       targetLon,
       allowedRadius,
@@ -198,7 +225,7 @@ export const clockIn = async (req, res) => {
     // 4. THE REJECTION GUARD: If outside allowed radius, stop execution
     if (!isWithin) {
       await connection.rollback();
-      return res.status(403).json({
+      return res.status(422).json({
         error: `Clock-in rejected. You are ${distanceMeters}m away from the designated area (Limit: ${allowedRadius}m).`,
         success: false,
       });
@@ -209,7 +236,7 @@ export const clockIn = async (req, res) => {
       `INSERT INTO daily_time_records 
        (internship_id, user_id, clock_in, lat_in, lon_in, status) 
        VALUES (?, ?, NOW(), ?, ?, 'present')`,
-      [record.internship_id, userId, lat_in, lon_in],
+      [record.internship_id, userId, location.latitude, location.longitude],
     );
 
     if (result.affectedRows === 0) {
@@ -327,16 +354,17 @@ export const clockOut = async (req, res) => {
 
   try {
     const maxShiftHours = getMaxShiftHours();
-    connection = await db.getConnection();
     const { id: userId } = req.verifiedUser;
     const { lat_out, lon_out } = req.body;
+    const location = parseDtrCoordinates(lat_out, lon_out);
 
-    if (!lat_out || !lon_out) {
+    if (!location) {
       return res.status(400).json({
-        error: "Location data is required to clock out.",
+        error: "A valid current location is required to clock out. Please enable location access and try again.",
       });
     }
 
+    connection = await db.getConnection();
     await connection.beginTransaction();
 
     // 1. Find active clock-in, company coordinates, AND optional dtr_locations coordinates
@@ -382,18 +410,19 @@ export const clockOut = async (req, res) => {
     const targetLon = record.dtr_lon ?? record.company_lon;
     const allowedRadius = record.radius_meters ?? 150;
 
-    if (targetLat == null || targetLon == null) {
+    if (!parseDtrCoordinates(targetLat, targetLon) ||
+        !Number.isFinite(Number(allowedRadius)) || Number(allowedRadius) <= 0) {
       await connection.rollback();
-      return res.status(500).json({
+      return res.status(409).json({
         error:
-          "No location configured for this internship. Contact your coordinator.",
+          "No valid DTR location is configured for this internship. Contact your coordinator.",
       });
     }
 
     // 3. Geofence Check for Clock Out using isWithinRadius
     const { isWithin, distanceMeters } = isWithinRadius(
-      lat_out,
-      lon_out,
+      location.latitude,
+      location.longitude,
       targetLat,
       targetLon,
       allowedRadius,
@@ -401,7 +430,7 @@ export const clockOut = async (req, res) => {
 
     if (!isWithin) {
       await connection.rollback();
-      return res.status(403).json({
+      return res.status(422).json({
         error: `Clock-out rejected. You are ${distanceMeters}m away from the designated area (Limit: ${allowedRadius}m).`,
         success: false,
       });
@@ -436,7 +465,7 @@ export const clockOut = async (req, res) => {
            flagged = ?,
            flag_reason = ?
        WHERE id = ?`,
-      [lat_out, lon_out, finalHours, flagged, flagReason, record.dtr_id],
+      [location.latitude, location.longitude, finalHours, flagged, flagReason, record.dtr_id],
     );
 
     // 7. Update Internship Accumulated Hours (use capped hours, not raw)

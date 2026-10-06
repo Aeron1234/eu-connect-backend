@@ -61,6 +61,7 @@ export const getStudentDashboardData = async (req, res) => {
         `SELECT * FROM internship_records
          WHERE user_id = ? AND deleted_at IS NULL
            AND (status = 'ongoing' OR status = 'pending')
+         ORDER BY (status = 'ongoing') DESC, created_at DESC
          LIMIT 1`,
         [userId],
       );

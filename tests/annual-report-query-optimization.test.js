@@ -1,7 +1,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { db } from "../config/db.js";
-import { getProgramAnnualReports, getProgramAnnualReportById } from "../controllers/hteReportControllers.js";
+import { getProgramAnnualReports, getProgramAnnualReportById, saveProgramAnnualReport } from "../controllers/hteReportControllers.js";
 
 const original = db.getConnection;
 after(async () => { db.getConnection = original; await db.end(); });
@@ -38,15 +38,19 @@ test("populated annual pages carry totals without exposing the internal count", 
   ];
   const { res, calls, releases } = await invoke(getProgramAnnualReports,
     { query: { academicYear: "2026-2027", search: "i", page: "2", limit: "2" } },
-    (sql) => sql.includes("FROM program_annual_report_entries") ? entries : page);
+    (sql) => sql.includes("SELECT DISTINCT academic_year")
+      ? [{ academic_year: "2026-2027" }]
+      : sql.includes("FROM program_annual_report_entries") ? entries : page);
   assert.equal(res.statusCode, 200);
-  assert.equal(calls.length, 2);
-  assert.deepEqual(calls[0].params, ["2026-2027", "%i%", "2026-2027", "%i%", 2, 2]);
-  assert.match(calls[0].sql, /AS total_reports/);
-  assert.match(calls[0].sql, /ORDER BY degree_program ASC/);
-  assert.deepEqual(calls[1].params, ["r1", "r2"]);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls[1].params, ["2026-2027", "%i%", "2026-2027", "%i%", 2, 2]);
+  assert.match(calls[1].sql, /AS total_reports/);
+  assert.match(calls[1].sql, /ORDER BY academic_year DESC, degree_program ASC/);
+  assert.deepEqual(calls[2].params, ["r1", "r2"]);
   assert.deepEqual(res.body, {
     academicYear: "2026-2027",
+    status: "",
+    availableYears: ["2026-2027"],
     reports: [
       { id: "r1", academic_year: "2026-2027", degree_program: "Computing", status: "draft",
         entries: [{ issue: "A", solution: "S1", recommendation: "R1" }] },
@@ -65,12 +69,38 @@ test("empty and out-of-range pages retain a count without querying empty IDs", a
       (sql) => sql.includes("SELECT COUNT(*) AS total") ? [{ total }] : []);
     assert.equal(res.statusCode, 200);
     assert.deepEqual(res.body, {
-      academicYear: "2026-2027", reports: [],
+      academicYear: "2026-2027", status: "", availableYears: [], reports: [],
       pagination: { page: 9, limit: 2, total, totalPages },
     });
-    assert.equal(calls.length, 2);
+    assert.equal(calls.length, 3);
     assert.doesNotMatch(calls.map((call) => call.sql).join(" "), /IN \(\)/);
   }
+});
+
+test("status filters keep submitted entry rows and offer only saved report years", async () => {
+  const entry = { report_id: "r1", issue: "Concern", solution: "Resolved", recommendation: "Follow up" };
+  const { res, calls } = await invoke(getProgramAnnualReports,
+    { query: { academicYear: "2025-2026", status: "submitted" } },
+    (sql) => sql.includes("SELECT DISTINCT academic_year")
+      ? [{ academic_year: "2025-2026" }]
+      : sql.includes("FROM program_annual_report_entries") ? [entry]
+        : [{ id: "r1", academic_year: "2025-2026", degree_program: "Nursing", status: "submitted", total_reports: 1 }]);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(calls[1].params, ["2025-2026", "submitted", "2025-2026", "submitted", 10, 0]);
+  assert.deepEqual(res.body.availableYears, ["2025-2026"]);
+  assert.deepEqual(res.body.reports[0].entries, [{ issue: "Concern", solution: "Resolved", recommendation: "Follow up" }]);
+});
+
+test("unfiltered Annex C lists saved reports across academic years", async () => {
+  const { res, calls } = await invoke(getProgramAnnualReports, {}, (sql) =>
+    sql.includes("SELECT DISTINCT academic_year")
+      ? [{ academic_year: "2025-2026" }, { academic_year: "2024-2025" }]
+      : sql.includes("FROM program_annual_report_entries") ? []
+        : [{ id: "r1", academic_year: "2024-2025", degree_program: "Nursing", total_reports: 1 }]);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(calls[1].params, [10, 0]);
+  assert.deepEqual(res.body.availableYears, ["2025-2026", "2024-2025"]);
+  assert.equal(res.body.reports[0].academic_year, "2024-2025");
 });
 
 test("annual details retain the parent and ordered entries lookup", async () => {
@@ -84,4 +114,49 @@ test("annual details retain the parent and ordered entries lookup", async () => 
   assert.equal(calls.length, 2);
   assert.deepEqual(calls.map((call) => call.params), [["r1"], ["r1"]]);
   assert.match(calls[1].sql, /ORDER BY sort_order ASC/);
+});
+
+test("draft edits target their report ID and cannot alter a submitted report", async () => {
+  let state = "draft";
+  let updated = false;
+  db.getConnection = async () => ({
+    release() {}, async beginTransaction() {}, async rollback() {}, async commit() {},
+    async query() { return [{ affectedRows: 1 }]; },
+    async execute(sql) {
+      if (sql.includes("FOR UPDATE")) return [[{
+        id: "r1", academic_year: "2026-2027", degree_program: "Computing", status: state,
+      }]];
+      if (sql.includes("UPDATE program_annual_reports")) updated = true;
+      if (sql.includes("SELECT * FROM program_annual_reports")) return [[{ id: "r1", status: "draft" }]];
+      if (sql.includes("SELECT issue, solution, recommendation")) return [[{
+        issue: "Concern", solution: "Fix", recommendation: "Follow up",
+      }]];
+      return [{ affectedRows: 1 }];
+    },
+  });
+  const request = { verifiedUser: { id: "admin", role: "admin" }, body: {
+    reportId: "r1", academicYear: "2026-2027", degreeProgram: "Computing",
+    entries: [{ issue: "Concern", solution: "Fix", recommendation: "Follow up" }],
+    status: "draft",
+  } };
+  const saved = response();
+  await saveProgramAnnualReport(request, saved);
+  assert.equal(saved.statusCode, 200);
+  assert.equal(updated, true);
+  assert.deepEqual(saved.body.report.entries[0], {
+    issue: "Concern", solution: "Fix", recommendation: "Follow up",
+  });
+
+  state = "submitted";
+  updated = false;
+  const rejected = response();
+  await saveProgramAnnualReport(request, rejected);
+  assert.equal(rejected.statusCode, 409);
+  assert.equal(updated, false);
+
+  state = "draft";
+  const duplicate = response();
+  await saveProgramAnnualReport({ ...request, body: { ...request.body, reportId: undefined } }, duplicate);
+  assert.equal(duplicate.statusCode, 409);
+  assert.equal(updated, false);
 });

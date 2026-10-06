@@ -17,10 +17,10 @@ const { signAccessToken } = await import("../config/jwt.js");
 const originalExecute = db.execute;
 const originalGetConnection = db.getConnection;
 const base = "/eu-connect/api/announcements/";
-let calls, connection, mode, pinned, categoryName, committed, emitted, fixtures, activityLog;
+let calls, connection, mode, pinned, categoryName, committed, emitted, fixtures, activityLog, announcementWrite;
 beforeEach(() => {
   cache.flushAll(); calls = 0; mode = "success"; pinned = false;
-  categoryName = "General"; committed = false; emitted = 0; activityLog = null;
+  categoryName = "General"; committed = false; emitted = 0; activityLog = null; announcementWrite = null;
   fixtures = [
     { id: 1, category: "General", department: null, is_pinned: true, title: "General" },
     { id: 2, category: "Department", department: 1, is_pinned: false, title: "Dept one" },
@@ -59,6 +59,9 @@ beforeEach(() => {
     async query() { return [{ affectedRows: 1 }]; },
     async execute(sql, params) {
       if (sql.includes("INSERT INTO activity_logs")) activityLog = params;
+      if (sql.includes("INSERT INTO announcements") || sql.includes("UPDATE announcements")) {
+        announcementWrite = { sql, params };
+      }
       if (sql.includes("FROM user_profiles")) return [[{ first_name: "Author", last_name: "Name" }]];
       if (sql.includes("SELECT name FROM announcement_categories")) return [mode === "invalid-category" ? [] : [{ name: categoryName }]];
       if (sql.includes("FROM announcements a") && sql.includes("FOR UPDATE")) return [mode === "forbidden" ? [] : [{ category_id: 1, category_name: "General", title: "Old" }]];
@@ -151,6 +154,34 @@ test("general-to-department edit evicts previously visible content before socket
   seed(); categoryName = "Department"; const res = response();
   await announcements.updateAnnouncement(request({ category_id: 2 }), res);
   assert.equal(res.statusCode, 200); assert.equal(cache.has("feed-a"), false); assert.equal(emitted, 1);
+});
+
+test("event date is saved, can be cleared, and invalid calendar dates are rejected", async () => {
+  for (const [handler, value, expected] of [
+    [announcements.createAnnouncement, "2026-11-12", "2026-11-12"],
+    [announcements.updateAnnouncement, "2026-11-12", "2026-11-12"],
+    [announcements.updateAnnouncement, "", null],
+  ]) {
+    seed(); announcementWrite = null; const res = response();
+    await handler(request({ event_date: value }), res);
+    assert.ok(res.statusCode < 300);
+    assert.ok(announcementWrite.sql.includes("event_date"));
+    assert.equal(handler === announcements.createAnnouncement
+      ? announcementWrite.params.at(-1)
+      : announcementWrite.params.at(-3), expected);
+  }
+
+  seed(); announcementWrite = null; const unchanged = response();
+  await announcements.updateAnnouncement(request(), unchanged);
+  assert.equal(unchanged.statusCode, 200);
+  assert.equal(announcementWrite.params.at(-4), 0);
+
+  for (const handler of [announcements.createAnnouncement, announcements.updateAnnouncement]) {
+    announcementWrite = null; const invalid = response();
+    await handler(request({ event_date: "2026-02-30" }), invalid);
+    assert.equal(invalid.statusCode, 400);
+    assert.equal(announcementWrite, null);
+  }
 });
 
 test("failed commits preserve feeds and do not emit notification events", async () => {
