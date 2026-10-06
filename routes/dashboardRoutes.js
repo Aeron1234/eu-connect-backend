@@ -14,6 +14,7 @@ import {
   getDepartmentHeadDashboardData,
   getDepartmentStudentHoursPage,
   getEmployerDashboardData,
+  getEmployerInternsPage,
   getPostedJobs,
   getStudentDashboardData,
   getStudentDashboardStats,
@@ -49,7 +50,7 @@ dashboardRoutes.get(
   "/employer-dashboard-data",
   verifyUser,
   verifyRole(["employer"]),
-  generalLimiter,
+  paginationLimiter,
   cacheRoute(15),
   getEmployerDashboardData,
 );
@@ -61,6 +62,15 @@ dashboardRoutes.get(
   paginationLimiter,
   cacheRoute(30),
   getPostedJobs,
+);
+
+dashboardRoutes.get(
+  "/employer-dashboard/interns",
+  verifyUser,
+  verifyRole(["employer"]),
+  paginationLimiter,
+  cacheRoute(15),
+  getEmployerInternsPage,
 );
 
 ///////////////////

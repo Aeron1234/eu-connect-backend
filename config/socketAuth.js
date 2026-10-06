@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
+import { createLiveDtrLocationService } from "./liveDtrLocation.js";
 
 // Derive a separate signing key so a browser-visible socket ticket can never
 // be used as an API access token, even though both use the same deployment secret.
@@ -61,9 +62,11 @@ export function authenticateNotificationSocket(socket, next) {
 }
 
 export function registerNotificationSockets(io) {
+  const attachLiveDtrLocation = createLiveDtrLocationService();
   io.use(authenticateNotificationSocket);
   io.on("connection", (socket) => {
     socket.join(`user-${socket.data.userId}`);
+    attachLiveDtrLocation(io, socket);
 
     // An already-connected socket must not outlive the access session that
     // authorized its ticket. The client obtains a fresh ticket on reconnect.

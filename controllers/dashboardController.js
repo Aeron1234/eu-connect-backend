@@ -232,49 +232,75 @@ async function loadEmployerDashboardStats(connection, employerId) {
     };
 }
 
+const EMPLOYER_INTERNS_PAGE_SIZE = 5;
+
+function parseDashboardPage(value) {
+  const raw = value ?? "1";
+  if (typeof raw !== "string" || !/^[1-9]\d*$/.test(raw)) return null;
+  const page = Number(raw);
+  return Number.isSafeInteger(page) && page <= 1000000 ? page : null;
+}
+
+async function loadEmployerInternsPage(connection, employerId, { page = 1, status = "all" } = {}) {
+  const statusFilter = status === "all" ? "" : " AND ir.status = ?";
+  const params = status === "all" ? [employerId] : [employerId, status];
+  const [[countRow]] = await connection.execute(
+    `SELECT COUNT(*) AS total FROM internship_records ir
+     WHERE ir.employer_id = ?${statusFilter}`,
+    params,
+  );
+  const total = Number(countRow?.total) || 0;
+  const totalPages = Math.max(1, Math.ceil(total / EMPLOYER_INTERNS_PAGE_SIZE));
+  let interns = [];
+  if (total && page <= totalPages) {
+    const [rows] = await connection.execute(
+      `SELECT ir.id AS internship_id, ir.user_id AS student_id,
+              ir.status, ir.internship_position, ir.date_started, ir.date_ended,
+              ir.total_hours, ir.accumulated_hours, u.email,
+              up.first_name, up.last_name, c.course_name, c.short_name
+       FROM internship_records ir
+       JOIN users u ON u.id = ir.user_id
+       LEFT JOIN user_profiles up ON up.user_id = ir.user_id
+       LEFT JOIN student_academic_info sai ON sai.id = (
+         SELECT MAX(sai_latest.id)
+         FROM student_academic_info sai_latest
+         WHERE sai_latest.user_id = ir.user_id
+       )
+       LEFT JOIN courses c ON c.id = sai.course_id
+       WHERE ir.employer_id = ?${statusFilter}
+       ORDER BY ir.date_started DESC, ir.id DESC
+       LIMIT ? OFFSET ?`,
+      [...params, EMPLOYER_INTERNS_PAGE_SIZE, (page - 1) * EMPLOYER_INTERNS_PAGE_SIZE],
+    );
+    interns = rows;
+  }
+  return { interns, page, pageSize: EMPLOYER_INTERNS_PAGE_SIZE, total, totalPages };
+}
+
 export const getEmployerDashboardData = async (req, res) => {
+  const jobPage = parseDashboardPage(req.query?.jobPage);
+  if (jobPage === null) {
+    return res.status(400).json({ error: "Invalid jobs page." });
+  }
   let connection;
   try {
     connection = await db.getConnection();
     const { id: employerId } = req.verifiedUser;
     const stats = await loadEmployerDashboardStats(connection, employerId);
 
-    // Interns list is the only remaining piece — wrapped defensively so a
-    // bad join here doesn't 500 the whole dashboard.
-    let interns = [];
+    let internsPage = {
+      interns: [], page: 1, pageSize: EMPLOYER_INTERNS_PAGE_SIZE,
+      total: 0, totalPages: 1,
+    };
     try {
-      const [internRows] = await connection.execute(
-        `SELECT
-           ir.id AS internship_id,
-           ir.user_id AS student_id,
-           ir.status,
-           ir.internship_position,
-           ir.date_started,
-           ir.date_ended,
-           ir.total_hours,
-           ir.accumulated_hours,
-           u.email,
-           up.first_name,
-           up.last_name,
-           c.course_name,
-           c.short_name
-         FROM internship_records ir
-         JOIN users u ON u.id = ir.user_id
-         LEFT JOIN user_profiles up ON up.user_id = ir.user_id
-         LEFT JOIN student_academic_info sai ON sai.user_id = ir.user_id
-         LEFT JOIN courses c ON c.id = sai.course_id
-         WHERE ir.employer_id = ?
-         ORDER BY ir.date_started DESC`,
-        [employerId],
-      );
-      interns = internRows;
+      internsPage = await loadEmployerInternsPage(connection, employerId);
     } catch (err) {
       res.locals.skipCache = true;
       console.error("getEmployerDashboardData: interns query failed:", err);
     }
 
-    // Posted jobs — first page only, matches getPostedJobs' original
-    // defaults; pagination for subsequent pages stays on its own endpoint.
+    // Include the requested jobs page so dashboard navigation does not fetch
+    // and discard page 1 before requesting a later page.
     let postedJobs = [];
     let postedJobsTotalPages = 1;
     try {
@@ -285,12 +311,20 @@ export const getEmployerDashboardData = async (req, res) => {
                  WHERE employer_id = ? AND deleted_at IS NULL) AS total_postings
          FROM internship_postings
          WHERE employer_id = ? AND deleted_at IS NULL
-         ORDER BY created_at DESC
-         LIMIT ?`,
-        [employerId, employerId, limit],
+         ORDER BY created_at DESC, id DESC
+         LIMIT ? OFFSET ?`,
+        [employerId, employerId, limit, (jobPage - 1) * limit],
       );
-      // This is always the first page, so no rows means the total is zero.
-      postedJobsTotalPages = Math.ceil((jobRows[0]?.total_postings || 0) / limit);
+      let totalPostings = Number(jobRows[0]?.total_postings) || 0;
+      if (jobRows.length === 0 && jobPage > 1) {
+        const [[countRow]] = await connection.execute(
+          `SELECT COUNT(*) AS total FROM internship_postings
+           WHERE employer_id = ? AND deleted_at IS NULL`,
+          [employerId],
+        );
+        totalPostings = Number(countRow?.total) || 0;
+      }
+      postedJobsTotalPages = Math.ceil(totalPostings / limit);
       postedJobs = jobRows.map(({ total_postings, ...job }) => job);
     } catch (err) {
       res.locals.skipCache = true;
@@ -300,11 +334,17 @@ export const getEmployerDashboardData = async (req, res) => {
     return res.status(200).json({
       success: true,
       stats,
-      interns,
+      interns: internsPage.interns,
+      internsPagination: {
+        page: internsPage.page,
+        pageSize: internsPage.pageSize,
+        total: internsPage.total,
+        totalPages: internsPage.totalPages,
+      },
       postedJobs: {
         jobs: postedJobs,
         totalPages: postedJobsTotalPages,
-        currentPage: 1,
+        currentPage: jobPage,
       },
     });
   } catch (error) {
@@ -318,7 +358,27 @@ export const getEmployerDashboardData = async (req, res) => {
   }
 };
 
-// Keep separate — paginated, refetched on "page 2, 3..." after initial load
+export const getEmployerInternsPage = async (req, res) => {
+  const page = parseDashboardPage(req.query?.page);
+  const status = req.query?.status ?? "all";
+  if (page === null || !["all", "ongoing", "finished"].includes(status)) {
+    return res.status(400).json({ error: "Invalid intern filters." });
+  }
+
+  let connection;
+  try {
+    connection = await db.getConnection();
+    const data = await loadEmployerInternsPage(connection, req.verifiedUser.id, { page, status });
+    return res.status(200).json({ success: true, ...data });
+  } catch (error) {
+    console.error("Failed to retrieve employer interns page:", error);
+    return res.status(500).json({ success: false, error: "Intern lookup failed." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+// Retained for clients that request only a jobs page.
 export const getPostedJobs = async (req, res) => {
   let connection;
   try {

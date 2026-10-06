@@ -25,6 +25,7 @@ const prefix = "/eu-connect/api/";
 const targets = [
   ["dashboard-stats", "student"],
   ["employer-dashboard-data", "employer"],
+  ["employer-dashboard/interns", "employer"],
   ["department-head-dashboard-data", "department_head"],
   ["department-head-dashboard/hours-tracker", "department_head"],
   ["average-shift-hours", "department_head"],
@@ -64,14 +65,14 @@ function seed() {
 }
 function response() { return { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } }; }
 
-test("all six summaries and tracker pages cache successful responses for fifteen seconds", async (t) => {
+test("all dashboard summaries and tracker pages cache successful responses for fifteen seconds", async (t) => {
   const get = await client(t);
   for (const [path, role] of targets) {
     const first = await get(path, role); assert.equal(first.status, 200, path);
     const body = await first.json(); const before = calls;
     assert.deepEqual(await (await get(path, role)).json(), body); assert.equal(calls, before, path);
   }
-  assert.equal(cache.keys().length, 6);
+  assert.equal(cache.keys().length, targets.length);
   for (const key of cache.keys()) { const ttl = cache.getTtl(key) - Date.now(); assert.ok(ttl > 10000 && ttl <= 15000); }
 });
 
@@ -129,13 +130,16 @@ test("shared writes invalidate summaries while personal counter changes target o
   }
 });
 
-test("dashboard invalidation clears only the requested user's tracker pages", () => {
+test("dashboard invalidation clears only the requested user's paginated dashboards", () => {
   const path = prefix + "department-head-dashboard/hours-tracker";
+  const employerPath = prefix + "employer-dashboard/interns";
   cache.set("alice-page-1", { userId: "alice", path, body: {} });
   cache.set("alice-page-2", { userId: "alice", path, body: {} });
+  cache.set("alice-employer-page", { userId: "alice", path: employerPath, body: {} });
   cache.set("bob-page", { userId: "bob", path, body: {} });
+  cache.set("bob-employer-page", { userId: "bob", path: employerPath, body: {} });
   invalidateDashboardCache("alice");
-  assert.deepEqual(cache.keys(), ["bob-page"]);
+  assert.deepEqual(cache.keys().sort(), ["bob-employer-page", "bob-page"]);
 });
 
 test("attendance deletion invalidates only after successful commit", async () => {

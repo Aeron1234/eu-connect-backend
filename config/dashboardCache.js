@@ -1,7 +1,7 @@
 import { invalidateRouteCache } from "./cache.js";
 
 const routes = [
-  "/dashboard-stats", "/employer-dashboard-data",
+  "/dashboard-stats", "/employer-dashboard-data", "/employer-dashboard/interns",
   "/department-head-dashboard-data", "/department-head-dashboard/hours-tracker",
   "/average-shift-hours",
   "/admin-dashboard-data",

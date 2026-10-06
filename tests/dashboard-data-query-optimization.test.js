@@ -4,6 +4,7 @@ import { db } from "../config/db.js";
 import {
   getStudentDashboardData,
   getEmployerDashboardData,
+  getEmployerInternsPage,
   getDepartmentHeadDashboardData,
   getDepartmentStudentHoursPage,
   getAdminDashboardData,
@@ -123,30 +124,35 @@ test("invalid hours page filters never acquire a database connection", async () 
   }
 });
 
-test("employer dashboard keeps every joined intern and strips the internal posting total", async () => {
-  const interns = [{ internship_id: "i-1", course_name: "IT" }, { internship_id: "i-1", course_name: "CS" }];
+test("employer dashboard bounds interns to the first page and strips the internal posting total", async () => {
+  const interns = [{ internship_id: "i-1", course_name: "IT" }, { internship_id: "i-2", course_name: "CS" }];
   const jobs = [{ id: "p-1", position: "Developer", total_postings: 7 },
     { id: "p-2", position: "Designer", total_postings: 7 }];
   const { res, calls } = await invoke(getEmployerDashboardData, { id: "e-1" }, (sql) =>
     sql.includes("AS intern_counts") ? [{ posting_count: 2, announcement_count: 1, ongoing_count: 1, finished_count: 1, document_count: 3 }]
+      : sql.includes("COUNT(*) AS total FROM internship_records ir") ? [{ total: 7 }]
       : sql.includes("FROM internship_records ir") ? interns : jobs);
   assert.equal(res.statusCode, 200);
   assert.deepEqual(res.body, { success: true, stats: {
     internshipPosts: 2, unreadAnnouncements: 1,
     internsHandled: { current: 1, past: 1 }, documentsUploaded: 3,
-  }, interns, postedJobs: {
+  }, interns, internsPagination: { page: 1, pageSize: 5, total: 7, totalPages: 2 }, postedJobs: {
     jobs: [{ id: "p-1", position: "Developer" }, { id: "p-2", position: "Designer" }],
     totalPages: 2, currentPage: 1,
   } });
-  assert.equal(calls.length, 3);
-  assert.deepEqual(calls[2].params, ["e-1", "e-1", 5]);
-  assert.match(calls[2].sql, /ORDER BY created_at DESC\s+LIMIT \?/);
-  assert.match(calls[2].sql, /SELECT COUNT\(\*\) FROM internship_postings/);
+  assert.equal(calls.length, 4);
+  assert.deepEqual(calls[2].params, ["e-1", 5, 0]);
+  assert.match(calls[2].sql, /sai\.id = \(\s*SELECT MAX\(sai_latest\.id\)/);
+  assert.match(calls[2].sql, /ORDER BY ir\.date_started DESC, ir\.id DESC\s+LIMIT \? OFFSET \?/);
+  assert.deepEqual(calls[3].params, ["e-1", "e-1", 5, 0]);
+  assert.match(calls[3].sql, /ORDER BY created_at DESC, id DESC\s+LIMIT \? OFFSET \?/);
+  assert.match(calls[3].sql, /SELECT COUNT\(\*\) FROM internship_postings/);
 });
 
 test("employer dashboard keeps empty first-page and independent failure fallbacks", async () => {
   const empty = await invoke(getEmployerDashboardData, { id: "e-1" }, (sql) =>
     sql.includes("AS intern_counts") ? [{}]
+      : sql.includes("COUNT(*) AS total FROM internship_records ir") ? [{ total: 1 }]
       : sql.includes("FROM internship_records ir") ? [{ internship_id: "i-1" }] : []);
   assert.equal(empty.res.body.postedJobs.totalPages, 0);
   assert.deepEqual(empty.res.body.postedJobs.jobs, []);
@@ -156,6 +162,7 @@ test("employer dashboard keeps empty first-page and independent failure fallback
   try {
     const failed = await invoke(getEmployerDashboardData, { id: "e-1" }, (sql) => {
       if (sql.includes("AS intern_counts")) return [{}];
+      if (sql.includes("COUNT(*) AS total FROM internship_records ir")) return [{ total: 1 }];
       if (sql.includes("FROM internship_records ir")) return [{ internship_id: "i-1" }];
       throw new Error("postings unavailable");
     });
@@ -166,6 +173,51 @@ test("employer dashboard keeps empty first-page and independent failure fallback
   } finally {
     console.error = originalError;
   }
+});
+
+test("employer intern pages filter by status without duplicating academic rows", async () => {
+  const intern = { internship_id: "i-6", student_id: "s-6", status: "finished", course_name: "IT" };
+  const { res, calls, releases } = await invoke(
+    getEmployerInternsPage, { id: "e-1" },
+    (sql) => sql.includes("COUNT(*) AS total") ? [{ total: 8 }] : [intern],
+    { page: "2", status: "finished" },
+  );
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body, {
+    success: true, interns: [intern], page: 2, pageSize: 5, total: 8, totalPages: 2,
+  });
+  assert.deepEqual(calls[0].params, ["e-1", "finished"]);
+  assert.deepEqual(calls[1].params, ["e-1", "finished", 5, 5]);
+  assert.match(calls[1].sql, /sai\.id = \(\s*SELECT MAX\(sai_latest\.id\)/);
+  assert.match(calls[1].sql, /ORDER BY ir\.date_started DESC, ir\.id DESC\s+LIMIT \? OFFSET \?/);
+  assert.equal(releases, 1);
+});
+
+test("invalid employer pagination never acquires a database connection", async () => {
+  for (const [handler, query] of [
+    [getEmployerDashboardData, { jobPage: "0" }],
+    [getEmployerInternsPage, { page: "0" }],
+    [getEmployerInternsPage, { page: "1", status: "other" }],
+  ]) {
+    const { res, acquisitions } = await invoke(handler, { id: "e-1" }, () => { throw new Error("unexpected query"); }, query);
+    assert.equal(res.statusCode, 400);
+    assert.equal(acquisitions, 0);
+  }
+});
+
+test("employer dashboard fetches the requested jobs page through its existing connection", async () => {
+  const { res, calls, acquisitions } = await invoke(
+    getEmployerDashboardData, { id: "e-1" },
+    (sql) => sql.includes("AS intern_counts") ? [{}]
+      : sql.includes("COUNT(*) AS total FROM internship_records ir") ? [{ total: 0 }]
+      : [{ id: "p-6", total_postings: 12 }],
+    { jobPage: "2" },
+  );
+  assert.deepEqual(res.body.postedJobs, {
+    jobs: [{ id: "p-6" }], totalPages: 3, currentPage: 2,
+  });
+  assert.deepEqual(calls.at(-1).params, ["e-1", "e-1", 5, 5]);
+  assert.equal(acquisitions, 1);
 });
 
 test("admin dashboard retains separate sections and narrows only the academic join", async () => {
