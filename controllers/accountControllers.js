@@ -1,3 +1,4 @@
+import { reportError } from "../config/errorTracking.js";
 import { getActivityLogUserName } from "../config/activityLogNames.js";
 import { invalidateProfileOverviewCache } from "../config/profileOverviewCache.js";
 import { invalidateEvaluationHistoryCache } from "../config/evaluationHistoryCache.js";
@@ -17,7 +18,7 @@ export const getAvailableAvatars = async (req, res) => {
   try {
     res.status(200).json({ avatars: AVAILABLE_AVATARS });
   } catch (error) {
-    console.error("Get available avatars error:", error);
+    reportError("Get available avatars error:", error);
     res.status(500).json({ error: "Failed to get available avatars." });
   }
 };
@@ -55,7 +56,7 @@ export const updateUserAvatar = async (req, res) => {
 
     res.status(200).json({ success: true, avatar });
   } catch (error) {
-    console.error("Update user avatar error:", error);
+    reportError("Update user avatar error:", error);
     res.status(500).json({ error: "Failed to update avatar." });
   } finally {
     if (connection) connection.release();
@@ -84,7 +85,7 @@ export const deleteUserAvatar = async (req, res) => {
 
     res.status(200).json({ success: true, avatar: null });
   } catch (error) {
-    console.error("Delete user avatar error:", error);
+    reportError("Delete user avatar error:", error);
     res.status(500).json({ error: "Failed to reset avatar." });
   } finally {
     if (connection) connection.release();
@@ -319,7 +320,7 @@ export const updateUserInfo = async (req, res) => {
     res.status(200).json({ success: true, message: "Profile updated." });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Update user info error: ", error);
+    reportError("Update user info error: ", error);
     res.status(500).json({ error: "Failed to update profile." });
   } finally {
     if (connection) connection.release();
@@ -377,7 +378,7 @@ export const updatePassword = async (req, res) => {
     res.status(200).json({ success: true, message: "Password updated." });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Update password error: ", error);
+    reportError("Update password error: ", error);
     res.status(500).json({ error: "Failed to update password." });
   } finally {
     if (connection) connection.release();
@@ -501,7 +502,7 @@ export const getAllAccounts = async (req, res) => {
       currentPage: page,
     });
   } catch (error) {
-    console.error("Get all accounts error: ", error);
+    reportError("Get all accounts error: ", error);
     res.status(500).json({ error: "Database query failed", success: false });
   } finally {
     if (connection) connection.release();
@@ -522,7 +523,7 @@ export const getCreateAccountFormData = async (req, res) => {
       roles = rows;
     } catch (err) {
       res.locals.skipCache = true;
-      console.error("getCreateAccountFormData: roles query failed:", err);
+      reportError("getCreateAccountFormData: roles query failed:", err);
     }
 
     let courses = [];
@@ -536,7 +537,7 @@ export const getCreateAccountFormData = async (req, res) => {
       courses = rows;
     } catch (err) {
       res.locals.skipCache = true;
-      console.error("getCreateAccountFormData: courses query failed:", err);
+      reportError("getCreateAccountFormData: courses query failed:", err);
     }
 
     let departments = [];
@@ -550,7 +551,7 @@ export const getCreateAccountFormData = async (req, res) => {
       departments = rows;
     } catch (err) {
       res.locals.skipCache = true;
-      console.error("getCreateAccountFormData: departments query failed:", err);
+      reportError("getCreateAccountFormData: departments query failed:", err);
     }
 
     return res.status(200).json({
@@ -560,7 +561,7 @@ export const getCreateAccountFormData = async (req, res) => {
       departments,
     });
   } catch (error) {
-    console.error("Get create account form data error:", error);
+    reportError("Get create account form data error:", error);
     res.status(500).json({ error: "Failed to load form data." });
   } finally {
     if (connection) connection.release();
@@ -777,7 +778,7 @@ export const createUser = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error("Activity log insert failed (account created):", logError);
+      reportError("Activity log insert failed (account created):", logError);
     }
 
     await connection.commit();
@@ -840,7 +841,7 @@ export const deactivateAccount = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error(
+      reportError(
         "Activity log insert failed (account deactivated):",
         logError,
       );
@@ -909,7 +910,7 @@ export const reactivateAccount = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error(
+      reportError(
         "Activity log insert failed (account reactivated):",
         logError,
       );

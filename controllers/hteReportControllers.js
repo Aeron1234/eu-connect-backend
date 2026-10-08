@@ -1,3 +1,4 @@
+import { reportError } from "../config/errorTracking.js";
 import { reportCacheHit } from "../middleware/report-cache.js";
 import { invalidateAnnualReportsCache } from "../config/reportsCache.js";
 import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
@@ -35,7 +36,7 @@ export const getAvailableAcademicYears = async (req, res) => {
 
     res.status(200).json(rows.map((r) => r.academic_year));
   } catch (error) {
-    console.error("Get available academic years error:", error);
+    reportError("Get available academic years error:", error);
     res.status(500).json({ error: "Failed to load academic years." });
   } finally {
     if (connection) connection.release();
@@ -261,7 +262,7 @@ export const getHteCompanyList = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Get HTE company list error:", error);
+    reportError("Get HTE company list error:", error);
     res.status(500).json({ error: "Failed to load company list." });
   } finally {
     if (connection) connection.release();
@@ -349,7 +350,7 @@ export const getHteCompanyReport = async (req, res) => {
       })),
     });
   } catch (error) {
-    console.error("Get HTE company report error:", error);
+    reportError("Get HTE company report error:", error);
     res.status(500).json({ error: "Failed to generate company report." });
   } finally {
     if (connection) connection.release();
@@ -493,7 +494,7 @@ export const getProgramAnnualReports = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Get program annual reports error:", error);
+    reportError("Get program annual reports error:", error);
     res.status(500).json({ error: "Failed to load program annual reports." });
   } finally {
     if (connection) connection.release();
@@ -537,7 +538,7 @@ export const getProgramAnnualReportById = async (req, res) => {
 
     res.status(200).json({ ...reportRows[0], entries });
   } catch (error) {
-    console.error("Get program annual report error:", error);
+    reportError("Get program annual report error:", error);
     res.status(500).json({ error: "Failed to load report." });
   } finally {
     if (connection) connection.release();
@@ -710,7 +711,7 @@ export const saveProgramAnnualReport = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error(
+      reportError(
         "Activity log insert failed (program annual report saved):",
         logError,
       );
@@ -738,7 +739,7 @@ export const saveProgramAnnualReport = async (req, res) => {
     });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Save program annual report error:", error);
+    reportError("Save program annual report error:", error);
     res.status(500).json({ error: "Failed to save program annual report." });
   } finally {
     if (connection) connection.release();
@@ -801,7 +802,7 @@ export const deleteProgramAnnualReport = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error(
+      reportError(
         "Activity log insert failed (program annual report deleted):",
         logError,
       );
@@ -815,7 +816,7 @@ export const deleteProgramAnnualReport = async (req, res) => {
     res.status(200).json({ success: true, message: "Report deleted." });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Delete program annual report error:", error);
+    reportError("Delete program annual report error:", error);
     res.status(500).json({ error: "Failed to delete report." });
   } finally {
     if (connection) connection.release();

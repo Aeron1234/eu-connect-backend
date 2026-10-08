@@ -1,3 +1,4 @@
+import { reportError } from "../config/errorTracking.js";
 import { db } from "../config/db.js"; // Adjust the path to your DB connection instance
 
 // 🔍 A. SEARCH USERS
@@ -73,7 +74,7 @@ export const searchUsers = async (req, res) => {
 
     res.status(200).json({ success: true, users });
   } catch (error) {
-    console.error("Search users database query failure:", error);
+    reportError("Search users database query failure:", error);
     res.status(500).json({ error: "Failed to execute user search." });
   } finally {
     if (connection) connection.release();
@@ -149,7 +150,7 @@ export const saveSearchHistory = async (req, res) => {
 
     res.status(200).json({ success: true, message: "Search history updated." });
   } catch (error) {
-    console.error("Save search history failure:", error);
+    reportError("Save search history failure:", error);
     res.status(500).json({ error: "Failed to update search history." });
   } finally {
     if (connection) connection.release();
@@ -230,7 +231,7 @@ export const getSearchHistory = async (req, res) => {
     const [history] = await connection.execute(query, [userId, type]);
     res.status(200).json({ success: true, history });
   } catch (error) {
-    console.error("Get search history query failure:", error);
+    reportError("Get search history query failure:", error);
     res.status(500).json({ error: "Failed to retrieve search history." });
   } finally {
     if (connection) connection.release();
@@ -277,7 +278,7 @@ export const clearSearchHistory = async (req, res) => {
       .status(200)
       .json({ success: true, message: "Search history cleared cleanly." });
   } catch (error) {
-    console.error("Clear search history error:", error);
+    reportError("Clear search history error:", error);
     res.status(500).json({ error: "Failed to clear search history." });
   } finally {
     if (connection) connection.release();
@@ -324,7 +325,7 @@ export const deleteSearchHistory = async (req, res) => {
       .status(200)
       .json({ success: true, message: "Search history item deleted." });
   } catch (error) {
-    console.error("Delete single search history error:", error);
+    reportError("Delete single search history error:", error);
     res.status(500).json({ error: "Failed to delete search history item." });
   } finally {
     if (connection) connection.release();

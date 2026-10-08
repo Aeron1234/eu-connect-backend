@@ -3,6 +3,7 @@ import { invalidateProfileOverviewCache } from "./profileOverviewCache.js";
 import { invalidateDepartmentInternshipsCache } from "./staffInternshipsCache.js";
 import { invalidateDashboardCache } from "./dashboardCache.js";
 import { db } from "./db.js";
+import { reportBackgroundError } from "./errorTracking.js";
 import { getMaxShiftHours } from "./shiftLimits.js";
 
 const workedSecondsSql = `GREATEST(0, TIMESTAMPDIFF(SECOND, clock_in,
@@ -50,7 +51,7 @@ export const autoCloseStaleShifts = async () => {
       `[autoCloseStaleShifts] Processed ${staleRecords.length} stale shift(s).`,
     );
   } catch (error) {
-    console.error("[autoCloseStaleShifts] Error:", error);
+    reportBackgroundError("autoCloseStaleShifts", error);
   } finally {
     if (connection) connection.release();
   }
@@ -131,7 +132,7 @@ async function closeBatch(batch, maxShiftHours, maxWallHours) {
     invalidateDepartmentInternshipsCache();
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("[autoCloseStaleShifts] Batch error:", error);
+    reportBackgroundError("autoCloseStaleShiftsBatch", error);
   } finally {
     if (connection) connection.release();
   }

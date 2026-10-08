@@ -1,4 +1,5 @@
 import { db } from "./db.js";
+import { reportBackgroundError } from "./errorTracking.js";
 
 const REVOKED_RETENTION_DAYS =
   process.env.REFRESH_TOKEN_REVOKED_RETENTION_DAYS || 1;
@@ -43,7 +44,7 @@ export const refreshTokensCleanUp = async () => {
       `[refreshTokenCleanup] Deleted ${deletedCount} stale token(s).`,
     );
   } catch (error) {
-    console.error("[refreshTokenCleanup] Error:", error);
+    reportBackgroundError("refreshTokensCleanUp", error);
   } finally {
     if (connection) connection.release();
   }

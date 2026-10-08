@@ -1,3 +1,4 @@
+import { reportError } from "../config/errorTracking.js";
 import { db } from "../config/db.js";
 import { invalidateNotificationsCache } from "../config/notificationsCache.js";
 
@@ -25,7 +26,7 @@ function safeText(value, max) {
 }
 
 function sendFailure(res, error) {
-  console.error("Calendar request failed:", error);
+  reportError("Calendar request failed:", error);
   return res.status(500).json({ success: false, error: "Calendar request failed. Please try again." });
 }
 

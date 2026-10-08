@@ -1,3 +1,4 @@
+import { reportError } from "../config/errorTracking.js";
 import { invalidateProfileOverviewCache } from "../config/profileOverviewCache.js";
 import { invalidateNotificationsCache } from "../config/notificationsCache.js";
 import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
@@ -63,7 +64,7 @@ export const getSupervisorStatus = async (req, res) => {
       hasOngoingInternship: true,
     });
   } catch (error) {
-    console.error("Get supervisor status error:", error);
+    reportError("Get supervisor status error:", error);
     return res
       .status(500)
       .json({ error: "Failed to check supervisor status." });
@@ -170,7 +171,7 @@ export const requestSupervisor = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error(
+      reportError(
         "Activity log insert failed (supervisor request sent):",
         logError,
       );
@@ -197,7 +198,7 @@ export const requestSupervisor = async (req, res) => {
     });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Request supervisor error:", error);
+    reportError("Request supervisor error:", error);
     return res
       .status(500)
       .json({ error: "Failed to send supervisor request." });
@@ -258,7 +259,7 @@ export const cancelSupervisorRequest = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error(
+      reportError(
         "Activity log insert failed (supervisor request cancelled):",
         logError,
       );
@@ -275,7 +276,7 @@ export const cancelSupervisorRequest = async (req, res) => {
       .json({ message: "Request cancelled.", success: true });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Cancel supervisor request error:", error);
+    reportError("Cancel supervisor request error:", error);
     return res.status(500).json({ error: "Failed to cancel request." });
   } finally {
     if (connection) connection.release();
@@ -390,7 +391,7 @@ export const respondToSupervisorRequest = async (req, res) => {
           ],
         );
       } catch (logError) {
-        console.error(
+        reportError(
           "Activity log insert failed (supervisor request rejected):",
           logError,
         );
@@ -456,7 +457,7 @@ export const respondToSupervisorRequest = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error(
+      reportError(
         "Activity log insert failed (supervisor request accepted):",
         logError,
       );
@@ -481,7 +482,7 @@ export const respondToSupervisorRequest = async (req, res) => {
       .json({ message: "Supervisor request accepted.", success: true });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Respond to supervisor request error:", error);
+    reportError("Respond to supervisor request error:", error);
     return res.status(500).json({ error: "Failed to respond to request." });
   } finally {
     if (connection) connection.release();

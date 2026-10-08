@@ -1,3 +1,4 @@
+import { reportError } from "../config/errorTracking.js";
 import { invalidateDocumentMetadataCache } from "../config/documentMetadataCache.js";
 import { invalidatePastInternshipsCache } from "../config/pastInternshipsCache.js";
 import { invalidateNotificationsCache } from "../config/notificationsCache.js";
@@ -223,7 +224,7 @@ export const getSearchedUser = async (req, res) => {
       });
     } catch (supervisionError) {
       res.locals.skipCache = true;
-      console.error(
+      reportError(
         "Supervision resolve failed (getSearchedUser):",
         supervisionError,
       );
@@ -283,10 +284,12 @@ export const getSearchedUser = async (req, res) => {
         header,
         info,
         supervision,
+        hasOngoingInternship:
+          role === "student" && Boolean(user.student_internship_id),
       },
     });
   } catch (error) {
-    console.error("Database failure inside getSearchedUser endpoint:", error);
+    reportError("Database failure inside getSearchedUser endpoint:", error);
     return res.status(500).json({
       success: false,
       error: "Internal server registry failure",
@@ -377,7 +380,7 @@ export const getSearchedStudentDTRs = async (req, res) => {
       currentPage: Math.floor(offset / limit) + 1,
     });
   } catch (error) {
-    console.error("Get searched user DTRs query failure:", error);
+    reportError("Get searched user DTRs query failure:", error);
     return res.status(500).json({
       success: false,
       error: "Database query failed to get DTR logs.",
@@ -412,15 +415,17 @@ export const getSearchedStudentDtrLocation = async (req, res) => {
          dl.updated_at AS dtr_updated_at
        FROM internship_records AS ir
        LEFT JOIN dtr_locations AS dl ON ir.id = dl.internship_id
-       WHERE ir.user_id = ? AND ir.status = 'ongoing'
+       WHERE ir.user_id = ? AND ir.status = 'ongoing' AND ir.deleted_at IS NULL
        LIMIT 1`,
       [studentId],
     );
 
     if (rows.length === 0) {
-      return res.status(404).json({
-        error: "No ongoing internship found for this student.",
-        success: false,
+      return res.status(200).json({
+        success: true,
+        internship_id: null,
+        is_custom_location: false,
+        location: null,
       });
     }
 
@@ -443,7 +448,7 @@ export const getSearchedStudentDtrLocation = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Get DTR location error:", error);
+    reportError("Get DTR location error:", error);
     res.status(500).json({ error: "Database query failed.", success: false });
   }
 };
@@ -665,7 +670,7 @@ export const setSearchedStudentDtrLocation = async (req, res) => {
     });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Set DTR location error:", error);
+    reportError("Set DTR location error:", error);
     res.status(500).json({
       error: "Server error while setting DTR location.",
       success: false,
@@ -761,7 +766,7 @@ export const getSearchedStudentFiles = async (req, res) => {
 
     return res.status(200).json(records);
   } catch (error) {
-    console.error("Get searched student files query failure:", error);
+    reportError("Get searched student files query failure:", error);
     return res.status(500).json({
       success: false,
       error: "Database query failed to get student files.",
@@ -815,7 +820,7 @@ export const downloadSearchedStudentInternshipFile = async (req, res) => {
       .createSignedUrl(doc.path, 120);
 
     if (error) {
-      console.error("Signed URL error:", error.message);
+      reportError("Signed URL error:", error.message);
       return res.status(404).json({ error: "File not found on server." });
     }
 
@@ -824,7 +829,7 @@ export const downloadSearchedStudentInternshipFile = async (req, res) => {
       fileName: doc.file_name,
     });
   } catch (error) {
-    console.error("Download Error:", error.message);
+    reportError("Download Error:", error.message);
     res.status(500).json({ error: "Failed to retrieve file." });
   }
 };
@@ -857,7 +862,7 @@ export const getEmployerUploadedFiles = async (req, res) => {
 
     return res.status(200).json(rows);
   } catch (error) {
-    console.error("Get employer uploaded file error:", error);
+    reportError("Get employer uploaded file error:", error);
     return res.status(500).json({
       success: false,
       error: "Database query failed to get uploaded files.",
@@ -924,7 +929,7 @@ export const uploadFileToSearchedStudent = async (req, res) => {
 
     if (reqTypes.length === 0) {
       await connection.rollback();
-      console.error(
+      reportError(
         `"${CERTIFICATE_OF_COMPLETION_NAME}" requirement type not found in requirement_types table.`,
       );
       return res.status(500).json({
@@ -1022,7 +1027,7 @@ export const uploadFileToSearchedStudent = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error(
+      reportError(
         "Activity log insert failed (document uploaded on behalf):",
         logError,
       );
@@ -1058,7 +1063,7 @@ export const uploadFileToSearchedStudent = async (req, res) => {
         .remove([uploadedStoragePath])
         .catch(() => {});
     }
-    console.error("Upload to searched user error:", error.message);
+    reportError("Upload to searched user error:", error.message);
     return res.status(500).json({ error: "Server failed to process upload." });
   } finally {
     if (connection) connection.release();
@@ -1152,7 +1157,7 @@ export const deleteSearchedStudentFile = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error(
+      reportError(
         "Activity log insert failed (searched student document deleted):",
         logError,
       );
@@ -1169,7 +1174,7 @@ export const deleteSearchedStudentFile = async (req, res) => {
       .remove([doc.path]);
 
     if (storageError) {
-      console.error("Failed to delete from storage:", storageError.message);
+      reportError("Failed to delete from storage:", storageError.message);
     }
 
     res.status(200).json({
@@ -1178,7 +1183,7 @@ export const deleteSearchedStudentFile = async (req, res) => {
     });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Delete searched student file error: ", error);
+    reportError("Delete searched student file error: ", error);
     res.status(500).json({ error: "Database query failed", success: false });
   } finally {
     if (connection) connection.release();

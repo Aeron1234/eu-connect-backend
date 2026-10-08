@@ -1,3 +1,4 @@
+import { reportError } from "../config/errorTracking.js";
 import { db } from "../config/db.js";
 
 ///////////////////
@@ -38,7 +39,7 @@ export const getStudentDashboardStats = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Failed to retrieve student dashboard statistics:", error);
+    reportError("Failed to retrieve student dashboard statistics:", error);
     res.status(500).json({
       error: "Database metrics aggregation failed",
       success: false,
@@ -68,7 +69,7 @@ export const getStudentDashboardData = async (req, res) => {
       internshipData = rows.length > 0 ? rows[0] : null;
     } catch (err) {
       res.locals.skipCache = true;
-      console.error(
+      reportError(
         "getStudentDashboardData: active internship query failed:",
         err,
       );
@@ -95,7 +96,7 @@ export const getStudentDashboardData = async (req, res) => {
         dtrToday = todayRows.length > 0 ? todayRows[0] : null;
       } catch (err) {
       res.locals.skipCache = true;
-        console.error(
+        reportError(
           "getStudentDashboardData: today's DTR query failed:",
           err,
         );
@@ -125,7 +126,7 @@ export const getStudentDashboardData = async (req, res) => {
         }
       } catch (err) {
       res.locals.skipCache = true;
-        console.error(
+        reportError(
           "getStudentDashboardData: latest DTR status query failed:",
           err,
         );
@@ -171,7 +172,7 @@ export const getStudentDashboardData = async (req, res) => {
         }
       } catch (err) {
       res.locals.skipCache = true;
-        console.error(
+        reportError(
           "getStudentDashboardData: DTR location query failed:",
           err,
         );
@@ -186,7 +187,7 @@ export const getStudentDashboardData = async (req, res) => {
       location,
     });
   } catch (error) {
-    console.error("Failed to retrieve student dashboard data:", error);
+    reportError("Failed to retrieve student dashboard data:", error);
     res.status(500).json({
       error: "Database metrics aggregation failed",
       success: false,
@@ -296,7 +297,7 @@ export const getEmployerDashboardData = async (req, res) => {
       internsPage = await loadEmployerInternsPage(connection, employerId);
     } catch (err) {
       res.locals.skipCache = true;
-      console.error("getEmployerDashboardData: interns query failed:", err);
+      reportError("getEmployerDashboardData: interns query failed:", err);
     }
 
     // Include the requested jobs page so dashboard navigation does not fetch
@@ -328,7 +329,7 @@ export const getEmployerDashboardData = async (req, res) => {
       postedJobs = jobRows.map(({ total_postings, ...job }) => job);
     } catch (err) {
       res.locals.skipCache = true;
-      console.error("getEmployerDashboardData: posted jobs query failed:", err);
+      reportError("getEmployerDashboardData: posted jobs query failed:", err);
     }
 
     return res.status(200).json({
@@ -348,7 +349,7 @@ export const getEmployerDashboardData = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Failed to retrieve employer dashboard data:", error);
+    reportError("Failed to retrieve employer dashboard data:", error);
     res.status(500).json({
       error: "Database metrics aggregation failed",
       success: false,
@@ -371,7 +372,7 @@ export const getEmployerInternsPage = async (req, res) => {
     const data = await loadEmployerInternsPage(connection, req.verifiedUser.id, { page, status });
     return res.status(200).json({ success: true, ...data });
   } catch (error) {
-    console.error("Failed to retrieve employer interns page:", error);
+    reportError("Failed to retrieve employer interns page:", error);
     return res.status(500).json({ success: false, error: "Intern lookup failed." });
   } finally {
     if (connection) connection.release();
@@ -402,7 +403,7 @@ export const getPostedJobs = async (req, res) => {
           WHERE employer_id = ? AND deleted_at IS NULL) AS total_records
        FROM internship_postings
        WHERE employer_id = ? AND deleted_at IS NULL
-       ORDER BY created_at DESC
+       ORDER BY created_at DESC, id DESC
        LIMIT ? OFFSET ?`,
       [employerId, employerId, limit, offset],
     );
@@ -426,7 +427,7 @@ export const getPostedJobs = async (req, res) => {
       currentPage: page,
     });
   } catch (error) {
-    console.error("Get posted jobs error:", error);
+    reportError("Get posted jobs error:", error);
     return res.status(500).json({ error: "Failed to get posted jobs." });
   } finally {
     if (connection) connection.release();
@@ -633,7 +634,7 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
       ongoingPerCourse = rows;
     } catch (err) {
       res.locals.skipCache = true;
-      console.error(
+      reportError(
         "getDepartmentHeadDashboardData: per-course query failed:",
         err,
       );
@@ -669,7 +670,7 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
       }));
     } catch (err) {
       res.locals.skipCache = true;
-      console.error(
+      reportError(
         "getDepartmentHeadDashboardData: student evaluation averages query failed:",
         err,
       );
@@ -704,7 +705,7 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
       }));
     } catch (err) {
       res.locals.skipCache = true;
-      console.error(
+      reportError(
         "getDepartmentHeadDashboardData: employer evaluation averages query failed:",
         err,
       );
@@ -721,7 +722,7 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
       };
     } catch (err) {
       res.locals.skipCache = true;
-      console.error("getDepartmentHeadDashboardData: hours page query failed:", err);
+      reportError("getDepartmentHeadDashboardData: hours page query failed:", err);
     }
     try {
       const [courseRows] = await connection.execute(
@@ -734,7 +735,7 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
       hoursTracker.courses = courseRows;
     } catch (err) {
       res.locals.skipCache = true;
-      console.error("getDepartmentHeadDashboardData: hours courses query failed:", err);
+      reportError("getDepartmentHeadDashboardData: hours courses query failed:", err);
     }
 
     let hoursDistribution = [];
@@ -742,7 +743,7 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
       hoursDistribution = await loadHoursDistribution(connection, departmentId);
     } catch (err) {
       res.locals.skipCache = true;
-      console.error("getDepartmentHeadDashboardData: hours distribution query failed:", err);
+      reportError("getDepartmentHeadDashboardData: hours distribution query failed:", err);
     }
 
     let availableShiftHoursMonths = [];
@@ -769,7 +770,7 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
       availableShiftHoursMonths = rows;
     } catch (err) {
       res.locals.skipCache = true;
-      console.error(
+      reportError(
         "getDepartmentHeadDashboardData: available months query failed:",
         err,
       );
@@ -786,7 +787,7 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
       availableShiftHoursMonths,
     });
   } catch (error) {
-    console.error("Failed to retrieve department head dashboard data:", error);
+    reportError("Failed to retrieve department head dashboard data:", error);
     res.status(500).json({
       error: "Database metrics aggregation failed",
       success: false,
@@ -826,7 +827,7 @@ export const getDepartmentStudentHoursPage = async (req, res) => {
     });
     return res.status(200).json({ success: true, ...page });
   } catch (error) {
-    console.error("Failed to retrieve department student hours page:", error);
+    reportError("Failed to retrieve department student hours page:", error);
     return res.status(500).json({ success: false, error: "Student hours lookup failed" });
   } finally {
     if (connection) connection.release();
@@ -917,7 +918,7 @@ export const getAverageShiftHoursByWeek = async (req, res) => {
 
     return res.status(200).json({ weeks: result, month, year });
   } catch (error) {
-    console.error("Get average shift hours by week error:", error);
+    reportError("Get average shift hours by week error:", error);
     return res
       .status(500)
       .json({ error: "Failed to get average shift hours." });
@@ -1015,7 +1016,7 @@ export const getAdminDashboardData = async (req, res) => {
       userGrowth = Array.from(dataByMonth.values());
     } catch (err) {
       res.locals.skipCache = true;
-      console.error("getAdminDashboardData: user growth query failed:", err);
+      reportError("getAdminDashboardData: user growth query failed:", err);
     }
 
     let usersByRole = [];
@@ -1029,7 +1030,7 @@ export const getAdminDashboardData = async (req, res) => {
       usersByRole = rows;
     } catch (err) {
       res.locals.skipCache = true;
-      console.error("getAdminDashboardData: users by role query failed:", err);
+      reportError("getAdminDashboardData: users by role query failed:", err);
     }
 
     let ongoingByDepartment = [];
@@ -1058,7 +1059,7 @@ export const getAdminDashboardData = async (req, res) => {
       ongoingByDepartment = rows;
     } catch (err) {
       res.locals.skipCache = true;
-      console.error(
+      reportError(
         "getAdminDashboardData: ongoing by department query failed:",
         err,
       );
@@ -1075,7 +1076,7 @@ export const getAdminDashboardData = async (req, res) => {
       recentActivity = rows;
     } catch (err) {
       res.locals.skipCache = true;
-      console.error(
+      reportError(
         "getAdminDashboardData: recent activity query failed:",
         err,
       );
@@ -1090,7 +1091,7 @@ export const getAdminDashboardData = async (req, res) => {
       recentActivity,
     });
   } catch (error) {
-    console.error("Failed to retrieve admin dashboard data:", error);
+    reportError("Failed to retrieve admin dashboard data:", error);
     res.status(500).json({
       error: "Database metrics aggregation failed",
       success: false,

@@ -1,3 +1,4 @@
+import { reportError } from "../config/errorTracking.js";
 import { invalidateCriteriaCache } from "../config/criteriaCache.js";
 import { db } from "../config/db.js";
 
@@ -35,7 +36,7 @@ function createCriteriaEndpoints(tableName) {
 
       res.status(200).json([...groups.values()]);
     } catch (error) {
-      console.error(`Get ${tableName} error:`, error);
+      reportError(`Get ${tableName} error:`, error);
       res.status(500).json({ error: "Failed to load criteria." });
     } finally {
       if (connection) connection.release();
@@ -72,7 +73,7 @@ function createCriteriaEndpoints(tableName) {
       res.status(201).json({ success: true, id: result.insertId });
     } catch (error) {
       if (connection) await connection.rollback();
-      console.error(`Add ${tableName} error:`, error);
+      reportError(`Add ${tableName} error:`, error);
       res.status(500).json({ error: "Failed to add criterion." });
     } finally {
       if (connection) connection.release();
@@ -124,7 +125,7 @@ function createCriteriaEndpoints(tableName) {
         .json({ success: true, message: "Criterion deactivated." });
     } catch (error) {
       if (connection) await connection.rollback();
-      console.error(`Deactivate ${tableName} error:`, error);
+      reportError(`Deactivate ${tableName} error:`, error);
       res.status(500).json({ error: "Failed to deactivate criterion." });
     } finally {
       if (connection) connection.release();
@@ -170,7 +171,7 @@ function createCriteriaEndpoints(tableName) {
         .json({ success: true, message: "Criterion reactivated." });
     } catch (error) {
       if (connection) await connection.rollback();
-      console.error(`Reactivate ${tableName} error:`, error);
+      reportError(`Reactivate ${tableName} error:`, error);
       res.status(500).json({ error: "Failed to reactivate criterion." });
     } finally {
       if (connection) connection.release();
@@ -215,7 +216,7 @@ function createCriteriaEndpoints(tableName) {
       });
     } catch (error) {
       if (connection) await connection.rollback();
-      console.error(`Deactivate ${tableName} section error:`, error);
+      reportError(`Deactivate ${tableName} section error:`, error);
       res.status(500).json({ error: "Failed to deactivate section." });
     } finally {
       if (connection) connection.release();
@@ -264,7 +265,7 @@ function createCriteriaEndpoints(tableName) {
       });
     } catch (error) {
       if (connection) await connection.rollback();
-      console.error(`Reactivate ${tableName} section error:`, error);
+      reportError(`Reactivate ${tableName} section error:`, error);
       res.status(500).json({ error: "Failed to reactivate section." });
     } finally {
       if (connection) connection.release();

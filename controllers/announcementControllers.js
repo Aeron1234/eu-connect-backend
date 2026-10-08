@@ -1,3 +1,4 @@
+import { reportError } from "../config/errorTracking.js";
 import { invalidateAnnouncementsCache } from "../config/announcementsCache.js";
 import { invalidateNotificationsCache } from "../config/notificationsCache.js";
 import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
@@ -145,7 +146,7 @@ export const getAllAnnouncements = async (req, res) => {
       currentRegularCount: regularRows.length,
     });
   } catch (error) {
-    console.error("Get all announcements error: ", error);
+    reportError("Get all announcements error: ", error);
     res.status(500).json({ error: "Database query failed", success: false });
   }
 };
@@ -314,7 +315,7 @@ export const createAnnouncement = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error(
+      reportError(
         "Activity log insert failed (announcement created):",
         logError,
       );
@@ -540,7 +541,7 @@ export const updateAnnouncement = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error(
+      reportError(
         "Activity log insert failed (announcement updated):",
         logError,
       );
@@ -573,7 +574,7 @@ export const updateAnnouncement = async (req, res) => {
     });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Update Announcement Error:", error);
+    reportError("Update Announcement Error:", error);
     res.status(500).json({ error: "Update failed" });
   } finally {
     if (connection) connection.release();
@@ -607,7 +608,7 @@ export const deleteAnnouncement = async (req, res) => {
         announcementLabel = `announcement "${existingRows[0].title}"`;
       }
     } catch (lookupError) {
-      console.error("Announcement title lookup failed for activity log:", lookupError);
+      reportError("Announcement title lookup failed for activity log:", lookupError);
     }
     const [result] = await connection.execute(
       `DELETE FROM announcements WHERE id = ? AND (author_id = ? OR ? = 'admin')`,
@@ -641,7 +642,7 @@ export const deleteAnnouncement = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error(
+      reportError(
         "Activity log insert failed (announcement deleted):",
         logError,
       );
@@ -707,7 +708,7 @@ export const togglePinAnnouncement = async (req, res) => {
     });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Toggle Pin announcement error:", error);
+    reportError("Toggle Pin announcement error:", error);
     res.status(500).json({ error: "Failed to update pinned status." });
   } finally {
     if (connection) connection.release();

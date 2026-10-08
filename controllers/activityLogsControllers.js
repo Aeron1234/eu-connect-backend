@@ -1,3 +1,4 @@
+import { reportError } from "../config/errorTracking.js";
 import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
 import { db } from "../config/db.js";
 
@@ -43,7 +44,7 @@ export const getMyActivityLogs = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Get my activity logs error:", error);
+    reportError("Get my activity logs error:", error);
     res.status(500).json({ error: "Failed to load activity logs." });
   } finally {
     if (connection) connection.release();
@@ -170,7 +171,7 @@ export const getAllActivityLogs = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Get all activity logs error:", error);
+    reportError("Get all activity logs error:", error);
     res.status(500).json({ error: "Failed to load activity logs." });
   } finally {
     if (connection) connection.release();
@@ -213,7 +214,7 @@ export const deleteActivityLog = async (req, res) => {
     res.status(200).json({ success: true, message: "Activity log deleted." });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Delete activity log error:", error);
+    reportError("Delete activity log error:", error);
     res.status(500).json({ error: "Failed to delete activity log." });
   } finally {
     if (connection) connection.release();

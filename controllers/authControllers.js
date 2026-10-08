@@ -1,3 +1,4 @@
+import { reportError } from "../config/errorTracking.js";
 import bcrypt from "bcryptjs";
 import { db } from "../config/db.js";
 import {
@@ -230,7 +231,7 @@ export const forgotPassword = async (req, res) => {
 
     return res.json(genericResponse);
   } catch (err) {
-    console.error("Forgot password error:", err);
+    reportError("Forgot password error:", err);
     return res.json(genericResponse);
   }
 };
@@ -315,7 +316,7 @@ export const login = async (req, res) => {
 
     return res.json({ user: sessionUser, mustChangePassword, ...tokens });
   } catch (err) {
-    console.error("Login error:", err);
+    reportError("Login error:", err);
     return res
       .status(500)
       .json({ error: "Something went wrong. Please try again." });
@@ -518,7 +519,7 @@ export const setPassword = async (req, res) => {
 
     return res.json({ success: true });
   } catch (err) {
-    console.error("Set password error:", err);
+    reportError("Set password error:", err);
     return res
       .status(500)
       .json({ error: "Something went wrong. Please try again." });

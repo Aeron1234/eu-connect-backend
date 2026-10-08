@@ -1,3 +1,4 @@
+import { reportError } from "../config/errorTracking.js";
 import { invalidateAttendanceHistoryCache } from "../config/attendanceHistoryCache.js";
 import { invalidateProfileOverviewCache } from "../config/profileOverviewCache.js";
 import { invalidateDepartmentInternshipsCache } from "../config/staffInternshipsCache.js";
@@ -45,7 +46,7 @@ export const getTodayDTR = async (req, res) => {
 
     res.status(200).json(record);
   } catch (error) {
-    console.error("Get today's DTR error:", error);
+    reportError("Get today's DTR error:", error);
     res.status(500).json({ error: "Database query failed", success: false });
   } finally {
     if (connection) connection.release();
@@ -96,7 +97,7 @@ export const getAllDTRs = async (req, res) => {
       currentPage: Math.floor(offset / limit) + 1,
     });
   } catch (error) {
-    console.error("Get all DTRs error:", error);
+    reportError("Get all DTRs error:", error);
     res.status(500).json({ error: "Database query failed", success: false });
   } finally {
     if (connection) connection.release();
@@ -136,7 +137,7 @@ export const getLatestDtrStatus = async (req, res) => {
 
     return res.status(200).json({ status: "CLOCKED_OUT", record: lastRecord });
   } catch (error) {
-    console.error(error);
+    reportError(error);
     res.status(500).json({ error: "Failed to get DTR status" });
   } finally {
     if (connection) connection.release();
@@ -256,7 +257,7 @@ export const clockIn = async (req, res) => {
     });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Clock-in error:", error);
+    reportError("Clock-in error:", error);
     res.status(500).json({
       error: "Server error during clock-in.",
       success: false,
@@ -336,7 +337,7 @@ async function changeBreakState(req, res, starting) {
     });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error(starting ? "Start break error:" : "Resume duty error:", error);
+    reportError(starting ? "Start break error:" : "Resume duty error:", error);
     return res.status(500).json({
       success: false,
       error: starting ? "Server error starting break." : "Server error resuming duty.",
@@ -497,7 +498,7 @@ export const clockOut = async (req, res) => {
     });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Clock-out Error:", error);
+    reportError("Clock-out Error:", error);
     res.status(500).json({
       error: "Server error during clock-out.",
       success: false,
@@ -623,7 +624,7 @@ export const getMySettedDtrLocation = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Get DTR location error:", error);
+    reportError("Get DTR location error:", error);
     res.status(500).json({ error: "Database query failed.", success: false });
   } finally {
     if (connection) connection.release();

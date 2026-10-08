@@ -1,3 +1,4 @@
+import { reportError } from "../config/errorTracking.js";
 import { invalidateWeeklyNarrativesCache } from "../config/weeklyNarrativesCache.js";
 import { weeklyNarrativesCacheHit } from "../middleware/weekly-narratives-cache.js";
 import { db } from "../config/db.js";
@@ -94,7 +95,7 @@ export const getAllWeeklyNarratives = async (req, res) => {
       currentPage: page,
     });
   } catch (error) {
-    console.error("Get all weekly narratives query failure:", error);
+    reportError("Get all weekly narratives query failure:", error);
     return res.status(500).json({
       success: false,
       error: "Database query failed to get narratives.",
@@ -318,7 +319,7 @@ export const getSearchedStudentWeeklyNarratives = async (req, res) => {
       currentPage: page,
     });
   } catch (error) {
-    console.error("Get searched user weekly narratives query failure:", error);
+    reportError("Get searched user weekly narratives query failure:", error);
     return res.status(500).json({
       success: false,
       error: "Database query failed to get weekly narrative logs.",
@@ -351,7 +352,7 @@ export const getInternshipRecordWeeklyNarratives = async (req, res) => {
   } catch (error) {
     if (error.status)
       return res.status(error.status).json({ error: error.message });
-    console.error("Get internship record weekly narratives error:", error);
+    reportError("Get internship record weekly narratives error:", error);
     res.status(500).json({ error: "Failed to load narratives." });
   } finally {
     if (connection) connection.release();

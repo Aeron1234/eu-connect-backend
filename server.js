@@ -9,9 +9,11 @@ import { createServer } from "http";
 import { Server } from "socket.io";
 import cron from "node-cron";
 import cookieParser from "cookie-parser";
+import { writeSync } from "node:fs";
 import { registerNotificationSockets } from "./config/socketAuth.js";
 import { autoCloseStaleShifts } from "./config/autoCloseStaleShifts.js";
 import { refreshTokensCleanUp } from "./config/refreshTokensCleanUp.js";
+import { errorTrackingContext, purgeOldErrorEvents, reportBackgroundError, reportError } from "./config/errorTracking.js";
 
 import announcementRoutes from "./routes/announcementRoutes.js";
 import accountRoutes from "./routes/accountRoutes.js";
@@ -38,24 +40,23 @@ import dashboardRoutes from "./routes/dashboardRoutes.js";
 import calendarRoutes from "./routes/calendarRoutes.js";
 import cacheMonitoringRoutes from "./routes/cacheMonitoringRoutes.js";
 import weeklyNarrativeRoutes from "./routes/weeklyNarrativeRoutes.js";
+import errorTrackingRoutes from "./routes/errorTrackingRoutes.js";
 
 // dotenv.config();
 
 // ---------------------------------------------------------------------------
-// Global crash guards.
-// Without these, any unhandled promise rejection or uncaught exception
-// anywhere in the app (including inside route handlers, cron jobs, or
-// socket.io listeners) will silently kill the Node process. Render then
-// restarts the service, which looks like "the server keeps breaking".
-// We log the error instead of letting the process die.
+// A fatal exception leaves the process in an unknown state. Write to stderr
+// synchronously, then let the process supervisor restart a fresh instance.
 // ---------------------------------------------------------------------------
-process.on("unhandledRejection", (reason) => {
-  console.error("Unhandled Rejection:", reason);
-});
-
-process.on("uncaughtException", (err) => {
-  console.error("Uncaught Exception:", err);
-});
+function exitAfterFatal(label, error) {
+  try {
+    writeSync(2, `${label}: ${error?.stack || String(error)}\n`);
+  } finally {
+    process.exit(1);
+  }
+}
+process.on("unhandledRejection", (reason) => exitAfterFatal("Unhandled Rejection", reason));
+process.on("uncaughtException", (err) => exitAfterFatal("Uncaught Exception", err));
 
 const app = express();
 const httpServer = createServer(app);
@@ -77,6 +78,7 @@ app.use(
   cors({
     origin: allowedOrigins,
     credentials: true,
+    exposedHeaders: ["X-Request-ID"],
   }),
 );
 
@@ -86,6 +88,7 @@ app.use(express.urlencoded({ limit: "10mb", extended: true }));
 
 app.set("socketio", io);
 app.set("trust proxy", 1);
+app.use(errorTrackingContext);
 
 // Health check endpoint for Render
 app.get("/", (req, res) => {
@@ -117,6 +120,7 @@ app.use("/eu-connect/api", criteriaRoutes);
 app.use("/eu-connect/api", activityLogRoutes);
 app.use("/eu-connect/api", departmentAndCoursesRoutes);
 app.use("/eu-connect/api", cacheMonitoringRoutes);
+app.use("/eu-connect/api", errorTrackingRoutes);
 
 // ---------------------------------------------------------------------------
 // Fallback error-handling middleware.
@@ -125,12 +129,14 @@ app.use("/eu-connect/api", cacheMonitoringRoutes);
 // Keep this AFTER all app.use(routes) calls.
 // ---------------------------------------------------------------------------
 app.use((err, req, res, next) => {
-  console.error("Unhandled route error:", err);
+  reportError("Unhandled route error:", err);
   if (res.headersSent) {
     return next(err);
   }
-  res.status(err.status || 500).json({
-    message: err.message || "Internal server error",
+  const status = err.status >= 400 && err.status < 600 ? err.status : 500;
+  res.status(status).json({
+    message: status >= 500 ? "Internal server error" : err.message || "Request failed",
+    requestId: res.getHeader("X-Request-ID"),
   });
 });
 
@@ -147,7 +153,7 @@ cron.schedule("0 * * * *", async () => {
   try {
     await autoCloseStaleShifts();
   } catch (err) {
-    console.error("autoCloseStaleShifts job failed:", err);
+    reportBackgroundError("autoCloseStaleShifts", err);
   }
 });
 
@@ -156,7 +162,15 @@ cron.schedule("0 3 * * *", async () => {
   try {
     await refreshTokensCleanUp();
   } catch (err) {
-    console.error("refreshTokensCleanUp job failed:", err);
+    reportBackgroundError("refreshTokensCleanUp", err);
+  }
+});
+
+cron.schedule("15 3 * * *", async () => {
+  try {
+    await purgeOldErrorEvents();
+  } catch (error) {
+    console.error("Error tracking retention job failed:", error);
   }
 });
 

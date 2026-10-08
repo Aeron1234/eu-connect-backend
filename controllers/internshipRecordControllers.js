@@ -1,3 +1,4 @@
+import { reportError } from "../config/errorTracking.js";
 import { getActivityLogUserName } from "../config/activityLogNames.js";
 import { attendanceHistoryCacheHit } from "../middleware/attendance-history-cache.js";
 import { invalidateAttendanceHistoryCache } from "../config/attendanceHistoryCache.js";
@@ -28,7 +29,7 @@ export const getRegions = async (req, res) => {
 
     res.status(200).json(record);
   } catch (error) {
-    console.error("Get all regions error: ", error);
+    reportError("Get all regions error: ", error);
     res.status(500).json({ error: "Database query failed", success: false });
   }
 };
@@ -50,7 +51,7 @@ export const getActiveInternship = async (req, res) => {
 
     res.status(200).json(record);
   } catch (error) {
-    console.error("Get active internship error: ", error);
+    reportError("Get active internship error: ", error);
     res.status(500).json({ error: "Database query failed", success: false });
   }
 };
@@ -72,7 +73,7 @@ export const getMyPastInternshipRecords = async (req, res) => {
 
     res.status(200).json(rows);
   } catch (error) {
-    console.error("Get my past internship records error: ", error);
+    reportError("Get my past internship records error: ", error);
     res.status(500).json({ error: "Database query failed", success: false });
   }
 };
@@ -94,7 +95,7 @@ export const getAllActiveInternships = async (req, res) => {
 
     res.status(200).json(records);
   } catch (error) {
-    console.error("Get all active internships error: ", error);
+    reportError("Get all active internships error: ", error);
     res.status(500).json({ error: "Database query failed", success: false });
   }
 };
@@ -141,7 +142,7 @@ export const getAllUserInternships = async (req, res) => {
       res.status(200).json(records);
     }
   } catch (error) {
-    console.error("Get all user internships error:", error);
+    reportError("Get all user internships error:", error);
     res.status(500).json({ error: "Database query failed", success: false });
   }
 };
@@ -330,7 +331,7 @@ export const createInternshipRecord = async (req, res) => {
       success: true,
     });
   } catch (error) {
-    console.error(error);
+    reportError(error);
     if (connection) await connection.rollback();
     res.status(500).json({ error: "Database query failed", success: false });
   } finally {
@@ -517,7 +518,7 @@ export const approveInternshipRecord = async (req, res) => {
       message: "Status updated and student notified!",
     });
   } catch (error) {
-    console.error("Approve internship record error: ", error);
+    reportError("Approve internship record error: ", error);
     if (connection) await connection.rollback();
     res.status(500).json({ error: "Database query failed", success: false });
   } finally {
@@ -729,7 +730,7 @@ export const markInternshipFinished = async (req, res) => {
       .json({ success: true, message: "Record marked as finished." });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Mark internship finished error:", error);
+    reportError("Mark internship finished error:", error);
     res.status(500).json({ error: "Failed to mark record as finished." });
   } finally {
     if (connection) connection.release();
@@ -1091,7 +1092,7 @@ export const getDepartmentInternshipRecords = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Get department internship records error:", error);
+    reportError("Get department internship records error:", error);
     res.status(500).json({ error: "Failed to load internship records." });
   } finally {
     if (connection) connection.release();
@@ -1186,7 +1187,7 @@ export const restoreInternshipRecord = async (req, res) => {
     });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Restore internship record error:", error);
+    reportError("Restore internship record error:", error);
     res.status(500).json({ error: "Failed to restore internship record." });
   } finally {
     if (connection) connection.release();
@@ -1276,7 +1277,7 @@ export const deleteOwnInternshipRecord = async (req, res) => {
     return res.status(200).json({ success: true, message: "Internship record deleted." });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Delete own internship record error:", error);
+    reportError("Delete own internship record error:", error);
     return res.status(500).json({ error: "Failed to delete internship record." });
   } finally {
     if (connection) connection.release();
@@ -1343,7 +1344,7 @@ export const deleteInternshipRecord = async (req, res) => {
     });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Delete internship record error:", error);
+    reportError("Delete internship record error:", error);
     res.status(500).json({ error: "Failed to delete internship record." });
   } finally {
     if (connection) connection.release();
@@ -1425,7 +1426,7 @@ export const getInternshipRecordOverview = async (req, res) => {
   } catch (error) {
     if (error.status)
       return res.status(error.status).json({ error: error.message });
-    console.error("Get internship record overview error:", error);
+    reportError("Get internship record overview error:", error);
     res.status(500).json({ error: "Failed to load overview." });
   } finally {
     if (connection) connection.release();
@@ -1485,7 +1486,7 @@ export const getInternshipRecordDtr = async (req, res) => {
   } catch (error) {
     if (error.status)
       return res.status(error.status).json({ error: error.message });
-    console.error("Get internship record DTR error:", error);
+    reportError("Get internship record DTR error:", error);
     res.status(500).json({ error: "Failed to load DTR entries." });
   } finally {
     if (connection) connection.release();
@@ -1651,7 +1652,7 @@ export const getInternshipRecordEvaluations = async (req, res) => {
   } catch (error) {
     if (error.status)
       return res.status(error.status).json({ error: error.message });
-    console.error("Get internship record evaluations error:", error);
+    reportError("Get internship record evaluations error:", error);
     return res.status(500).json({ error: "Failed to load evaluations." });
   } finally {
     if (connection) connection.release();
@@ -1685,7 +1686,7 @@ export const getInternshipRecordDocuments = async (req, res) => {
   } catch (error) {
     if (error.status)
       return res.status(error.status).json({ error: error.message });
-    console.error("Get internship record documents error:", error);
+    reportError("Get internship record documents error:", error);
     res.status(500).json({ error: "Failed to load documents." });
   } finally {
     if (connection) connection.release();
@@ -1736,7 +1737,7 @@ export const downloadInternshipRecordFile = async (req, res) => {
       .createSignedUrl(doc.path, 120);
 
     if (error) {
-      console.error("Signed URL error:", error.message);
+      reportError("Signed URL error:", error.message);
       return res.status(404).json({ error: "File not found on server." });
     }
 
@@ -1747,7 +1748,7 @@ export const downloadInternshipRecordFile = async (req, res) => {
   } catch (error) {
     if (error.status)
       return res.status(error.status).json({ error: error.message });
-    console.error("Download internship record file error:", error.message);
+    reportError("Download internship record file error:", error.message);
     res.status(500).json({ error: "Failed to retrieve file." });
   } finally {
     if (connection) connection.release();

@@ -1,3 +1,4 @@
+import { reportError } from "../config/errorTracking.js";
 import { invalidateDocumentMetadataCache } from "../config/documentMetadataCache.js";
 import { invalidatePastInternshipsCache } from "../config/pastInternshipsCache.js";
 import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
@@ -33,7 +34,7 @@ export const getFileRequirementTypes = async (req, res) => {
 
     res.status(200).json(rows); // always an array, even when empty
   } catch (error) {
-    console.error("Get requirement types error: ", error);
+    reportError("Get requirement types error: ", error);
     res.status(500).json({ error: "Database query failed", success: false });
   }
 };
@@ -72,7 +73,7 @@ export const getInternshipFiles = async (req, res) => {
 
     res.status(200).json(rows);
   } catch (error) {
-    console.error("Get internship files error: ", error);
+    reportError("Get internship files error: ", error);
     res.status(500).json({ error: "Database query failed", success: false });
   }
 };
@@ -140,7 +141,7 @@ export const approveInternshipDocument = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error("Activity log insert failed (document accept):", logError);
+      reportError("Activity log insert failed (document accept):", logError);
     }
 
     await connection.commit();
@@ -151,7 +152,7 @@ export const approveInternshipDocument = async (req, res) => {
     res.status(200).json({ success: true, message: "Document accepted." });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Accept document error:", error);
+    reportError("Accept document error:", error);
     res.status(500).json({ error: "Failed to accept document." });
   } finally {
     if (connection) connection.release();
@@ -279,7 +280,7 @@ export const uploadInternshipFile = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error("Activity log insert failed (document upload):", logError);
+      reportError("Activity log insert failed (document upload):", logError);
     }
 
     await connection.commit();
@@ -300,7 +301,7 @@ export const uploadInternshipFile = async (req, res) => {
         .remove([uploadedStoragePath])
         .catch(() => {});
     }
-    console.error("Upload Error:", error.message);
+    reportError("Upload Error:", error.message);
     res.status(500).json({ error: "Server failed to process upload." });
   } finally {
     if (connection) connection.release();
@@ -371,7 +372,7 @@ export const deleteFile = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error("Activity log insert failed (document delete):", logError);
+      reportError("Activity log insert failed (document delete):", logError);
     }
 
     await connection.commit();
@@ -387,7 +388,7 @@ export const deleteFile = async (req, res) => {
       .remove([doc.path]);
 
     if (storageError) {
-      console.error("Failed to delete from storage:", storageError.message);
+      reportError("Failed to delete from storage:", storageError.message);
     }
 
     res.status(200).json({
@@ -396,7 +397,7 @@ export const deleteFile = async (req, res) => {
     });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Delete file error: ", error);
+    reportError("Delete file error: ", error);
     res.status(500).json({ error: "Database query failed", success: false });
   } finally {
     if (connection) connection.release();
@@ -435,7 +436,7 @@ export const downloadInternshipFile = async (req, res) => {
       .createSignedUrl(doc.path, 120);
 
     if (error) {
-      console.error("Signed URL error:", error.message);
+      reportError("Signed URL error:", error.message);
       return res.status(404).json({ error: "File not found on server." });
     }
 
@@ -444,7 +445,7 @@ export const downloadInternshipFile = async (req, res) => {
       fileName: doc.file_name,
     });
   } catch (error) {
-    console.error("Download Error:", error.message);
+    reportError("Download Error:", error.message);
     res.status(500).json({ error: "Failed to retrieve file." });
   }
 };

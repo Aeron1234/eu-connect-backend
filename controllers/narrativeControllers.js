@@ -1,3 +1,4 @@
+import { reportError } from "../config/errorTracking.js";
 import { db } from "../config/db.js";
 
 export const getAllNarratives = async (req, res) => {
@@ -85,7 +86,7 @@ export const getAllNarratives = async (req, res) => {
       currentPage: page,
     });
   } catch (error) {
-    console.error("Get all narratives query failure:", error);
+    reportError("Get all narratives query failure:", error);
     return res.status(500).json({
       success: false,
       error: "Database query failed to get narratives.",
@@ -299,7 +300,7 @@ export const getSearchedStudentNarratives = async (req, res) => {
       currentPage: page,
     });
   } catch (error) {
-    console.error("Get searched user narratives query failure:", error);
+    reportError("Get searched user narratives query failure:", error);
     return res.status(500).json({
       success: false,
       error: "Database query failed to get daily narrative logs.",
@@ -331,7 +332,7 @@ export const getInternshipRecordNarratives = async (req, res) => {
   } catch (error) {
     if (error.status)
       return res.status(error.status).json({ error: error.message });
-    console.error("Get internship record narratives error:", error);
+    reportError("Get internship record narratives error:", error);
     res.status(500).json({ error: "Failed to load narratives." });
   } finally {
     if (connection) connection.release();

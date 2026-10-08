@@ -1,3 +1,4 @@
+import { reportError } from "../config/errorTracking.js";
 import { invalidateEvaluationHistoryCache } from "../config/evaluationHistoryCache.js";
 import { invalidateNotificationsCache } from "../config/notificationsCache.js";
 import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
@@ -271,7 +272,7 @@ export const getPastStudentEvaluations = async (req, res) => {
       data: evaluationsList,
     });
   } catch (error) {
-    console.error("Get all student evaluations error:", error);
+    reportError("Get all student evaluations error:", error);
     return res.status(500).json({
       success: false,
       error: "Failed to compile historical evaluation records.",
@@ -442,7 +443,7 @@ export const createStudentEvaluation = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error(
+      reportError(
         "Activity log insert failed (student evaluation submitted):",
         logError,
       );
@@ -627,7 +628,7 @@ export const deleteStudentEvaluation = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error(
+      reportError(
         "Activity log insert failed (student evaluation deleted):",
         logError,
       );
@@ -690,7 +691,7 @@ export const deleteStudentEvaluation = async (req, res) => {
       } catch (insertionError) {
         // Immediately abort everything if any single notification fails to generate safely
         await connection.rollback();
-        console.error(
+        reportError(
           `Notification dispatch guard triggered:`,
           insertionError.message,
         );
@@ -720,7 +721,7 @@ export const deleteStudentEvaluation = async (req, res) => {
           link_uuid: evaluationId,
         });
       } catch (socketError) {
-        console.error("Evaluation deletion notification delivery failed:", socketError);
+        reportError("Evaluation deletion notification delivery failed:", socketError);
       }
     }
 
@@ -731,7 +732,7 @@ export const deleteStudentEvaluation = async (req, res) => {
     });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Delete student evaluation error:", error);
+    reportError("Delete student evaluation error:", error);
     return res.status(500).json({
       success: false,
       error: "Database transaction validation failed.",
@@ -826,7 +827,7 @@ export const respondToStudentEvaluation = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error(
+      reportError(
         "Activity log insert failed (student evaluation response):",
         logError,
       );
@@ -846,7 +847,7 @@ export const respondToStudentEvaluation = async (req, res) => {
     res.status(200).json({ success: true, message, status: newStatus });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Respond to student evaluation error:", error);
+    reportError("Respond to student evaluation error:", error);
     res.status(500).json({
       success: false,
       error: "Database transaction validation failed.",
@@ -928,7 +929,7 @@ export const restoreDisputedEvaluation = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error(
+      reportError(
         "Activity log insert failed (student evaluation restored):",
         logError,
       );
@@ -947,7 +948,7 @@ export const restoreDisputedEvaluation = async (req, res) => {
     });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Restore disputed evaluation error:", error);
+    reportError("Restore disputed evaluation error:", error);
     res.status(500).json({
       success: false,
       error: "Database transaction validation failed.",
@@ -1032,7 +1033,7 @@ export const reviewDisputedEvaluation = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error(
+      reportError(
         "Activity log insert failed (student evaluation reviewed):",
         logError,
       );
@@ -1049,7 +1050,7 @@ export const reviewDisputedEvaluation = async (req, res) => {
     });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Review disputed evaluation error:", error);
+    reportError("Review disputed evaluation error:", error);
     res.status(500).json({
       success: false,
       error: "Database transaction validation failed.",
@@ -1161,7 +1162,7 @@ export const getDisputedStudentEvaluations = async (req, res) => {
       data: evaluationsList,
     });
   } catch (error) {
-    console.error("Get disputed student evaluations error:", error);
+    reportError("Get disputed student evaluations error:", error);
     return res.status(500).json({
       success: false,
       error: "Failed to compile disputed evaluation records.",
@@ -1311,7 +1312,7 @@ export const getAllStudentEvaluations = async (req, res) => {
       data: combined,
     });
   } catch (error) {
-    console.error("Get all student evaluations error:", error);
+    reportError("Get all student evaluations error:", error);
     return res.status(500).json({
       success: false,
       error: "Failed to compile evaluation history.",
@@ -1399,7 +1400,7 @@ export const getStudentEvaluationForPrint = async (req, res) => {
       })),
     });
   } catch (error) {
-    console.error("Get student evaluation for print error:", error);
+    reportError("Get student evaluation for print error:", error);
     res.status(500).json({ error: "Failed to load evaluation." });
   } finally {
     if (connection) connection.release();

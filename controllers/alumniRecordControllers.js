@@ -1,3 +1,4 @@
+import { reportError } from "../config/errorTracking.js";
 import { invalidateAlumniCache } from "../config/alumniCache.js";
 import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
 import { db } from "../config/db.js";
@@ -112,7 +113,7 @@ export const addAlumniInternshipRecord = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error(
+      reportError(
         "Activity log insert failed (alumni record created):",
         logError,
       );
@@ -126,7 +127,7 @@ export const addAlumniInternshipRecord = async (req, res) => {
     res.status(201).json({ success: true, id: recordId });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Add alumni internship record error:", error);
+    reportError("Add alumni internship record error:", error);
     res.status(500).json({ error: "Failed to save alumni record." });
   } finally {
     if (connection) connection.release();
@@ -253,7 +254,7 @@ export const updateAlumniInternshipRecord = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error(
+      reportError(
         "Activity log insert failed (alumni record updated):",
         logError,
       );
@@ -271,7 +272,7 @@ export const updateAlumniInternshipRecord = async (req, res) => {
     });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Update alumni internship record error:", error);
+    reportError("Update alumni internship record error:", error);
     res.status(500).json({ error: "Failed to update alumni record." });
   } finally {
     if (connection) connection.release();
@@ -345,7 +346,7 @@ export const deleteAlumniInternshipRecord = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error(
+      reportError(
         "Activity log insert failed (alumni record deleted):",
         logError,
       );
@@ -359,7 +360,7 @@ export const deleteAlumniInternshipRecord = async (req, res) => {
     res.status(200).json({ success: true, message: "Alumni record deleted." });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Delete alumni internship record error:", error);
+    reportError("Delete alumni internship record error:", error);
     res.status(500).json({ error: "Failed to delete alumni record." });
   } finally {
     if (connection) connection.release();
@@ -499,7 +500,7 @@ export const getAlumniInternships = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Get alumni internships error:", error);
+    reportError("Get alumni internships error:", error);
     res.status(500).json({ error: "Failed to load alumni internships." });
   } finally {
     if (connection) connection.release();
@@ -567,7 +568,7 @@ export const getCompanyDirectory = async (req, res) => {
 
     res.status(200).json(companies);
   } catch (error) {
-    console.error("Get company directory error:", error);
+    reportError("Get company directory error:", error);
     res.status(500).json({ error: "Failed to load company directory." });
   } finally {
     if (connection) connection.release();

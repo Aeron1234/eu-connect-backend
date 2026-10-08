@@ -1,3 +1,4 @@
+import { reportError } from "../config/errorTracking.js";
 import { invalidateEvaluationHistoryCache } from "../config/evaluationHistoryCache.js";
 import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
 import { db } from "../config/db.js";
@@ -155,7 +156,7 @@ export const getPendingStudentEvaluations = async (req, res) => {
       data: evaluationsList,
     });
   } catch (error) {
-    console.error("Get pending student evaluations error:", error);
+    reportError("Get pending student evaluations error:", error);
     return res.status(500).json({
       success: false,
       error: "Failed to compile pending evaluation records.",
@@ -286,7 +287,7 @@ export const createEmployerEvaluation = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error(
+      reportError(
         "Activity log insert failed (employer evaluation):",
         logError,
       );
@@ -304,7 +305,7 @@ export const createEmployerEvaluation = async (req, res) => {
     });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Create employer evaluation error:", error);
+    reportError("Create employer evaluation error:", error);
     res.status(500).json({
       success: false,
       error: "Failed to submit supervisor evaluation.",
@@ -388,7 +389,7 @@ export const getStudentSubmittedEvaluations = async (req, res) => {
 
     res.status(200).json(records);
   } catch (error) {
-    console.error("Get student submitted evaluations error:", error);
+    reportError("Get student submitted evaluations error:", error);
     res
       .status(500)
       .json({ error: "Failed to load your submitted evaluations." });

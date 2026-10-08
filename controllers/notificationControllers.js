@@ -1,3 +1,4 @@
+import { reportError } from "../config/errorTracking.js";
 import { invalidateNotificationsCache } from "../config/notificationsCache.js";
 import { db } from "../config/db.js";
 
@@ -15,7 +16,7 @@ export const getUnreadNotificationCount = async (req, res) => {
     );
     return res.status(200).json({ unreadCount: row.unread_count });
   } catch (error) {
-    console.error("Get unread notification count error:", error);
+    reportError("Get unread notification count error:", error);
     return res.status(500).json({ error: "Database query failed", success: false });
   }
 };
@@ -117,7 +118,7 @@ export const getAllNotifications = async (req, res) => {
       scope,
     });
   } catch (error) {
-    console.error("Get all notifications error:", error);
+    reportError("Get all notifications error:", error);
     res.status(500).json({ error: "Database query failed", success: false });
   } finally {
     if (connection) connection.release();
@@ -213,7 +214,7 @@ export const deleteNotification = async (req, res) => {
       message: "Notification deleted.",
     });
   } catch (error) {
-    console.error("Delete notification error:", error);
+    reportError("Delete notification error:", error);
     res.status(500).json({ error: "Database query failed", success: false });
   } finally {
     if (connection) connection.release();

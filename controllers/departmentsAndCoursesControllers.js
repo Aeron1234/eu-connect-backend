@@ -1,3 +1,4 @@
+import { reportError } from "../config/errorTracking.js";
 import { invalidateDashboardCache } from "../config/dashboardCache.js";
 import { db } from "../config/db.js";
 import { invalidateRouteCache } from "../config/cache.js";
@@ -50,7 +51,7 @@ export const addDepartment = async (req, res) => {
     res.status(201).json({ success: true, department: rows[0] });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Add department error:", error);
+    reportError("Add department error:", error);
     res.status(500).json({ error: "Failed to add department." });
   } finally {
     if (connection) connection.release();
@@ -109,7 +110,7 @@ export const addCourse = async (req, res) => {
     res.status(201).json({ success: true, course: rows[0] });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Add course error:", error);
+    reportError("Add course error:", error);
     res.status(500).json({ error: "Failed to add course." });
   } finally {
     if (connection) connection.release();
@@ -119,12 +120,15 @@ export const addCourse = async (req, res) => {
 function createLookupTableEndpoints(tableName, label) {
   const getActive = async (req, res) => {
     try {
+      const includeInactive =
+        req.verifiedUser?.role === "admin" &&
+        req.query?.includeInactive === "true";
       const [rows] = await db.execute(
-        `SELECT * FROM ${tableName} WHERE is_active = 1`,
+        `SELECT * FROM ${tableName}${includeInactive ? "" : " WHERE is_active = 1"}`,
       );
       res.status(200).json(rows);
     } catch (error) {
-      console.error(`Get ${tableName} error:`, error);
+      reportError(`Get ${tableName} error:`, error);
       res.status(500).json({ error: "Database query failed", success: false });
     }
   };
@@ -168,7 +172,7 @@ function createLookupTableEndpoints(tableName, label) {
       });
     } catch (error) {
       if (connection) await connection.rollback();
-      console.error(`Set ${tableName} active status error:`, error);
+      reportError(`Set ${tableName} active status error:`, error);
       res.status(500).json({ error: "Database query failed", success: false });
     } finally {
       if (connection) connection.release();

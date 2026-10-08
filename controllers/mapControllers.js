@@ -1,3 +1,4 @@
+import { reportError } from "../config/errorTracking.js";
 import { db } from "../config/db.js";
 
 export const getStudentMap = async (req, res) => {
@@ -94,7 +95,7 @@ export const getStudentMap = async (req, res) => {
 
     res.status(200).json({ companies, availableRegions });
   } catch (error) {
-    console.error("Get student map error:", error);
+    reportError("Get student map error:", error);
     res.status(500).json({ error: "Failed to load student map data." });
   } finally {
     if (connection) connection.release();

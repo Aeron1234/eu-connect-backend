@@ -1,3 +1,4 @@
+import { reportError } from "../config/errorTracking.js";
 //////////////////////////////////////
 //LocationIQ API
 //////////////////////////////////////
@@ -28,7 +29,7 @@ export const getLocationApi = async (req, res) => {
 
     res.status(200).json(data);
   } catch (error) {
-    console.error("Location Controller Error:", error.message);
+    reportError("Location Controller Error:", error.message);
     res.status(500).json({
       error: "Location fetching failed",
       success: false,

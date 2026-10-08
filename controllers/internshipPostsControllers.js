@@ -1,3 +1,4 @@
+import { reportError } from "../config/errorTracking.js";
 import { invalidatePostingsCache, invalidatePostingFavoritesCache } from "../config/postingsCache.js";
 import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
 import { db } from "../config/db.js";
@@ -155,7 +156,7 @@ export const getInternshipPostings = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Get internship postings error:", error);
+    reportError("Get internship postings error:", error);
     return res.status(500).json({
       success: false,
       error: "Database query failed to get internship postings.",
@@ -296,7 +297,7 @@ export const createInternshipPosting = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error("Activity log insert failed (posting created):", logError);
+      reportError("Activity log insert failed (posting created):", logError);
     }
 
     await connection.commit();
@@ -311,7 +312,7 @@ export const createInternshipPosting = async (req, res) => {
     });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Create internship posting error:", error);
+    reportError("Create internship posting error:", error);
     return res.status(500).json({ error: "Server failed to create posting." });
   } finally {
     if (connection) connection.release();
@@ -518,7 +519,7 @@ export const updateInternshipPosting = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error("Activity log insert failed (posting updated):", logError);
+      reportError("Activity log insert failed (posting updated):", logError);
     }
 
     await connection.commit();
@@ -543,7 +544,7 @@ export const updateInternshipPosting = async (req, res) => {
     });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Update internship posting error:", error);
+    reportError("Update internship posting error:", error);
     return res.status(500).json({ error: "Failed to update posting." });
   } finally {
     if (connection) connection.release();
@@ -611,7 +612,7 @@ export const deleteInternshipPosting = async (req, res) => {
         ],
       );
     } catch (logError) {
-      console.error("Activity log insert failed (posting deleted):", logError);
+      reportError("Activity log insert failed (posting deleted):", logError);
     }
 
     await connection.commit();
@@ -625,7 +626,7 @@ export const deleteInternshipPosting = async (req, res) => {
     });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Delete internship posting error:", error);
+    reportError("Delete internship posting error:", error);
     return res.status(500).json({ error: "Failed to delete posting." });
   } finally {
     if (connection) connection.release();
@@ -706,7 +707,7 @@ export const toggleInternshipFavorite = async (req, res) => {
     });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.error("Toggle internship favorite error:", error);
+    reportError("Toggle internship favorite error:", error);
     return res.status(500).json({ error: "Failed to update favorite status." });
   } finally {
     if (connection) connection.release();
