@@ -1437,10 +1437,39 @@ export const getInternshipRecordDtr = async (req, res) => {
   try {
     const { id: requesterId, role } = req.verifiedUser;
     const { internshipId } = req.params;
+    const paginated = req.query.page !== undefined;
+    const page = Number(req.query.page);
+    if (paginated && (!Number.isSafeInteger(page) || page < 1 || page > 1000000)) {
+      return res.status(400).json({ error: "Invalid DTR page." });
+    }
 
     connection = await db.getConnection();
     await verifyRecordAccess(connection, internshipId, requesterId, role);
     if (attendanceHistoryCacheHit(req, res)) return;
+
+    if (paginated) {
+      const pageSize = 5;
+      const [[countRow]] = await connection.execute(
+        `SELECT COUNT(*) AS total FROM daily_time_records WHERE internship_id = ?`,
+        [internshipId],
+      );
+      const total = Number(countRow?.total) || 0;
+      const [rows] = await connection.execute(
+        `SELECT id, total_hours, clock_in, clock_out, lat_in, lon_in, lat_out, lon_out,
+            status, flagged, flag_reason, auto_closed, created_at
+         FROM daily_time_records
+         WHERE internship_id = ?
+         ORDER BY clock_in DESC, id DESC
+         LIMIT ? OFFSET ?`,
+        [internshipId, pageSize, (page - 1) * pageSize],
+      );
+      return res.status(200).json({
+        dtrs: rows,
+        page,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      });
+    }
 
     const [rows] = await connection.execute(
       `SELECT id, total_hours, clock_in, clock_out, lat_in, lon_in, lat_out, lon_out,

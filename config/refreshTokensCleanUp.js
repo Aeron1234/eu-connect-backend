@@ -1,9 +1,12 @@
-// jobs/refreshTokenCleanup.js
-import { db } from "../config/db.js"; // adjust path to your actual db module
+import { db } from "./db.js";
 
 const REVOKED_RETENTION_DAYS =
   process.env.REFRESH_TOKEN_REVOKED_RETENTION_DAYS || 1;
-const BATCH_SIZE = process.env.REFRESH_TOKEN_CLEANUP_BATCH_SIZE || 1000;
+const configuredBatchSize = Number.parseInt(
+  process.env.REFRESH_TOKEN_CLEANUP_BATCH_SIZE || "1000",
+  10,
+);
+const BATCH_SIZE = configuredBatchSize > 0 ? configuredBatchSize : 1000;
 
 export const refreshTokensCleanUp = async () => {
   let connection;
@@ -15,7 +18,7 @@ export const refreshTokensCleanUp = async () => {
     // fully expired, or revoked long enough ago that the grace-period
     // check in the refresh controller would never need them.
     const [staleRecords] = await connection.execute(
-      `SELECT id FROM refresh_tokens
+      `SELECT jti FROM refresh_tokens
        WHERE expires_at < NOW()
           OR (revoked_at IS NOT NULL AND revoked_at < DATE_SUB(NOW(), INTERVAL ? DAY))
        LIMIT 5000`,
@@ -30,13 +33,14 @@ export const refreshTokensCleanUp = async () => {
       return;
     }
 
+    let deletedCount = 0;
     for (let i = 0; i < staleRecords.length; i += BATCH_SIZE) {
       const batch = staleRecords.slice(i, i + BATCH_SIZE);
-      await deleteBatch(batch);
+      deletedCount += await deleteBatch(batch);
     }
 
     console.log(
-      `[refreshTokenCleanup] Deleted ${staleRecords.length} stale token(s).`,
+      `[refreshTokenCleanup] Deleted ${deletedCount} stale token(s).`,
     );
   } catch (error) {
     console.error("[refreshTokenCleanup] Error:", error);
@@ -50,12 +54,14 @@ async function deleteBatch(batch) {
   try {
     connection = await db.getConnection();
 
-    const ids = batch.map((r) => r.id);
+    const jtis = batch.map((record) => record.jti);
 
     // Bulk delete in ONE query instead of N queries
-    await connection.query(`DELETE FROM refresh_tokens WHERE id IN (?)`, [ids]);
-  } catch (error) {
-    console.error("[refreshTokenCleanup] Batch error:", error);
+    const [result] = await connection.query(
+      `DELETE FROM refresh_tokens WHERE jti IN (?)`,
+      [jtis],
+    );
+    return result.affectedRows;
   } finally {
     if (connection) connection.release();
   }

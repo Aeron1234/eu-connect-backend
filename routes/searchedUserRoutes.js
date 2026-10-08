@@ -10,6 +10,7 @@ import {
   mediumLimiter,
   paginationLimiter,
   strictLimiter,
+  uploadLimiter,
 } from "../middleware/rateLimiter.js";
 
 import {
@@ -101,8 +102,8 @@ searchedUserRoutes.post(
   "/searched-user/files/:searchedUserId",
   verifyUser,
   verifyRole(["employer", "admin"]),
+  uploadLimiter,
   upload.single("file"),
-  strictLimiter,
   uploadFileToSearchedStudent,
 );
 

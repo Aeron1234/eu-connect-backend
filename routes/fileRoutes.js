@@ -14,7 +14,7 @@ import {
 import {
   generalLimiter,
   mediumLimiter,
-  strictLimiter,
+  uploadLimiter,
 } from "../middleware/rateLimiter.js";
 
 const fileRoutes = express.Router();
@@ -51,7 +51,7 @@ fileRoutes.post(
   "/internships/files/new",
   verifyUser,
   verifyRole(["student", "admin"]),
-  strictLimiter,
+  uploadLimiter,
   upload.single("file"),
   uploadInternshipFile,
 );

@@ -12,9 +12,20 @@ const authenticatedOrIpKey = (req) => {
   return `ip:${ipKeyGenerator(req.ip)}`;
 };
 
+// Read limits are per route, not shared by every page in the app. Express
+// exposes the matched route pattern here, so IDs and pagination query strings
+// cannot create fresh budgets for the same endpoint.
+const readEndpointKey = (req) => {
+  const identity = authenticatedOrIpKey(req);
+  if (req.method !== "GET" && req.method !== "HEAD") return identity;
+  const routePath = req.route?.path;
+  if (typeof routePath !== "string") return identity;
+  return `${identity}:${req.method}:${req.baseUrl}${routePath}`;
+};
+
 // This one is for general browsing (Announcements, Profiles)
 export const generalLimiter = rateLimit({
-  keyGenerator: authenticatedOrIpKey,
+  keyGenerator: readEndpointKey,
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100,
   message: {
@@ -27,18 +38,18 @@ export const generalLimiter = rateLimit({
 
 // For GET requests that happen frequently via scrolling/pagination
 export const paginationLimiter = rateLimit({
-  keyGenerator: authenticatedOrIpKey,
+  keyGenerator: readEndpointKey,
   windowMs: 5 * 60 * 1000, // Shorter window (5 mins)
   max: 200, // Very high limit
   message: {
     status: 429,
-    error: "Take a breath! You're scrolling a bit too fast.",
+    error: "Too many requests to this page. Please try again in a few minutes.",
   },
   standardHeaders: true,
   legacyHeaders: false,
 });
 
-// This one is for "Heavy" actions (Creating records, Uploading files)
+// Shared budget for other high-cost submissions.
 export const strictLimiter = rateLimit({
   keyGenerator: authenticatedOrIpKey,
   windowMs: 60 * 60 * 1000, // 1 hour
@@ -53,21 +64,42 @@ export const strictLimiter = rateLimit({
 export const mediumLimiter = rateLimit({
   keyGenerator: authenticatedOrIpKey,
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 20, // Slightly higher than 'Create' to allow for small edits/fixes
+  max: 40, // Shared across edits and deletes, with room for a normal session
   message: {
     status: 429,
     error: "Too many changes made. Please wait a moment before trying again.",
   },
 });
 
-// This one is for Security (Login/Register)
+// Preserve the previous 10-per-hour IP budget for unauthenticated actions,
+// while keeping it separate from authenticated submissions.
 export const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
+  windowMs: 60 * 60 * 1000,
+  max: 10,
   message: {
     status: 429,
     error:
-      "Too many login attempts. For security, please try again in 15 minutes.",
+      "Too many authentication attempts. Please try again after an hour.",
+  },
+});
+
+export const uploadLimiter = rateLimit({
+  keyGenerator: authenticatedOrIpKey,
+  windowMs: 60 * 60 * 1000,
+  max: 30,
+  message: {
+    status: 429,
+    error: "Too many file uploads. Please try again after an hour.",
+  },
+});
+
+export const clockInLimiter = rateLimit({
+  keyGenerator: authenticatedOrIpKey,
+  windowMs: 15 * 60 * 1000,
+  max: 15,
+  message: {
+    status: 429,
+    error: "Too many clock-in attempts. Please wait 15 minutes before trying again.",
   },
 });
 

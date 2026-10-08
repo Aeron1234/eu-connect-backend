@@ -17,7 +17,7 @@ import {
   generalLimiter,
   mediumLimiter,
   paginationLimiter,
-  strictLimiter,
+  clockInLimiter,
 } from "../middleware/rateLimiter.js";
 
 const dtrRoutes = express.Router();
@@ -51,7 +51,7 @@ dtrRoutes.post(
   "/dtr/clock-in",
   verifyUser,
   verifyRole(["student"]),
-  strictLimiter,
+  clockInLimiter,
   clockIn,
 );
 

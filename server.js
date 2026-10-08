@@ -35,6 +35,7 @@ import authRoutes from "./routes/authRoutes.js";
 import activityLogRoutes from "./routes/activityLogsRoutes.js";
 import departmentAndCoursesRoutes from "./routes/departmentsAndCoursesRoutes.js";
 import dashboardRoutes from "./routes/dashboardRoutes.js";
+import calendarRoutes from "./routes/calendarRoutes.js";
 import cacheMonitoringRoutes from "./routes/cacheMonitoringRoutes.js";
 import weeklyNarrativeRoutes from "./routes/weeklyNarrativeRoutes.js";
 
@@ -103,6 +104,7 @@ app.use("/eu-connect/api", fileRoutes);
 app.use("/eu-connect/api", notificationRoutes);
 app.use("/eu-connect/api", studentEvaluationRoutes);
 app.use("/eu-connect/api", dashboardRoutes);
+app.use("/eu-connect/api", calendarRoutes);
 app.use("/eu-connect/api", searchHistoryRoutes);
 app.use("/eu-connect/api", searchedUserRoutes);
 app.use("/eu-connect/api", internshipPostingRoutes);
