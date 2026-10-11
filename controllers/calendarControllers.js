@@ -42,7 +42,7 @@ export async function getCalendarMonth(req, res) {
     const departmentId = viewer.department_id ?? -1;
 
     const [announcements] = await db.execute(
-      `SELECT a.id, a.title, a.content, ${dateSql("a.event_date")} AS event_date,
+      `SELECT a.public_id AS id, a.title, a.content, ${dateSql("a.event_date")} AS event_date,
               ac.name AS category
          FROM announcements a
          JOIN announcement_categories ac ON ac.id = a.category_id

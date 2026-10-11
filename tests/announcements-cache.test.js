@@ -17,19 +17,28 @@ const { signAccessToken } = await import("../config/jwt.js");
 const originalExecute = db.execute;
 const originalGetConnection = db.getConnection;
 const base = "/eu-connect/api/announcements/";
+const announcementId = "73cd551e-c61f-4fd8-9628-d69709b77d52";
 let calls, connection, mode, pinned, categoryName, committed, emitted, fixtures, activityLog, announcementWrite;
 beforeEach(() => {
   cache.flushAll(); calls = 0; mode = "success"; pinned = false;
   categoryName = "General"; committed = false; emitted = 0; activityLog = null; announcementWrite = null;
   fixtures = [
-    { id: 1, category: "General", department: null, is_pinned: true, title: "General" },
-    { id: 2, category: "Department", department: 1, is_pinned: false, title: "Dept one" },
-    { id: 3, category: "Department", department: 2, is_pinned: false, title: "Dept two" },
+    { id: 1, public_id: "41038a27-bc63-4506-9c4f-20ffbe88396c", category: "General", department: null, is_pinned: true, title: "General" },
+    { id: 2, public_id: "e531092e-4d22-4e1b-b909-e89d2c6ac3ea", category: "Department", department: 1, is_pinned: false, title: "Dept one" },
+    { id: 3, public_id: "16114ec0-55ef-463a-9f6f-9ad7f7cb9682", category: "Department", department: 2, is_pinned: false, title: "Dept two" },
   ];
   db.execute = async (sql, params = []) => {
     calls++;
     if (mode === "read-error") throw new Error("read unavailable");
     if (sql.includes("SELECT * FROM announcement_categories")) return [mode === "empty" ? [] : [{ id: 1, name: "General" }]];
+    if (sql.includes("LIMIT 1") && (sql.includes("WHERE a.public_id = ?") || sql.includes("WHERE a.id = ?"))) {
+      const [target, role, duplicateRole, department] = params;
+      assert.equal(duplicateRole, role);
+      assert.ok(sql.includes("authorDept.department_id = ?"));
+      const row = fixtures.find((item) => String(sql.includes("WHERE a.id = ?") ? item.id : item.public_id) === String(target));
+      return [row && (row.category !== "Department" || (role !== "employer" && (role === "admin" || row.department === department)))
+        ? [{ ...row, id: row.public_id }] : []];
+    }
     assert.ok(sql.includes("authorDept.department_id = ?"));
     const regular = sql.includes("LIMIT ? OFFSET ?");
     const filters = regular ? params.slice((params.length - 2) / 2, -2) : params;
@@ -65,7 +74,7 @@ beforeEach(() => {
       if (sql.includes("FROM user_profiles")) return [[{ first_name: "Author", last_name: "Name" }]];
       if (sql.includes("SELECT name FROM announcement_categories")) return [mode === "invalid-category" ? [] : [{ name: categoryName }]];
       if (sql.includes("FROM announcements a") && sql.includes("FOR UPDATE")) return [mode === "forbidden" ? [] : [{ category_id: 1, category_name: "General", title: "Old" }]];
-      if (sql.includes("SELECT title FROM announcements")) return [[{ title: "Old" }]];
+      if (sql.includes("SELECT id, title FROM announcements")) return [[{ id: 1, title: "Old" }]];
       if (sql.includes("SELECT a.*")) return [[{ id: 1, title: "New", first_name: "Author", last_name: "Name", category: categoryName }]];
       if (sql.includes("FROM dept_heads_background_info")) return [[{ department_id: 1 }]];
       if (sql.includes("SELECT id, email, username FROM users")) return [[{ id: "author", email: "author@example.test", username: "author" }]];
@@ -90,7 +99,7 @@ function seed() {
 }
 function response() { return { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } }; }
 function request(data = {}) {
-  return { verifiedUser: { id: "author", role: "department_head" }, params: { announcementId: 1 },
+  return { verifiedUser: { id: "author", role: "department_head" }, params: { announcementId },
     body: { category_id: 1, title: "New", content: "Content", is_pinned: pinned, ...data },
     app: { get: () => ({ to: () => ({ emit: () => { assert.ok(committed); assert.equal(cache.has("feed-a"), false); emitted++; } }) }) } };
 }
@@ -116,6 +125,18 @@ test("role, user and department keys preserve announcement visibility on hits", 
   assert.equal((await get("history", "unknown")).status, 403); assert.equal((await get("categories", "student", 1, null)).status, 401);
 });
 
+test("UUID and legacy announcement links load only posts visible to the viewer", async (t) => {
+  const get = await client(t);
+  const uuid = fixtures[1].public_id;
+  assert.equal((await get(uuid, "student", 1)).status, 200);
+  assert.equal((await (await get(uuid, "student", 1)).json()).id, uuid);
+  assert.equal((await get("2", "student", 1)).status, 200);
+  assert.equal((await get(uuid, "student", 2)).status, 404);
+  assert.equal((await get(uuid, "employer", 1)).status, 404);
+  assert.equal((await get(uuid, "admin", null)).status, 200);
+  assert.equal((await get("not-an-id", "student", 1)).status, 400);
+});
+
 test("search/category/page variants remain separate, including pinned and regular data", async (t) => {
   const get = await client(t);
   for (const [path, queries] of [["history", 2], ["history?page=2", 3], ["history?search=Dept", 2], ["history?category=General", 3], ["history?category=Department", 2]]) {
@@ -134,6 +155,21 @@ test("create/edit/delete/pin/unpin clear all feeds after commit and before notif
   assert.equal(emitted, 1);
 });
 
+test("new announcements expose a UUID and store it in recipient notifications", async () => {
+  seed();
+  let notificationRows;
+  const originalQuery = connection.query;
+  connection.query = async (sql, params) => {
+    if (sql.includes("INSERT INTO notifications")) notificationRows = params[0];
+    return originalQuery(sql, params);
+  };
+  const res = response();
+  await announcements.createAnnouncement(request(), res);
+  assert.match(res.body.id, /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i);
+  assert.equal(announcementWrite.params[0], res.body.id);
+  assert.equal(notificationRows[0].at(-1), res.body.id);
+});
+
 test("announcement edits and deletes log the persisted title while keeping the target ID", async () => {
   for (const [handler, expected] of [
     [announcements.updateAnnouncement, 'announcement "New"'],
@@ -143,9 +179,9 @@ test("announcement edits and deletes log the persisted title while keeping the t
     const res = response();
     await handler(request(), res);
     assert.equal(res.statusCode, 200);
-    assert.equal(activityLog[4], "1");
+    assert.equal(activityLog[4], announcementId);
     assert.ok(activityLog[5].includes(expected));
-    assert.ok(!activityLog[5].includes("announcement 1"));
+    assert.ok(!activityLog[5].includes(`announcement ${announcementId}`));
     cache.flushAll();
   }
 });

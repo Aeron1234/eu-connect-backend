@@ -680,6 +680,49 @@ export const setSearchedStudentDtrLocation = async (req, res) => {
   }
 };
 
+export const removeSearchedStudentDtrLocation = async (req, res) => {
+  const { searchedUserId } = req.params;
+  const { internshipId } = req.query;
+  const { id: setterId, role } = req.verifiedUser;
+  if (!searchedUserId || !internshipId) {
+    return res.status(400).json({ error: "Student and internship are required." });
+  }
+  let connection;
+  try {
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+    const [records] = await connection.execute(
+      "SELECT id, employer_id, lat, lon FROM internship_records WHERE id = ? AND user_id = ? AND status = 'ongoing' AND deleted_at IS NULL LIMIT 1 FOR UPDATE",
+      [internshipId, searchedUserId],
+    );
+    if (!records.length) {
+      await connection.rollback();
+      return res.status(404).json({ error: "No ongoing internship found for this student." });
+    }
+    if (role === "employer" && records[0].employer_id !== setterId) {
+      await connection.rollback();
+      return res.status(403).json({ error: "Only this student's accepted supervisor can remove the DTR location." });
+    }
+    await connection.execute("DELETE FROM dtr_locations WHERE internship_id = ?", [internshipId]);
+    await connection.commit();
+    return res.json({ success: true, dtrLocation: {
+      internship_id: internshipId,
+      lat: records[0].lat,
+      lon: records[0].lon,
+      radius_meters: 150,
+      label: "Company address (default)",
+      address: null,
+      updated_at: null,
+    } });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    reportError("Remove DTR location error:", error);
+    return res.status(500).json({ error: "Failed to remove DTR location." });
+  } finally {
+    connection?.release();
+  }
+};
+
 export const getSearchedStudentFiles = async (req, res) => {
   const { searchedUserId } = req.params;
   if (!searchedUserId) {

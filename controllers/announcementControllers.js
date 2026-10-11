@@ -3,6 +3,7 @@ import { invalidateAnnouncementsCache } from "../config/announcementsCache.js";
 import { invalidateNotificationsCache } from "../config/notificationsCache.js";
 import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
 import { db } from "../config/db.js";
+import { randomUUID } from "node:crypto";
 
 function isValidEventDate(value) {
   if (!/^[1-9]\d{3}-\d{2}-\d{2}$/.test(value)) return false;
@@ -76,7 +77,7 @@ export const getAllAnnouncements = async (req, res) => {
     const departmentJoin = `LEFT JOIN dept_heads_background_info authorDept ON authorDept.user_id = a.author_id`;
 
     const pinnedQuery = `
-      SELECT a.id, a.author_id, a.title, a.content,
+      SELECT a.public_id AS id, a.author_id, a.title, a.content,
              DATE_FORMAT(a.event_date, '%Y-%m-%d') AS event_date,
              a.is_pinned, a.created_at, a.updated_at,
              r.role, up.first_name, up.last_name,
@@ -100,7 +101,7 @@ export const getAllAnnouncements = async (req, res) => {
     `;
 
     const regularQuery = `
-      SELECT a.id, a.author_id, a.title, a.content,
+      SELECT a.public_id AS id, a.author_id, a.title, a.content,
              DATE_FORMAT(a.event_date, '%Y-%m-%d') AS event_date,
              a.is_pinned, a.created_at, a.updated_at,
              r.role, up.first_name, up.last_name,
@@ -148,6 +149,46 @@ export const getAllAnnouncements = async (req, res) => {
   } catch (error) {
     reportError("Get all announcements error: ", error);
     res.status(500).json({ error: "Database query failed", success: false });
+  }
+};
+
+// Load one announcement directly so a notification can target a post on any
+// feed page without fetching every preceding page. Keep the feed's department
+// visibility rule here as well; a UUID is not an access token.
+export const getAnnouncementById = async (req, res) => {
+  const { announcementId } = req.params;
+  const isLegacyId = /^[1-9]\d*$/.test(announcementId);
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(announcementId);
+  if (!isLegacyId && !isUuid) {
+    return res.status(400).json({ error: "Invalid announcement ID." });
+  }
+
+  try {
+    const { role } = req.verifiedUser;
+    const departmentId = req.verifiedUser.department_id ?? null;
+    const [rows] = await db.execute(
+      `SELECT a.public_id AS id, a.author_id, a.title, a.content,
+              DATE_FORMAT(a.event_date, '%Y-%m-%d') AS event_date,
+              a.is_pinned, a.created_at, a.updated_at,
+              r.role, up.first_name, up.last_name,
+              ac.id AS category_id, ac.name AS category, ac.color, ac.text_color
+       FROM announcements a
+       JOIN users u ON u.id = a.author_id
+       JOIN roles r ON r.id = u.role_id
+       JOIN user_profiles up ON up.user_id = a.author_id
+       JOIN announcement_categories ac ON ac.id = a.category_id
+       LEFT JOIN dept_heads_background_info authorDept ON authorDept.user_id = a.author_id
+       WHERE ${isLegacyId ? "a.id" : "a.public_id"} = ?
+         AND (ac.name != 'Department'
+              OR (? != 'employer' AND (? = 'admin' OR authorDept.department_id = ?)))
+       LIMIT 1`,
+      [announcementId, role, role, departmentId],
+    );
+    if (!rows.length) return res.status(404).json({ error: "Announcement not found." });
+    return res.json(rows[0]);
+  } catch (error) {
+    reportError("Get announcement by ID error:", error);
+    return res.status(500).json({ error: "Failed to load announcement." });
   }
 };
 
@@ -209,19 +250,18 @@ export const createAnnouncement = async (req, res) => {
       });
     }
 
+    const publicId = randomUUID();
     const [result] = await connection.execute(
       `
-        INSERT INTO announcements (author_id, category_id, title, content, event_date)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO announcements (public_id, author_id, category_id, title, content, event_date)
+        VALUES (?, ?, ?, ?, ?, ?)
         `,
-      [userId, category_id, title, content, eventDate],
+      [publicId, userId, category_id, title, content, eventDate],
     );
 
     if (result.affectedRows === 0) {
       await connection.rollback();
-      return res.status(400).json({
-        error: "Posting annoucement failed.",
-      });
+      return res.status(400).json({ error: "Posting announcement failed." });
     }
 
     // Recipients depend on who posted AND the category:
@@ -288,11 +328,11 @@ export const createAnnouncement = async (req, res) => {
         "announcement",
         "New Announcement",
         `Posted by ${senderName}`,
-        result.insertId,
+        publicId,
       ]);
 
       await connection.query(
-        `INSERT INTO notifications (user_id, sender_id, type, title, message, link) VALUES ?`,
+        `INSERT INTO notifications (user_id, sender_id, type, title, message, link_uuid) VALUES ?`,
         [values],
       );
     }
@@ -305,7 +345,7 @@ export const createAnnouncement = async (req, res) => {
           role,
           "announcement_created",
           "announcements",
-          String(result.insertId),
+          publicId,
           `${senderName} posted an announcement: "${title}".`,
           JSON.stringify({
             category_id,
@@ -334,13 +374,14 @@ export const createAnnouncement = async (req, res) => {
         title: "New Announcement",
         message: `Posted by ${senderName}`,
         type: "announcement",
-        link: result.insertId,
+        link_uuid: publicId,
       });
     });
 
     res.status(201).json({
       message: "Announcement posted successfully!",
       success: true,
+      id: publicId,
     });
   } catch (error) {
     if (connection) await connection.rollback();
@@ -381,7 +422,7 @@ export const updateAnnouncement = async (req, res) => {
       `SELECT a.category_id, ac.name AS category_name, a.title
        FROM announcements a
        JOIN announcement_categories ac ON a.category_id = ac.id
-       WHERE a.id = ? AND a.author_id = ?
+       WHERE a.public_id = ? AND a.author_id = ?
        FOR UPDATE`,
       [announcementId, userId],
     );
@@ -436,7 +477,7 @@ export const updateAnnouncement = async (req, res) => {
          content = COALESCE(?, content), 
          event_date = IF(? = 1, ?, event_date),
          updated_at = CURRENT_TIMESTAMP
-       WHERE id = ? AND author_id = ?`,
+       WHERE public_id = ? AND author_id = ?`,
       [finalCategoryId, title || null, content || null, hasEventDate ? 1 : 0, eventDate, announcementId, userId],
     );
 
@@ -455,7 +496,7 @@ export const updateAnnouncement = async (req, res) => {
        JOIN user_profiles up ON a.author_id = up.user_id
        JOIN users u ON a.author_id = u.id
        JOIN roles r ON u.role_id = r.id
-       WHERE a.id = ?`,
+       WHERE a.public_id = ?`,
       [announcementId],
     );
 
@@ -510,7 +551,7 @@ export const updateAnnouncement = async (req, res) => {
         ]);
 
         await connection.query(
-          `INSERT INTO notifications (user_id, sender_id, type, title, message, link) VALUES ?`,
+          `INSERT INTO notifications (user_id, sender_id, type, title, message, link_uuid) VALUES ?`,
           [values],
         );
       }
@@ -562,7 +603,7 @@ export const updateAnnouncement = async (req, res) => {
           title: "New Announcement",
           message: `Posted by ${senderName}`,
           type: "announcement",
-          link: announcementId,
+          link_uuid: announcementId,
         });
       });
     }
@@ -570,7 +611,7 @@ export const updateAnnouncement = async (req, res) => {
     res.status(200).json({
       message: "Announcement updated successfully!",
       success: true,
-      data: updatedData[0],
+      data: { ...updatedData[0], id: announcementId },
     });
   } catch (error) {
     if (connection) await connection.rollback();
@@ -599,11 +640,13 @@ export const deleteAnnouncement = async (req, res) => {
     // This extra read is only for the audit description. A logging lookup
     // failure must not prevent an otherwise valid deletion.
     let announcementLabel = "an announcement";
+    let legacyId = null;
     try {
       const [existingRows] = await connection.execute(
-        `SELECT title FROM announcements WHERE id = ? AND (author_id = ? OR ? = 'admin') FOR UPDATE`,
+        `SELECT id, title FROM announcements WHERE public_id = ? AND (author_id = ? OR ? = 'admin') FOR UPDATE`,
         [announcementId, userId, role],
       );
+      legacyId = existingRows[0]?.id ?? null;
       if (existingRows[0]?.title) {
         announcementLabel = `announcement "${existingRows[0].title}"`;
       }
@@ -611,7 +654,7 @@ export const deleteAnnouncement = async (req, res) => {
       reportError("Announcement title lookup failed for activity log:", lookupError);
     }
     const [result] = await connection.execute(
-      `DELETE FROM announcements WHERE id = ? AND (author_id = ? OR ? = 'admin')`,
+      `DELETE FROM announcements WHERE public_id = ? AND (author_id = ? OR ? = 'admin')`,
       [announcementId, userId, role],
     );
 
@@ -622,9 +665,10 @@ export const deleteAnnouncement = async (req, res) => {
         .json({ error: "Announcement not found or unauthorized." });
     }
 
-    await connection.execute(`DELETE FROM notifications WHERE link = ?`, [
-      announcementId,
-    ]);
+    await connection.execute(
+      `DELETE FROM notifications WHERE type = 'announcement' AND (link_uuid = ? OR link = ?)`,
+      [announcementId, legacyId],
+    );
 
     // Activity log is supplementary — isolated so a logging failure can
     // never roll back or fail the actual deletion.
@@ -689,7 +733,7 @@ export const togglePinAnnouncement = async (req, res) => {
     const [result] = await connection.execute(
       `UPDATE announcements 
        SET is_pinned = ? 
-       WHERE id = ?`,
+       WHERE public_id = ?`,
       [is_pinned, announcementId],
     );
 

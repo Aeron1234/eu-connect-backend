@@ -7,6 +7,7 @@ import {
   createAnnouncement,
   deleteAnnouncement,
   getAllAnnouncements,
+  getAnnouncementById,
   getAnnouncementCategories,
   togglePinAnnouncement,
   updateAnnouncement,
@@ -37,6 +38,14 @@ announcementRoutes.get(
   paginationLimiter,
   cacheRoute(30),
   getAllAnnouncements,
+);
+
+announcementRoutes.get(
+  "/announcements/:announcementId",
+  verifyUser,
+  verifyRole(["student", "employer", "department_head", "admin"]),
+  generalLimiter,
+  getAnnouncementById,
 );
 
 announcementRoutes.post(

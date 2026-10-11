@@ -12,6 +12,8 @@ import {
   activateDepartment,
   addDepartment,
   addCourse,
+  updateDepartment,
+  updateCourse,
 } from "../controllers/departmentsAndCoursesControllers.js";
 
 const departmentAndCoursesRoutes = express.Router();
@@ -23,6 +25,9 @@ departmentAndCoursesRoutes.post(
   generalLimiter,
   addDepartment,
 );
+
+departmentAndCoursesRoutes.patch("/departments/:id", verifyUser, verifyRole(["admin"]), generalLimiter, updateDepartment);
+departmentAndCoursesRoutes.patch("/courses/:id", verifyUser, verifyRole(["admin"]), generalLimiter, updateCourse);
 
 departmentAndCoursesRoutes.post(
   "/courses",

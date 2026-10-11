@@ -18,6 +18,7 @@ import {
   getSearchedStudentDTRs,
   getSearchedStudentFiles,
   setSearchedStudentDtrLocation,
+  removeSearchedStudentDtrLocation,
   getSearchedStudentDtrLocation,
   uploadFileToSearchedStudent,
   deleteSearchedStudentFile,
@@ -62,6 +63,14 @@ searchedUserRoutes.put(
   upload.none(),
   strictLimiter,
   setSearchedStudentDtrLocation,
+);
+
+searchedUserRoutes.delete(
+  "/searched-user/set-dtr-location/:searchedUserId",
+  verifyUser,
+  verifyRole(["employer", "department_head", "admin"]),
+  strictLimiter,
+  removeSearchedStudentDtrLocation,
 );
 
 searchedUserRoutes.get(

@@ -117,6 +117,82 @@ export const addCourse = async (req, res) => {
   }
 };
 
+export const updateDepartment = async (req, res) => {
+  const id = Number(req.params.id);
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
+  if (!Number.isSafeInteger(id) || id <= 0 || !name || !code) {
+    return res.status(400).json({ error: "A valid department, name, and code are required." });
+  }
+  let connection;
+  try {
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+    const [rows] = await connection.execute("SELECT id FROM departments WHERE id = ? FOR UPDATE", [id]);
+    if (!rows.length) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Department not found." });
+    }
+    const [duplicates] = await connection.execute("SELECT id FROM departments WHERE code = ? AND id <> ?", [code, id]);
+    if (duplicates.length) {
+      await connection.rollback();
+      return res.status(409).json({ error: `A department with code "${code}" already exists.` });
+    }
+    await connection.execute("UPDATE departments SET name = ?, code = ? WHERE id = ?", [name, code, id]);
+    await connection.commit();
+    invalidateLookupCache("departments");
+    const [updated] = await connection.execute("SELECT * FROM departments WHERE id = ?", [id]);
+    return res.json({ success: true, department: updated[0] });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    reportError("Update department error:", error);
+    return res.status(500).json({ error: "Failed to update department." });
+  } finally {
+    connection?.release();
+  }
+};
+
+export const updateCourse = async (req, res) => {
+  const id = Number(req.params.id);
+  const name = typeof req.body?.course_name === "string" ? req.body.course_name.trim() : "";
+  const code = typeof req.body?.short_name === "string" ? req.body.short_name.trim() : "";
+  const departmentId = Number(req.body?.department_id);
+  if (!Number.isSafeInteger(id) || id <= 0 || !name || !code || !Number.isSafeInteger(departmentId) || departmentId <= 0) {
+    return res.status(400).json({ error: "A valid course, name, code, and department are required." });
+  }
+  let connection;
+  try {
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+    const [rows] = await connection.execute("SELECT id FROM courses WHERE id = ? FOR UPDATE", [id]);
+    if (!rows.length) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Course not found." });
+    }
+    const [departments] = await connection.execute("SELECT id FROM departments WHERE id = ?", [departmentId]);
+    if (!departments.length) {
+      await connection.rollback();
+      return res.status(400).json({ error: "Selected department does not exist." });
+    }
+    const [duplicates] = await connection.execute("SELECT id FROM courses WHERE short_name = ? AND id <> ?", [code, id]);
+    if (duplicates.length) {
+      await connection.rollback();
+      return res.status(409).json({ error: `A course with code "${code}" already exists.` });
+    }
+    await connection.execute("UPDATE courses SET course_name = ?, short_name = ?, department_id = ? WHERE id = ?", [name, code, departmentId, id]);
+    await connection.commit();
+    invalidateLookupCache("courses");
+    const [updated] = await connection.execute("SELECT * FROM courses WHERE id = ?", [id]);
+    return res.json({ success: true, course: updated[0] });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    reportError("Update course error:", error);
+    return res.status(500).json({ error: "Failed to update course." });
+  } finally {
+    connection?.release();
+  }
+};
+
 function createLookupTableEndpoints(tableName, label) {
   const getActive = async (req, res) => {
     try {

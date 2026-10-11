@@ -9,6 +9,7 @@ import {
   getUnreadNotificationCount,
   markAsAllReadNotification,
   markAsReadNotification,
+  openAnnouncementNotification,
 } from "../controllers/notificationControllers.js";
 import { generalLimiter, paginationLimiter } from "../middleware/rateLimiter.js";
 
@@ -38,6 +39,14 @@ notificationRoutes.patch(
   verifyRole(["student", "employer", "department_head", "admin"]),
   generalLimiter,
   markAsReadNotification,
+);
+
+notificationRoutes.post(
+  "/notifications/:notificationId/open-announcement",
+  verifyUser,
+  verifyRole(["student", "employer", "department_head", "admin"]),
+  generalLimiter,
+  openAnnouncementNotification,
 );
 
 notificationRoutes.patch(

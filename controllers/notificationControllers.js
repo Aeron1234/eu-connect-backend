@@ -124,6 +124,103 @@ export const getAllNotifications = async (req, res) => {
     if (connection) connection.release();
   }
 };
+
+// Resolve an announcement notification at click time. A cached inbox can still
+// show a notification after its announcement and DB row have been removed.
+export const openAnnouncementNotification = async (req, res) => {
+  const notificationId = req.params.notificationId;
+  if (!/^[1-9]\d*$/.test(notificationId)) {
+    return res.status(400).json({ error: "Invalid notification ID." });
+  }
+
+  const { id: userId, role, department_id: viewerDepartmentId } = req.verifiedUser;
+  let connection;
+  try {
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    const [[notification]] = await connection.execute(
+      `SELECT link, link_uuid, is_read
+         FROM notifications
+        WHERE id = ? AND user_id = ? AND type = 'announcement'
+        FOR UPDATE`,
+      [notificationId, userId],
+    );
+    if (!notification) {
+      await connection.rollback();
+      return res.status(410).json({
+        success: false,
+        state: "gone",
+        error: "This notification is no longer available.",
+      });
+    }
+
+    const uuid = notification.link_uuid;
+    const legacyId = notification.link;
+    const hasUuid = typeof uuid === "string" && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(uuid);
+    const hasLegacyId = /^[1-9]\d*$/.test(String(legacyId ?? ""));
+    let announcement = null;
+    if (hasUuid || hasLegacyId) {
+      const [rows] = await connection.execute(
+        `SELECT a.public_id, ac.name AS category,
+                authorDept.department_id AS author_department_id
+           FROM announcements a
+           LEFT JOIN announcement_categories ac ON ac.id = a.category_id
+           LEFT JOIN dept_heads_background_info authorDept ON authorDept.user_id = a.author_id
+          WHERE ${hasUuid ? "a.public_id" : "a.id"} = ?
+          LIMIT 1`,
+        [hasUuid ? uuid : legacyId],
+      );
+      announcement = rows[0] ?? null;
+    }
+
+    if (!announcement) {
+      await connection.execute(
+        "DELETE FROM notifications WHERE id = ? AND user_id = ?",
+        [notificationId, userId],
+      );
+      await connection.commit();
+      invalidateNotificationsCache(userId);
+      return res.status(410).json({
+        success: false,
+        state: "deleted",
+        error: "This announcement has been deleted. Its notification was removed.",
+      });
+    }
+
+    const canSeeDepartmentPost = role === "admin" || (
+      role !== "employer" &&
+      viewerDepartmentId != null &&
+      String(announcement.author_department_id) === String(viewerDepartmentId)
+    );
+    if (!announcement.category ||
+        (announcement.category === "Department" && !canSeeDepartmentPost)) {
+      await connection.rollback();
+      return res.status(403).json({
+        success: false,
+        state: "unavailable",
+        error: "This announcement is no longer available to your account.",
+      });
+    }
+
+    if (!notification.is_read) {
+      await connection.execute(
+        "UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?",
+        [notificationId, userId],
+      );
+    }
+    await connection.commit();
+    if (!notification.is_read) invalidateNotificationsCache(userId);
+    return res.json({ success: true, announcementId: announcement.public_id });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    reportError("Open announcement notification error:", error);
+    return res.status(500).json({ error: "Could not open this notification." });
+  } finally {
+    connection?.release();
+  }
+};
+
 export const markAsReadNotification = async (req, res) => {
   try {
     const { id: userId } = req.verifiedUser;
