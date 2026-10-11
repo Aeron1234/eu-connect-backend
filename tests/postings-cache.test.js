@@ -30,7 +30,7 @@ beforeEach(() => {
       if (sql.includes("INSERT INTO activity_logs")) activityLog = params;
       if (mode === "db-error") throw new Error("offline");
       if (sql.trim().startsWith("SELECT COUNT(*) AS total")) return [[{ total: mode === "empty" ? 0 : 1 }]];
-      if (sql.includes("SELECT id FROM courses")) return [[{ id: 1 }]];
+      if (sql.includes("FROM courses WHERE id IN")) return [[{ id: 1, course_name: "Computing" }]];
       if (sql.includes("SELECT id FROM internship_favorites")) return [existingFavorite ? [{ id: "favorite" }] : []];
       if (sql.includes("JOIN courses")) return [[{ posting_id: "p", course_id: 1, course_name: "Computing", short_name: "CS" }]];
       if (sql.includes("AS favorite_for_requester")) return [mode === "empty" ? [] : [{ id: "p", employer_id: "owner", deleted_at: null, company_name: "Company", position: "Intern", favorite_for_requester: params[0] === "alice" ? 1 : 0, total_postings: 1 }]];
@@ -145,6 +145,43 @@ test("posting edits and moderation deletes log the position, with IDs in structu
     if (role === "admin") assert.equal(JSON.parse(activityLog[6]).employer_id, "owner");
     cache.flushAll();
   }
+});
+
+test("creating a posting logs its title and submitted details", async () => {
+  seed();
+  const posting = {
+    ...body,
+    position: "Software Developer Intern",
+    location: "Lucena City",
+    duration_hours: 486,
+    requirements: "Basic programming skills",
+    contact_name: "HR Department",
+    contact_phone: "09123456789",
+    contact_website: "company.ph",
+  };
+  const res = response();
+  await posts.createInternshipPosting(request("owner", "employer", posting), res);
+
+  assert.equal(res.statusCode, 201);
+  assert.equal(activityLog[2], "internship_posting_created");
+  assert.equal(activityLog[4], res.body.id);
+  assert.match(activityLog[5], /internship post "Software Developer Intern" at Company/);
+  assert.deepEqual(JSON.parse(activityLog[6]), {
+    company_name: "Company",
+    position: "Software Developer Intern",
+    vacancies: 1,
+    location: "Lucena City",
+    work_type: "remote",
+    duration_hours: 486,
+    description: "Internship",
+    requirements: "Basic programming skills",
+    contact_name: "HR Department",
+    contact_email: "test@example.com",
+    contact_phone: "09123456789",
+    contact_website: "company.ph",
+    course_ids: [1],
+    eligible_courses: ["Computing"],
+  });
 });
 
 test("adding/removing favorites clears only that student's posting variants", async () => {

@@ -226,7 +226,7 @@ export const createInternshipPosting = async (req, res) => {
     // client-sent ids blindly into a FK insert
     const coursePlaceholders = course_ids.map(() => "?").join(",");
     const [validCourses] = await connection.execute(
-      `SELECT id FROM courses WHERE id IN (${coursePlaceholders})`,
+      `SELECT id, course_name, short_name FROM courses WHERE id IN (${coursePlaceholders})`,
       course_ids,
     );
 
@@ -236,6 +236,10 @@ export const createInternshipPosting = async (req, res) => {
         .status(400)
         .json({ error: "One or more selected courses are invalid." });
     }
+    const courseNamesById = new Map(validCourses.map((course) => [
+      String(course.id),
+      course.course_name || course.short_name || String(course.id),
+    ]));
 
     const postingId = newUUID();
 
@@ -286,13 +290,24 @@ export const createInternshipPosting = async (req, res) => {
           "internship_posting_created",
           "internship_postings",
           postingId,
-          `Employer created a posting for ${position} at ${company_name}.`,
+          `Employer created internship post "${position}" at ${company_name}.`,
           JSON.stringify({
             company_name,
             position,
             vacancies: vacancyCount,
+            location,
             work_type,
+            duration_hours: duration_hours || null,
+            description,
+            requirements: requirements || null,
+            contact_name: contact_name || null,
+            contact_email,
+            contact_phone: contact_phone || null,
+            contact_website: contact_website || null,
             course_ids,
+            eligible_courses: course_ids.map((courseId) =>
+              courseNamesById.get(String(courseId)),
+            ),
           }),
         ],
       );
