@@ -26,6 +26,7 @@ beforeEach(() => {
       calls++;
       if(fail==='read' || (fail==='after-commit' && committed)) throw Error('read offline');
       if(!sql.trim().startsWith('SELECT')) return [{affectedRows:1}];
+      if(sql.includes('AND id <> ? FOR UPDATE')) return [[]];
       if(sql.includes('FOR UPDATE')) return [existing?[{id:'r',degree_program:'Computing',academic_year:'2026-2027',status:'draft'}]:[]];
       if(sql.includes('AS total_reports')) return [empty?[]:[{id:'r',academic_year:'2026-2027',degree_program:'Computing',status:'draft',total_reports:1}]];
       if(sql.includes('COUNT(') && !sql.includes('AS intern_count')) return [[{total:empty?0:1}]];

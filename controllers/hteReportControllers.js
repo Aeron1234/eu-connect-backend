@@ -612,11 +612,20 @@ export const saveProgramAnnualReport = async (req, res) => {
       await connection.rollback();
       return res.status(404).json({ error: "Draft report not found." });
     }
-    if (draftReportId && (existing[0].status !== "draft" ||
-      existing[0].academic_year !== academicYear ||
-      existing[0].degree_program !== degreeProgram.trim())) {
+    if (draftReportId && existing[0].status !== "draft") {
       await connection.rollback();
-      return res.status(409).json({ error: "Only an unchanged draft can be edited from Reports." });
+      return res.status(409).json({ error: "Only draft reports can be edited from Reports." });
+    }
+    if (draftReportId) {
+      const [duplicate] = await connection.execute(
+        `SELECT id FROM program_annual_reports
+         WHERE academic_year = ? AND degree_program = ? AND id <> ? FOR UPDATE`,
+        [academicYear, degreeProgram.trim(), draftReportId],
+      );
+      if (duplicate.length > 0) {
+        await connection.rollback();
+        return res.status(409).json({ error: "A report already exists for this year and program." });
+      }
     }
     if (!draftReportId && existing.length > 0) {
       await connection.rollback();
@@ -629,10 +638,12 @@ export const saveProgramAnnualReport = async (req, res) => {
       reportId = existing[0].id;
       await connection.execute(
         `UPDATE program_annual_reports 
-         SET course_id = ?, prepared_by = ?, certified_by = ?, status = ?, 
+         SET academic_year = ?, degree_program = ?, course_id = ?, prepared_by = ?, certified_by = ?, status = ?, 
              submitted_at = IF(? = 'submitted', NOW(), submitted_at)
          WHERE id = ?`,
         [
+          academicYear,
+          degreeProgram.trim(),
           courseId || null,
           preparedBy?.trim() || null,
           certifiedBy?.trim() || null,

@@ -116,17 +116,25 @@ test("annual details retain the parent and ordered entries lookup", async () => 
   assert.match(calls[1].sql, /ORDER BY sort_order ASC/);
 });
 
-test("draft edits target their report ID and cannot alter a submitted report", async () => {
+test("draft year and program edits target their report ID without overwriting another report", async () => {
   let state = "draft";
   let updated = false;
+  let duplicateFound = false;
+  let duplicateCheckParams;
+  let updateParams;
   db.getConnection = async () => ({
     release() {}, async beginTransaction() {}, async rollback() {}, async commit() {},
     async query() { return [{ affectedRows: 1 }]; },
-    async execute(sql) {
-      if (sql.includes("FOR UPDATE")) return [[{
+    async execute(sql, params) {
+      if (sql.includes("AND id <> ? FOR UPDATE")) {
+        duplicateCheckParams = params;
+        return [duplicateFound ? [{ id: "r2" }] : []];
+      }
+      if (sql.includes("WHERE id = ? FOR UPDATE")) return [[{
         id: "r1", academic_year: "2026-2027", degree_program: "Computing", status: state,
       }]];
-      if (sql.includes("UPDATE program_annual_reports")) updated = true;
+      if (sql.includes("FOR UPDATE")) return [[{ id: "r1" }]];
+      if (sql.includes("UPDATE program_annual_reports")) { updated = true; updateParams = params; }
       if (sql.includes("SELECT * FROM program_annual_reports")) return [[{ id: "r1", status: "draft" }]];
       if (sql.includes("SELECT issue, solution, recommendation")) return [[{
         issue: "Concern", solution: "Fix", recommendation: "Follow up",
@@ -135,7 +143,7 @@ test("draft edits target their report ID and cannot alter a submitted report", a
     },
   });
   const request = { verifiedUser: { id: "admin", role: "admin" }, body: {
-    reportId: "r1", academicYear: "2026-2027", degreeProgram: "Computing",
+    reportId: "r1", academicYear: "2027-2028", degreeProgram: "Nursing",
     entries: [{ issue: "Concern", solution: "Fix", recommendation: "Follow up" }],
     status: "draft",
   } };
@@ -143,6 +151,8 @@ test("draft edits target their report ID and cannot alter a submitted report", a
   await saveProgramAnnualReport(request, saved);
   assert.equal(saved.statusCode, 200);
   assert.equal(updated, true);
+  assert.deepEqual(duplicateCheckParams, ["2027-2028", "Nursing", "r1"]);
+  assert.deepEqual(updateParams.slice(0, 2), ["2027-2028", "Nursing"]);
   assert.deepEqual(saved.body.report.entries[0], {
     issue: "Concern", solution: "Fix", recommendation: "Follow up",
   });
@@ -155,6 +165,13 @@ test("draft edits target their report ID and cannot alter a submitted report", a
   assert.equal(updated, false);
 
   state = "draft";
+  duplicateFound = true;
+  const conflictingEdit = response();
+  await saveProgramAnnualReport(request, conflictingEdit);
+  assert.equal(conflictingEdit.statusCode, 409);
+  assert.equal(updated, false);
+
+  duplicateFound = false;
   const duplicate = response();
   await saveProgramAnnualReport({ ...request, body: { ...request.body, reportId: undefined } }, duplicate);
   assert.equal(duplicate.statusCode, 409);
