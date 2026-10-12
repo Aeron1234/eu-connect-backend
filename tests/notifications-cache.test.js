@@ -151,7 +151,7 @@ test("cancelled supervisor requests invalidate joined actionable state only afte
 test("new supervisor requests log the company with request and internship IDs kept separately", async () => {
   let activityLog;
   connection.execute = async (sql, params) => {
-    if (sql.includes("FROM internship_records")) return [[{ id: 1, employer_id: "former", company_name: "Accenture" }]];
+    if (sql.includes("FROM internship_records")) return [[{ id: 1, employer_id: null, company_name: "Accenture" }]];
     if (sql.includes("FROM user_profiles")) return [[{ first_name: "Alice", last_name: "Student" }]];
     if (sql.includes("INSERT INTO activity_logs")) activityLog = params;
     return [{ affectedRows: 1 }];

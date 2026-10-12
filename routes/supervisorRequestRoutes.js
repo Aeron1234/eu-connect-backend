@@ -11,6 +11,7 @@ import {
 import {
   cancelSupervisorRequest,
   getSupervisorStatus,
+  removeSupervisor,
   requestSupervisor,
   respondToSupervisorRequest,
 } from "../controllers/supervisorRequestController.js";
@@ -31,6 +32,14 @@ supervisorRequestRoutes.post(
   verifyRole(["student"]),
   generalLimiter,
   requestSupervisor,
+);
+
+supervisorRequestRoutes.delete(
+  "/supervisors/:employerId",
+  verifyUser,
+  verifyRole(["student"]),
+  mediumLimiter,
+  removeSupervisor,
 );
 
 supervisorRequestRoutes.delete(

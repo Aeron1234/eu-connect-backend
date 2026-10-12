@@ -19,15 +19,15 @@ test("student map streams joined rows into the same ordered location and region 
     { id: "i1", company_name: "Acme", company_address: "First", internship_position: "Dev",
       lat: "14.123456", lon: "121.000001", date_started: "start1", date_ended: null,
       total_hours: "100", accumulated_hours: "40", user_id: "u1", region_id: 2,
-      first_name: "Ana", last_name: "Reyes", course_name: "IT", region_name: "Zulu" },
+      first_name: "Ana", last_name: "Reyes", course_name: "Information Technology", course_short_name: "BSIT", region_name: "Zulu" },
     { id: "i2", company_name: " acme ", company_address: "Second", internship_position: "QA",
       lat: "14.123457", lon: "121.000002", date_started: "start2", date_ended: "end2",
       total_hours: "0", accumulated_hours: "8", user_id: "u2", region_id: 2,
-      first_name: "Bo", last_name: "Cruz", course_name: "CS", region_name: "Zulu" },
+      first_name: "Bo", last_name: "Cruz", course_name: "Computer Science", course_short_name: "BSCS", region_name: "Zulu" },
     { id: "i3", company_name: "Beta", company_address: "Third", internship_position: "Ops",
       lat: "15", lon: "122", date_started: "start3", date_ended: null,
       total_hours: "60", accumulated_hours: "30", user_id: "u3", region_id: 1,
-      first_name: "Cy", last_name: "Lim", course_name: "IT", region_name: "Alpha" },
+      first_name: "Cy", last_name: "Lim", course_name: "Information Technology", course_short_name: "BSIT", region_name: "Alpha" },
   ];
   db.getConnection = async () => ({
     release() { releases++; },
@@ -42,6 +42,7 @@ test("student map streams joined rows into the same ordered location and region 
     assert.equal(res.statusCode, 200);
     assert.equal(highWaterMark, 64);
     assert.match(sql, /SELECT sai1\.user_id, sai1\.course_id/);
+    assert.match(sql, /c\.short_name AS course_short_name/);
     assert.doesNotMatch(sql, /SELECT sai1\.\*/);
     assert.match(sql, /WHERE ir\.status = 'ongoing' AND ir\.deleted_at IS NULL/);
     assert.match(sql, /ORDER BY ir\.company_name ASC/);
@@ -49,14 +50,14 @@ test("student map streams joined rows into the same ordered location and region 
       companies: [
         { company_name: "Acme", company_address: "First", lat: "14.123456", lon: "121.000001",
           region_id: 2, region_name: "Zulu", intern_count: 2, interns: [
-            { internship_id: "i1", student_id: "u1", name: "Ana Reyes", position: "Dev", course: "IT",
+            { internship_id: "i1", student_id: "u1", name: "Ana Reyes", position: "Dev", course: "Information Technology", course_short_name: "BSIT",
               percent_complete: 40, date_started: "start1", date_ended: null },
-            { internship_id: "i2", student_id: "u2", name: "Bo Cruz", position: "QA", course: "CS",
+            { internship_id: "i2", student_id: "u2", name: "Bo Cruz", position: "QA", course: "Computer Science", course_short_name: "BSCS",
               percent_complete: 0, date_started: "start2", date_ended: "end2" },
           ] },
         { company_name: "Beta", company_address: "Third", lat: "15", lon: "122",
           region_id: 1, region_name: "Alpha", intern_count: 1, interns: [
-            { internship_id: "i3", student_id: "u3", name: "Cy Lim", position: "Ops", course: "IT",
+            { internship_id: "i3", student_id: "u3", name: "Cy Lim", position: "Ops", course: "Information Technology", course_short_name: "BSIT",
               percent_complete: 50, date_started: "start3", date_ended: null },
           ] },
       ],

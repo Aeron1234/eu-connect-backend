@@ -2,6 +2,7 @@ import { reportError } from "../config/errorTracking.js";
 import { invalidateProfileOverviewCache } from "../config/profileOverviewCache.js";
 import { invalidateNotificationsCache } from "../config/notificationsCache.js";
 import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
+import { invalidateDashboardCache } from "../config/dashboardCache.js";
 import { db } from "../config/db.js";
 import { newUUID } from "../config/helpers.js";
 
@@ -20,8 +21,8 @@ export const getSupervisorStatus = async (req, res) => {
     // 1. Check the student's ongoing internship — is this employer
     // already the accepted supervisor?
     const [internships] = await connection.execute(
-      `SELECT id, employer_id FROM internship_records 
-       WHERE user_id = ? AND status = 'ongoing' LIMIT 1`,
+      `SELECT id, employer_id FROM internship_records
+       WHERE user_id = ? AND status = 'ongoing' AND deleted_at IS NULL LIMIT 1`,
       [studentId],
     );
 
@@ -29,6 +30,7 @@ export const getSupervisorStatus = async (req, res) => {
       return res.status(200).json({
         status: null,
         hasOngoingInternship: false,
+        hasSupervisor: false,
       });
     }
 
@@ -38,6 +40,15 @@ export const getSupervisorStatus = async (req, res) => {
       return res.status(200).json({
         status: "accepted",
         hasOngoingInternship: true,
+        hasSupervisor: true,
+      });
+    }
+
+    if (internship.employer_id) {
+      return res.status(200).json({
+        status: null,
+        hasOngoingInternship: true,
+        hasSupervisor: true,
       });
     }
 
@@ -54,6 +65,7 @@ export const getSupervisorStatus = async (req, res) => {
       return res.status(200).json({
         status: "pending",
         hasOngoingInternship: true,
+        hasSupervisor: false,
         requestId: requests[0].id,
       });
     }
@@ -62,6 +74,7 @@ export const getSupervisorStatus = async (req, res) => {
     return res.status(200).json({
       status: null,
       hasOngoingInternship: true,
+      hasSupervisor: false,
     });
   } catch (error) {
     reportError("Get supervisor status error:", error);
@@ -88,7 +101,7 @@ export const requestSupervisor = async (req, res) => {
 
     const [internships] = await connection.execute(
       `SELECT id, employer_id, company_name FROM internship_records
-       WHERE user_id = ? AND status = 'ongoing' LIMIT 1 FOR UPDATE`,
+       WHERE user_id = ? AND status = 'ongoing' AND deleted_at IS NULL LIMIT 1 FOR UPDATE`,
       [studentId],
     );
 
@@ -102,10 +115,12 @@ export const requestSupervisor = async (req, res) => {
 
     const internship = internships[0];
 
-    if (internship.employer_id === employerId) {
+    if (internship.employer_id) {
       await connection.rollback();
-      return res.status(400).json({
-        error: "This employer is already set as your supervisor.",
+      return res.status(409).json({
+        error: internship.employer_id === employerId
+          ? "This employer is already your supervisor. Remove them first if you want to choose someone else."
+          : "You already have a supervisor. Remove your current supervisor before requesting another.",
       });
     }
 
@@ -207,6 +222,87 @@ export const requestSupervisor = async (req, res) => {
   }
 };
 
+export const removeSupervisor = async (req, res) => {
+  const { id: studentId } = req.verifiedUser;
+  const { employerId } = req.params;
+  if (!employerId) return res.status(400).json({ error: "employerId is required." });
+
+  let connection;
+  try {
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    const [internships] = await connection.execute(
+      `SELECT id, employer_id, company_name FROM internship_records
+       WHERE user_id = ? AND status = 'ongoing' AND deleted_at IS NULL
+       LIMIT 1 FOR UPDATE`,
+      [studentId],
+    );
+    const internship = internships[0];
+    if (!internship || internship.employer_id !== employerId) {
+      await connection.rollback();
+      return res.status(404).json({ error: "This employer is not your current supervisor." });
+    }
+
+    const [update] = await connection.execute(
+      `UPDATE internship_records SET employer_id = NULL
+       WHERE id = ? AND user_id = ? AND employer_id = ?`,
+      [internship.id, studentId, employerId],
+    );
+    if (update.affectedRows !== 1) {
+      await connection.rollback();
+      return res.status(409).json({ error: "Your supervisor changed. Refresh and try again." });
+    }
+
+    // A request left pending by an older client must not become active later.
+    await connection.execute(
+      `UPDATE supervisor_requests SET status = 'superseded'
+       WHERE internship_id = ? AND status = 'pending'`,
+      [internship.id],
+    );
+
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          studentId,
+          "student",
+          "supervisor_removed",
+          "internship_records",
+          internship.id,
+          `Student removed their supervisor for the internship at ${internship.company_name}.`,
+          JSON.stringify({ employer_id: employerId }),
+        ],
+      );
+    } catch (logError) {
+      reportError("Activity log insert failed (supervisor removed):", logError);
+    }
+
+    await connection.commit();
+    invalidateProfileOverviewCache();
+    invalidateDashboardCache();
+    invalidateActivityLogsCache();
+
+    try {
+      const io = req.app.get("socketio");
+      io?.in?.(`user-${employerId}`)?.socketsLeave?.(`dtr-location:${studentId}:${internship.id}`);
+      io?.to(`user-${studentId}`).emit("supervisor_status_changed", { internshipId: internship.id });
+      io?.to(`user-${employerId}`).emit("supervisor_status_changed", { internshipId: internship.id });
+    } catch (socketError) {
+      reportError("Supervisor removal socket update failed:", socketError);
+    }
+
+    return res.status(200).json({ message: "Supervisor removed.", success: true });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    reportError("Remove supervisor error:", error);
+    return res.status(500).json({ error: "Failed to remove supervisor." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
 export const cancelSupervisorRequest = async (req, res) => {
   let connection;
   try {
@@ -299,6 +395,22 @@ export const respondToSupervisorRequest = async (req, res) => {
     connection = await db.getConnection();
     await connection.beginTransaction();
 
+    // Lock the internship before its request, matching request creation and
+    // supervisor removal so concurrent changes cannot replace an assignment.
+    const [requestRefs] = await connection.execute(
+      `SELECT internship_id FROM supervisor_requests WHERE id = ? LIMIT 1`,
+      [requestId],
+    );
+    if (requestRefs.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Request not found." });
+    }
+    const [internships] = await connection.execute(
+      `SELECT id, status, company_name, employer_id, deleted_at
+       FROM internship_records WHERE id = ? FOR UPDATE`,
+      [requestRefs[0].internship_id],
+    );
+
     // Added student_id — needed as the notification recipient below
     const [rows] = await connection.execute(
       `SELECT id, internship_id, student_id, employer_id, status 
@@ -329,16 +441,18 @@ export const respondToSupervisorRequest = async (req, res) => {
 
     // Re-check the internship is still ongoing — it could have changed
     // between when the request was sent and now
-    const [internships] = await connection.execute(
-      `SELECT id, status, company_name FROM internship_records WHERE id = ? FOR UPDATE`,
-      [request.internship_id],
-    );
-
-    if (internships.length === 0 || internships[0].status !== "ongoing") {
+    if (internships.length === 0 || internships[0].status !== "ongoing" || internships[0].deleted_at) {
       await connection.rollback();
       return res.status(400).json({
         error:
           "This internship is no longer ongoing; the request can't be actioned.",
+      });
+    }
+
+    if (decision === "accept" && internships[0].employer_id) {
+      await connection.rollback();
+      return res.status(409).json({
+        error: "This student already has a supervisor. They must remove that supervisor before this request can be accepted.",
       });
     }
 

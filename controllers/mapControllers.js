@@ -21,7 +21,7 @@ export const getStudentMap = async (req, res) => {
          ir.lat, ir.lon, ir.date_started, ir.date_ended, ir.total_hours,
          ir.accumulated_hours, ir.user_id, ir.region_id,
          up.first_name, up.last_name,
-         c.course_name,
+         c.course_name, c.short_name AS course_short_name,
          r.short_name AS region_name
        FROM internship_records ir
        INNER JOIN user_profiles up ON ir.user_id = up.user_id
@@ -77,6 +77,7 @@ export const getStudentMap = async (req, res) => {
         name: `${row.first_name} ${row.last_name}`,
         position: row.internship_position,
         course: row.course_name,
+        course_short_name: row.course_short_name,
         percent_complete: percentComplete,
         date_started: row.date_started,
         date_ended: row.date_ended,

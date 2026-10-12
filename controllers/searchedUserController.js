@@ -527,9 +527,12 @@ export const setSearchedStudentDtrLocation = async (req, res) => {
 
     // 2. Verify the internship exists AND actually belongs to the searched student
     const [internships] = await connection.execute(
-      `SELECT id, user_id, employer_id 
-       FROM internship_records 
-       WHERE id = ? AND user_id = ? 
+      `SELECT ir.id, ir.user_id, ir.employer_id,
+              student.first_name AS student_first_name,
+              student.last_name AS student_last_name
+       FROM internship_records ir
+       LEFT JOIN user_profiles student ON student.user_id = ir.user_id
+       WHERE ir.id = ? AND ir.user_id = ?
        LIMIT 1`,
       [internshipId, searchedUserId],
     );
@@ -643,6 +646,37 @@ export const setSearchedStudentDtrLocation = async (req, res) => {
       ],
     );
 
+    // The accepted supervisor also needs to know when school staff changes
+    // the location used to validate their intern's attendance.
+    const supervisorId =
+      (role === "admin" || role === "department_head") &&
+      internship.employer_id &&
+      internship.employer_id !== setterId
+        ? internship.employer_id
+        : null;
+    let supervisorMessage;
+    if (supervisorId) {
+      const studentName =
+        [internship.student_first_name, internship.student_last_name]
+          .filter(Boolean)
+          .join(" ") || "your intern";
+      supervisorMessage = label
+        ? `${setterName} has set ${studentName}'s DTR check-in location${locationDescription} with a ${radiusMeters}m radius.\nNote: "${label}"`
+        : `${setterName} has set ${studentName}'s DTR check-in location${locationDescription} with a ${radiusMeters}m radius.`;
+
+      await connection.execute(
+        `INSERT INTO notifications (user_id, sender_id, type, title, message, link_uuid) VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          supervisorId,
+          setterId,
+          "dtr_location_set",
+          "Intern DTR Location Set",
+          supervisorMessage,
+          internshipId,
+        ],
+      );
+    }
+
     await connection.commit();
     invalidateNotificationsCache();
 
@@ -653,6 +687,14 @@ export const setSearchedStudentDtrLocation = async (req, res) => {
       type: "dtr_location_set",
       link_uuid: internshipId,
     });
+    if (supervisorId) {
+      io.to(`user-${supervisorId}`).emit("new_notification", {
+        title: "Intern DTR Location Set",
+        message: supervisorMessage,
+        type: "dtr_location_set",
+        link_uuid: internshipId,
+      });
+    }
 
     res.status(200).json({
       message: "DTR location set successfully.",

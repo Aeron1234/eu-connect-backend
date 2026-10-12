@@ -107,9 +107,11 @@ export const getAllUserInternships = async (req, res) => {
 
     if (role === "student") {
       const [rows] = await db.execute(
-        `SELECT ir.id, ir.created_at, ir.company_name, ir.company_address, ir.internship_position, ir.company_website, ir.description, ir.status, ir.date_started, ir.date_ended, ir.total_hours, up.first_name, up.last_name, c.course_name, r.short_name
+        `SELECT ir.id, ir.created_at, ir.company_name, ir.company_address, ir.internship_position, ir.company_website, ir.description, ir.status, ir.date_started, ir.date_ended, ir.total_hours, up.first_name, up.last_name, c.course_name, r.short_name,
+                NULLIF(TRIM(CONCAT_WS(' ', supervisor.first_name, supervisor.last_name)), '') AS supervisor_name
         FROM internship_records AS ir
        INNER JOIN user_profiles AS up ON ir.user_id = up.user_id
+       LEFT JOIN user_profiles AS supervisor ON ir.employer_id = supervisor.user_id
        INNER JOIN student_academic_info AS sai ON ir.user_id = sai.user_id
        INNER JOIN courses AS c ON sai.course_id = c.id
        INNER JOIN regions AS r ON ir.region_id = r.id
