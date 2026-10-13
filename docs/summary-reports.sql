@@ -1,5 +1,6 @@
 -- Apply before deploying the summary-report API.
 -- One report per internship is enforced even for concurrent submissions.
+-- Then run summary-report-images.sql for image-only, multi-image support.
 CREATE TABLE IF NOT EXISTS summary_reports (
   id CHAR(36) NOT NULL PRIMARY KEY,
   internship_id CHAR(36) NOT NULL,

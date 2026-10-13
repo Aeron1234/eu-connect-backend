@@ -41,7 +41,7 @@ function request(method = "POST", extras = {}) {
   };
 }
 
-function connection({ ownsRecord = true, existing = null } = {}) {
+function connection({ ownsRecord = true, existing = null, images = [] } = {}) {
   const calls = [];
   const instance = {
     calls,
@@ -52,6 +52,7 @@ function connection({ ownsRecord = true, existing = null } = {}) {
     async execute(sql, params) {
       calls.push({ sql, params });
       if (sql.includes("FROM internship_records")) return [ownsRecord ? [{ id: "internship-1" }] : []];
+      if (sql.includes("FROM summary_report_images")) return [images];
       if (sql.includes("FROM summary_reports")) return [existing ? [existing] : []];
       return [{ affectedRows: 1 }];
     },
@@ -68,6 +69,19 @@ test("report list is scoped to the authenticated student", async () => {
   assert.equal(res.statusCode, 200);
   assert.deepEqual(params, ["student-1"]);
   assert.equal(res.body.records[0].report_id, null);
+});
+
+test("report list includes signed previews for saved images", async () => {
+  db.execute = async (sql, args) => sql.includes("FROM summary_report_images")
+    ? [[{ id: "image-1", report_id: "report-1", storage_path: "summary-reports/photo.png", original_name: "photo.png", mime_type: "image/png", sort_order: 0 }]]
+    : [[{ internship_id: "internship-1", report_id: "report-1" }]];
+  supabase.storage.from = () => ({ createSignedUrl: async () => ({ data: { signedUrl: "https://example.test/photo.png" }, error: null }) });
+  const res = response();
+  await listSummaryReports(request("GET"), res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.records[0].images[0].url, "https://example.test/photo.png");
+  assert.equal(res.body.records[0].images[0].name, "photo.png");
+  assert.equal("storage_path" in res.body.records[0].images[0], false);
 });
 
 test("a student cannot submit a report for someone else's internship", async () => {
@@ -94,19 +108,52 @@ test("a second POST is rejected, while PATCH updates the same report", async () 
   assert.equal(tx.calls.filter((call) => typeof call === "object" && call.sql.includes("UPDATE summary_reports")).length, 1);
 });
 
-test("optional attachment is stored privately and linked to the same report", async () => {
+test("multiple images are stored privately and linked to the same report", async () => {
   const tx = connection();
-  let path;
+  const paths = [];
   supabase.storage.from = () => ({
-    upload: async (storagePath) => { path = storagePath; return { error: null }; },
+    upload: async (storagePath) => { paths.push(storagePath); return { error: null }; },
     remove: async () => ({ error: null }),
   });
   const res = response();
-  await saveSummaryReport(request("POST", { file: { mimetype: "image/png", originalname: "photo.png", buffer: Buffer.from("image"), size: 5 } }), res);
+  await saveSummaryReport(request("POST", { files: [
+    { mimetype: "image/png", originalname: "photo.png", buffer: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0]), size: 9 },
+    { mimetype: "image/jpeg", originalname: "second.jpg", buffer: Buffer.from([255, 216, 255, 0]), size: 4 },
+  ] }), res);
   assert.equal(res.statusCode, 201);
-  assert.match(path, /^summary-reports\/student-1\/internship-1\/.+\.png$/);
-  const insert = tx.calls.find((call) => typeof call === "object" && call.sql.includes("INSERT INTO summary_reports"));
-  assert.equal(insert.params.at(-2), "photo.png");
+  assert.equal(paths.length, 2);
+  assert.match(paths[0], /^summary-reports\/student-1\/internship-1\/.+\.png$/);
+  assert.match(paths[1], /^summary-reports\/student-1\/internship-1\/.+\.jpg$/);
+  const inserts = tx.calls.filter((call) => typeof call === "object" && call.sql.includes("INSERT INTO summary_report_images"));
+  assert.equal(inserts.length, 2);
+  assert.deepEqual(inserts.map((item) => item.params[3]), ["photo.png", "second.jpg"]);
+});
+
+test("non-image uploads are rejected", async () => {
+  const res = response();
+  await saveSummaryReport(request("POST", { files: [{ mimetype: "application/pdf", originalname: "report.pdf", size: 5 }] }), res);
+  assert.equal(res.statusCode, 400);
+});
+
+test("an edit can remove one saved image and retain the others", async () => {
+  const removed = [];
+  const tx = connection({ existing: { id: "report-1", attachment_path: null }, images: [
+    { id: "image-1", storage_path: "summary-reports/one.png", sort_order: 0 },
+    { id: "image-2", storage_path: "summary-reports/two.png", sort_order: 1 },
+  ] });
+  supabase.storage.from = () => ({ remove: async (paths) => { removed.push(...paths); return { error: null }; } });
+  const res = response();
+  await saveSummaryReport(request("PATCH", { body: { ...paragraphs, remove_image_ids: JSON.stringify(["image-1"]) } }), res);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(removed, ["summary-reports/one.png"]);
+  const deletions = tx.calls.filter((call) => typeof call === "object" && call.sql.includes("DELETE FROM summary_report_images"));
+  assert.deepEqual(deletions.map((call) => call.params), [["image-1", "report-1"]]);
+});
+
+test("a file renamed as an image is rejected by its content signature", async () => {
+  const res = response();
+  await saveSummaryReport(request("POST", { files: [{ mimetype: "image/png", originalname: "fake.png", buffer: Buffer.from("not an image"), size: 12 }] }), res);
+  assert.equal(res.statusCode, 400);
 });
 
 test("attachment links require ownership of the internship", async () => {
@@ -121,7 +168,7 @@ test("attachment links require ownership of the internship", async () => {
 test("deletion checks ownership, removes the row, then cleans up the attachment", async () => {
   let committed = false;
   const removed = [];
-  const tx = connection({ existing: { id: "report-1", attachment_path: "summary-reports/photo.png" } });
+  const tx = connection({ existing: { id: "report-1", attachment_path: "summary-reports/legacy.pdf" }, images: [{ storage_path: "summary-reports/photo.png" }] });
   tx.commit = async () => { committed = true; tx.calls.push("commit"); };
   supabase.storage.from = () => ({ remove: async (paths) => {
     assert.ok(committed, "storage cleanup must follow the database commit");
@@ -131,7 +178,7 @@ test("deletion checks ownership, removes the row, then cleans up the attachment"
   const res = response();
   await deleteSummaryReport(request("DELETE"), res);
   assert.equal(res.statusCode, 200);
-  assert.deepEqual(removed, ["summary-reports/photo.png"]);
+  assert.deepEqual(removed, ["summary-reports/legacy.pdf", "summary-reports/photo.png"]);
   const deletion = tx.calls.find((call) => typeof call === "object" && call.sql.includes("DELETE FROM summary_reports"));
   assert.deepEqual(deletion.params, ["report-1", "student-1"]);
 
@@ -148,6 +195,7 @@ test("admin can read a submitted report for an accessible internship record", as
     async execute(sql, params) {
       calls.push({ sql, params });
       if (sql.includes("FROM internship_records ir")) return [[{ id: "internship-1", deleted_at: null, department_id: "dept-1" }]];
+      if (sql.includes("FROM summary_report_images")) return [[]];
       return [[{ report_id: "report-1", organization_experience: "Internship work" }]];
     },
   });
@@ -155,7 +203,7 @@ test("admin can read a submitted report for an accessible internship record", as
   await getInternshipRecordSummaryReport(request("GET", { verifiedUser: { id: "admin-1", role: "admin" } }), res);
   assert.equal(res.statusCode, 200);
   assert.equal(res.body.report.report_id, "report-1");
-  assert.deepEqual(calls.at(-1).params, ["internship-1"]);
+  assert.deepEqual(calls.find((call) => call.sql.includes("FROM summary_reports sr")).params, ["internship-1"]);
 });
 
 test("department head cannot read a report outside their department", async () => {

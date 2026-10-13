@@ -9,14 +9,15 @@ import { listSummaryReports, saveSummaryReport, deleteSummaryReport, getSummaryA
 const router = express.Router();
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 },
-}).single("attachment");
+  limits: { fileSize: 5 * 1024 * 1024, files: 6 },
+}).array("images", 6);
 const acceptUpload = (req, res, next) => upload(req, res, (error) => {
   if (!error) return next();
-  if (error.code === "LIMIT_FILE_SIZE") return res.status(413).json({ error: "The file must be 20 MB or smaller." });
-  return res.status(400).json({ error: "Could not read the attachment. Choose one file and try again." });
+  if (error.code === "LIMIT_FILE_SIZE") return res.status(413).json({ error: "Each image must be 5 MB or smaller." });
+  if (error.code === "LIMIT_FILE_COUNT" || error.code === "LIMIT_UNEXPECTED_FILE") return res.status(400).json({ error: "Choose up to six JPG, PNG, or WebP images." });
+  return res.status(400).json({ error: "Could not read the images. Please try again." });
 });
-const writeLimiter = (req, res, next) => (req.file ? uploadLimiter : mediumLimiter)(req, res, next);
+const writeLimiter = (req, res, next) => (req.files?.length ? uploadLimiter : mediumLimiter)(req, res, next);
 const studentOnly = [verifyUser, verifyRole(["student"])];
 
 router.get("/summary-reports", ...studentOnly, generalLimiter, cacheRoute(30), listSummaryReports);
