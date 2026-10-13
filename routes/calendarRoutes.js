@@ -22,13 +22,13 @@ router.use(verifyUser);
 
 router.get(
   "/calendar",
-  verifyRole(["student", "department_head", "admin"]),
+  verifyRole(["student", "employer", "department_head", "admin"]),
   paginationLimiter,
   getCalendarMonth,
 );
 router.get(
   "/calendar/schedules/:id",
-  verifyRole(["student", "department_head", "admin"]),
+  verifyRole(["student", "employer", "department_head", "admin"]),
   generalLimiter,
   getCalendarSchedule,
 );

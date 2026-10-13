@@ -40,6 +40,7 @@ import dashboardRoutes from "./routes/dashboardRoutes.js";
 import calendarRoutes from "./routes/calendarRoutes.js";
 import cacheMonitoringRoutes from "./routes/cacheMonitoringRoutes.js";
 import weeklyNarrativeRoutes from "./routes/weeklyNarrativeRoutes.js";
+import summaryReportRoutes from "./routes/summaryReportRoutes.js";
 import errorTrackingRoutes from "./routes/errorTrackingRoutes.js";
 
 // dotenv.config();
@@ -103,6 +104,7 @@ app.use("/eu-connect/api", internshipRecordRoutes);
 app.use("/eu-connect/api", dtrRoutes);
 app.use("/eu-connect/api", narrativeRoutes);
 app.use("/eu-connect/api", weeklyNarrativeRoutes);
+app.use("/eu-connect/api", summaryReportRoutes);
 app.use("/eu-connect/api", fileRoutes);
 app.use("/eu-connect/api", notificationRoutes);
 app.use("/eu-connect/api", studentEvaluationRoutes);

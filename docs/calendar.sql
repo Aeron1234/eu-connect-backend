@@ -37,6 +37,8 @@ ALTER TABLE notifications MODIFY COLUMN type ENUM(
   'evaluation_submitted',
   'evaluation_deleted',
   'certificate_uploaded',
+  'certificate_accepted',
+  'certificate_rejected',
   'supervisor_request_submitted',
   'supervisor_request_accepted',
   'supervisor_request_rejected',

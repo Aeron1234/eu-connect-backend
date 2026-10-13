@@ -2,11 +2,50 @@ import { reportError } from "../config/errorTracking.js";
 import { invalidateDocumentMetadataCache } from "../config/documentMetadataCache.js";
 import { invalidatePastInternshipsCache } from "../config/pastInternshipsCache.js";
 import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
+import { invalidateNotificationsCache } from "../config/notificationsCache.js";
 import { db } from "../config/db.js";
 import { supabase } from "../config/supabase.js";
 import { newUUID, ALLOWED_TYPES } from "../config/helpers.js";
 
 const BUCKET = process.env.SUPABASE_BUCKET;
+
+async function addEmployerDocumentNotification(connection, doc, studentId, decision) {
+  if (doc.uploaded_by_role !== "employer" || !doc.uploaded_by_id) return null;
+
+  const fileName = String(doc.file_name || "certificate").slice(0, 80);
+  const accepted = decision === "accepted";
+  const notification = {
+    userId: doc.uploaded_by_id,
+    studentId,
+    type: accepted ? "certificate_accepted" : "certificate_rejected",
+    title: accepted ? "Certificate accepted" : "Certificate rejected",
+    message: accepted
+      ? `The student accepted your file "${fileName}".`
+      : `The student deleted your pending file "${fileName}".`,
+  };
+
+  await connection.execute(
+    `INSERT INTO notifications (user_id, sender_id, type, title, message, link_uuid) VALUES (?, ?, ?, ?, ?, ?)`,
+    [notification.userId, studentId, notification.type, notification.title, notification.message, studentId],
+  );
+  return notification;
+}
+
+function publishEmployerDocumentNotification(req, notification) {
+  if (!notification) return;
+  try {
+    invalidateNotificationsCache(notification.userId);
+    const io = req.app?.get("socketio");
+    io?.to(`user-${notification.userId}`).emit("new_notification", {
+      type: notification.type,
+      title: notification.title,
+      message: notification.message,
+      link_uuid: notification.studentId,
+    });
+  } catch (error) {
+    reportError("Employer document notification delivery failed:", error);
+  }
+}
 
 export const getFileRequirementTypes = async (req, res) => {
   try {
@@ -127,6 +166,10 @@ export const approveInternshipDocument = async (req, res) => {
       [fileId],
     );
 
+    const employerNotification = role === "student" && isOwner
+      ? await addEmployerDocumentNotification(connection, doc, userId, "accepted")
+      : null;
+
     try {
       await connection.execute(
         `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -148,6 +191,7 @@ export const approveInternshipDocument = async (req, res) => {
     invalidateDocumentMetadataCache();
 
     invalidateActivityLogsCache();
+    publishEmployerDocumentNotification(req, employerNotification);
 
     res.status(200).json({ success: true, message: "Document accepted." });
   } catch (error) {
@@ -323,7 +367,7 @@ export const deleteFile = async (req, res) => {
 
     // Look up the record first — never trust a client-supplied path
     const [rows] = await connection.execute(
-      `SELECT id, user_id, file_name, path FROM internship_documents WHERE id = ? FOR UPDATE`,
+      `SELECT id, user_id, file_name, path, uploaded_by_id, uploaded_by_role, verification_status FROM internship_documents WHERE id = ? FOR UPDATE`,
       [fileId],
     );
 
@@ -353,6 +397,10 @@ export const deleteFile = async (req, res) => {
       return res.status(404).json({ error: "File not found." });
     }
 
+    const employerNotification = role === "student" && isOwner && doc.verification_status === "pending"
+      ? await addEmployerDocumentNotification(connection, doc, userId, "rejected")
+      : null;
+
     // Same isolation as upload — logging failure shouldn't affect the
     // already-decided deletion.
     try {
@@ -380,6 +428,7 @@ export const deleteFile = async (req, res) => {
     invalidatePastInternshipsCache(doc.user_id);
 
     invalidateActivityLogsCache();
+    publishEmployerDocumentNotification(req, employerNotification);
 
     // Delete from storage AFTER commit succeeds — DB is source of truth,
     // an orphaned storage object is recoverable, an orphaned DB row isn't

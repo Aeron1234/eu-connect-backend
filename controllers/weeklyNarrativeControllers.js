@@ -4,6 +4,37 @@ import { weeklyNarrativesCacheHit } from "../middleware/weekly-narratives-cache.
 import { db } from "../config/db.js";
 import { verifyRecordAccess } from "../config/helpers.js";
 
+export const getWeeklyNarrativesForPrint = async (req, res) => {
+  const userId = req.verifiedUser?.id;
+  const internshipId = req.params.internshipId;
+  if (!userId || !internshipId) return res.status(400).json({ error: "Internship ID is required." });
+
+  try {
+    const [records] = await db.execute(
+      `SELECT ir.id, ir.company_name, CONCAT_WS(' ', up.first_name, up.last_name) AS student_name
+       FROM internship_records ir
+       LEFT JOIN user_profiles up ON up.user_id = ir.user_id
+       WHERE ir.id = ? AND ir.user_id = ? AND ir.deleted_at IS NULL
+         AND ir.status IN ('ongoing', 'finished') LIMIT 1`,
+      [internshipId, userId],
+    );
+    if (!records.length) return res.status(404).json({ error: "Internship record not found." });
+
+    const [narratives] = await db.execute(
+      `SELECT week_number, title, narrative, created_at
+       FROM weekly_narratives
+       WHERE internship_id = ? AND user_id = ?
+       ORDER BY week_number ASC, created_at ASC, id ASC`,
+      [internshipId, userId],
+    );
+    if (!narratives.length) return res.status(404).json({ error: "No weekly narratives found for this internship." });
+    return res.status(200).json({ ...records[0], narratives });
+  } catch (error) {
+    reportError("Get weekly narratives for print failed:", error);
+    return res.status(500).json({ error: "Could not prepare weekly narratives for printing." });
+  }
+};
+
 export const getAllWeeklyNarratives = async (req, res) => {
   const userId = req.verifiedUser?.id;
   if (!userId) {

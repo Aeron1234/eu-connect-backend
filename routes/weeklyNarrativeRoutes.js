@@ -8,6 +8,7 @@ import {
   deleteWeeklyNarrative,
   editWeeklyNarrative,
   getAllWeeklyNarratives,
+  getWeeklyNarrativesForPrint,
   getInternshipRecordWeeklyNarratives,
   getSearchedStudentWeeklyNarratives,
 } from "../controllers/weeklyNarrativeControllers.js";
@@ -29,6 +30,14 @@ weeklyNarrativeRoutes.get(
   paginationLimiter,
   cacheRoute(30),
   getAllWeeklyNarratives,
+);
+
+weeklyNarrativeRoutes.get(
+  "/weekly-narratives/print/:internshipId",
+  verifyUser,
+  verifyRole(["student"]),
+  generalLimiter,
+  getWeeklyNarrativesForPrint,
 );
 
 weeklyNarrativeRoutes.post(

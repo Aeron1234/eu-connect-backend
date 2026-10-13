@@ -2,7 +2,7 @@ import { reportError } from "../config/errorTracking.js";
 import { db } from "../config/db.js";
 import { invalidateNotificationsCache } from "../config/notificationsCache.js";
 
-const ROLES = new Set(["student", "department_head", "admin"]);
+const ROLES = new Set(["student", "employer", "department_head", "admin"]);
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
 
 function validDate(value) {
@@ -39,7 +39,7 @@ export async function getCalendarMonth(req, res) {
     const bounds = monthBounds(req.query.month);
     if (!bounds) return res.status(400).json({ error: "A valid month is required." });
     const [from, until] = bounds;
-    const departmentId = viewer.department_id ?? -1;
+    const departmentId = viewer.role === "employer" ? -1 : viewer.department_id ?? -1;
 
     const [announcements] = await db.execute(
       `SELECT a.public_id AS id, a.title, a.content, ${dateSql("a.event_date")} AS event_date,
@@ -101,7 +101,7 @@ export async function getCalendarSchedule(req, res) {
          FROM calendar_schedules WHERE id = ? LIMIT 1`,
       [req.params.id],
     );
-    if (!row || (row.department_id != null && viewer.role !== "admin" && Number(row.department_id) !== Number(viewer.department_id))) {
+    if (!row || (row.department_id != null && (viewer.role === "employer" || (viewer.role !== "admin" && Number(row.department_id) !== Number(viewer.department_id))))) {
       return res.status(404).json({ error: "Schedule not found." });
     }
     return res.json(row);
