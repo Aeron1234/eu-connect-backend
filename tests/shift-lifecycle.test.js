@@ -1,7 +1,7 @@
 import { after, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { db } from "../config/db.js";
-import { clockOut, getLatestDtrStatus, startBreak, resumeDuty } from "../controllers/dtrControllers.js";
+import { clockIn, clockOut, getLatestDtrStatus, startBreak, resumeDuty } from "../controllers/dtrControllers.js";
 import { getStudentDashboardData } from "../controllers/dashboardController.js";
 import { autoCloseStaleShifts } from "../config/autoCloseStaleShifts.js";
 
@@ -29,6 +29,33 @@ const response = () => ({
   json(body) { this.body = body; return this; },
 });
 
+test("clock-in and clock-out reject an internship before its start date", async () => {
+  for (const action of [clockIn, clockOut]) {
+    let rolledBack = false;
+    let wrote = false;
+    db.getConnection = async () => ({
+      async beginTransaction() {},
+      async rollback() { rolledBack = true; },
+      async commit() { wrote = true; },
+      release() {},
+      async execute(sql) {
+        if (sql.includes("SELECT id FROM daily_time_records")) return [[]];
+        if (sql.includes("FROM internship_records ir") || sql.includes("FROM daily_time_records dtr")) {
+          return [[{ internship_id: "internship", dtr_id: 1, date_started: "2099-01-01", has_started: 0 }]];
+        }
+        wrote = true;
+        return [{ affectedRows: 1 }];
+      },
+    });
+    const res = response();
+    await action({ verifiedUser: { id: "student" }, body: { lat_in: 14, lon_in: 121, lat_out: 14, lon_out: 121 } }, res);
+    assert.equal(res.statusCode, 409);
+    assert.match(res.body.error, /start date/i);
+    assert.equal(rolledBack, true);
+    assert.equal(wrote, false);
+  }
+});
+
 test("clock-out at and beyond the cap returns success after committing numeric hours", async () => {
   for (const [rawHours, expectedFlagged] of [[8, false], [8.5, true]]) {
     let committed = false;
@@ -42,7 +69,7 @@ test("clock-out at and beyond the cap returns success after committing numeric h
       async execute(sql, params) {
         if (sql.includes("FROM daily_time_records dtr")) {
           assert.match(sql, /FOR UPDATE/);
-          return [[{ dtr_id: 1, internship_id: "internship", clock_in: "2026-10-03 08:00:00", company_lat: 14, company_lon: 121 }]];
+          return [[{ dtr_id: 1, internship_id: "internship", clock_in: "2026-10-03 08:00:00", company_lat: 14, company_lon: 121, date_started: "2026-10-01", has_started: 1 }]];
         }
         if (sql.includes("TIMESTAMPDIFF")) return [[{ hours: rawHours }]];
         writes.push({ sql, params });
@@ -151,7 +178,7 @@ test("manual clock-out excludes completed lunch and rejects an active break", as
       async execute(sql, params) {
         if (sql.includes("FROM daily_time_records dtr")) return [[{
           dtr_id: 1, internship_id: "internship", clock_in: "2026-10-03 08:00:00",
-          company_lat: 14, company_lon: 121, status: onBreak ? "on-break" : "present",
+          company_lat: 14, company_lon: 121, date_started: "2026-10-01", has_started: 1, status: onBreak ? "on-break" : "present",
           break_started_at: onBreak ? "2026-10-03 12:00:00" : null,
           break_total_seconds: 3600,
         }]];

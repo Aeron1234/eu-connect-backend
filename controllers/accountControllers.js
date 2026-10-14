@@ -104,7 +104,7 @@ export const getUserProfile = async (req, res) => {
       case "admin":
         query = `
           SELECT 
-            u.id, u.email, u.username, r.role, u.status, u.created_at,
+            u.id, u.email, u.username, r.role, u.status, u.created_at, u.password_changed_at,
             up.first_name, up.last_name, up.contact_number, up.full_address, up.gender, up.avatar
           FROM users u
           INNER JOIN roles r ON r.id = u.role_id
@@ -116,7 +116,7 @@ export const getUserProfile = async (req, res) => {
       case "student":
         query = `
           SELECT 
-            u.id, u.email, u.username, r.role, u.status, u.created_at,
+            u.id, u.email, u.username, r.role, u.status, u.created_at, u.password_changed_at,
             up.first_name, up.last_name, up.contact_number, up.full_address, up.gender, up.avatar,
             c.course_name AS course, d.code AS department_code, d.name AS department_name,
             sai.student_number, sai.year_level
@@ -139,7 +139,7 @@ export const getUserProfile = async (req, res) => {
       case "employer":
         query = `
           SELECT 
-            u.id, u.email, u.username, r.role, u.status, u.created_at,
+            u.id, u.email, u.username, r.role, u.status, u.created_at, u.password_changed_at,
             up.first_name, up.last_name, up.contact_number, up.full_address, up.gender, up.avatar,
             ebi.company_name, ebi.company_address, ebi.position,
             ebi.contact_number AS company_contact_number
@@ -154,7 +154,7 @@ export const getUserProfile = async (req, res) => {
       case "department_head":
         query = `
           SELECT 
-            u.id, u.email, u.username, r.role, u.status, u.created_at,
+            u.id, u.email, u.username, r.role, u.status, u.created_at, u.password_changed_at,
             up.first_name, up.last_name, up.contact_number, up.full_address, up.gender, up.avatar,
             d.code AS department_code, d.name AS department_name, dhbi.employee_number
           FROM users u
@@ -369,11 +369,13 @@ export const updatePassword = async (req, res) => {
     const newHash = await bcrypt.hash(newPassword, 10);
 
     await connection.execute(
-      `UPDATE users SET password_hash = ? WHERE id = ?`,
+      `UPDATE users SET password_hash = ?, password_changed_at = NOW() WHERE id = ?`,
       [newHash, id],
     );
 
     await connection.commit();
+
+    invalidateUserCache(id);
 
     res.status(200).json({ success: true, message: "Password updated." });
   } catch (error) {

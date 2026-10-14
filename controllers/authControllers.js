@@ -13,6 +13,7 @@ import {
   looksLikeJwt,
 } from "../config/jwt.js";
 import { sendTempPasswordEmail } from "../services/mailer.js";
+import { invalidateUserCache } from "../config/cache.js";
 
 const isProd = process.env.NODE_ENV === "production";
 
@@ -510,9 +511,11 @@ export const setPassword = async (req, res) => {
     const newHash = await bcrypt.hash(newPassword, 10);
 
     await db.execute(
-      `UPDATE users SET password_hash = ?, temp_password_jti = NULL WHERE id = ?`,
+      `UPDATE users SET password_hash = ?, password_changed_at = NOW(), temp_password_jti = NULL WHERE id = ?`,
       [newHash, userId],
     );
+
+    invalidateUserCache(userId);
 
     await revokeAllTokensForUser(userId);
     clearAuthCookies(res);

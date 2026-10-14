@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { db } from "../config/db.js";
-import { getAllAccounts, getUserProfile } from "../controllers/accountControllers.js";
+import { getAllAccounts, getUserProfile, updatePassword } from "../controllers/accountControllers.js";
+import bcrypt from "bcryptjs";
+import cache from "../config/cache.js";
 
 test("account count retains filters and row multiplicity without detail joins", async () => {
   const original = db.getConnection;
@@ -79,9 +81,63 @@ test("student profile selects only that user's latest academic record", async ()
     assert.deepEqual(params, ["student"]);
     assert.match(sql, /sai\.id = \(\s*SELECT MAX\(sai_latest\.id\)/);
     assert.match(sql, /WHERE sai_latest\.user_id = u\.id/);
+    assert.match(sql, /u\.password_changed_at/);
     assert.doesNotMatch(sql, /GROUP BY user_id/);
     assert.equal(releases, 1);
   } finally {
+    db.getConnection = original;
+  }
+});
+
+test("all account roles receive the password-change date in their profile", async () => {
+  const original = db.getConnection;
+  const queries = [];
+  db.getConnection = async () => ({
+    release() {},
+    async execute(sql) {
+      queries.push(sql);
+      return [[{ id: "user", password_changed_at: null }]];
+    },
+  });
+  try {
+    for (const role of ["student", "employer", "department_head", "admin"]) {
+      const res = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
+      await getUserProfile({ verifiedUser: { id: "user", role } }, res);
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.password_changed_at, null);
+    }
+    for (const sql of queries) assert.match(sql, /u\.password_changed_at/);
+  } finally {
+    db.getConnection = original;
+  }
+});
+
+test("changing a password stores the change date and invalidates the cached profile", async () => {
+  const original = db.getConnection;
+  const oldHash = await bcrypt.hash("current-password", 4);
+  const writes = [];
+  let committed = false;
+  db.getConnection = async () => ({
+    release() {},
+    async beginTransaction() {},
+    async rollback() {},
+    async commit() { committed = true; },
+    async execute(sql, params) {
+      if (sql.includes("SELECT password_hash")) return [[{ password_hash: oldHash }]];
+      writes.push({ sql, params });
+      return [{ affectedRows: 1 }];
+    },
+  });
+  cache.set("account-profile-test", { userId: "user", path: "/eu-connect/api/account/user", body: {} });
+  try {
+    const res = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
+    await updatePassword({ verifiedUser: { id: "user" }, body: { currentPassword: "current-password", newPassword: "new-password" } }, res);
+    assert.equal(res.statusCode, 200);
+    assert.equal(committed, true);
+    assert.match(writes[0].sql, /password_changed_at = NOW\(\)/);
+    assert.equal(cache.has("account-profile-test"), false);
+  } finally {
+    cache.del("account-profile-test");
     db.getConnection = original;
   }
 });

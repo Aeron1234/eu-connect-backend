@@ -9,11 +9,27 @@ export const getUnreadNotificationCount = async (req, res) => {
       return res.status(401).json({ error: "Unauthorized access." });
     }
 
-    const [[row]] = await db.execute(
-      `SELECT COUNT(*) AS unread_count
-       FROM notifications WHERE user_id = ? AND is_read = 0`,
-      [userId],
-    );
+    let row;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let connection;
+      try {
+        connection = await db.getConnection();
+        [[row]] = await connection.execute(
+          `SELECT COUNT(*) AS unread_count
+           FROM notifications WHERE user_id = ? AND is_read = 0`,
+          [userId],
+        );
+        break;
+      } catch (error) {
+        // An idle MySQL socket may have been closed by the host. This read is
+        // safe to repeat once after releasing the broken pooled connection.
+        if (attempt > 0 || !["ECONNRESET", "PROTOCOL_CONNECTION_LOST", "EPIPE"].includes(error?.code)) {
+          throw error;
+        }
+      } finally {
+        connection?.release();
+      }
+    }
     return res.status(200).json({ unreadCount: row.unread_count });
   } catch (error) {
     reportError("Get unread notification count error:", error);

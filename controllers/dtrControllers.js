@@ -181,6 +181,8 @@ export const clockIn = async (req, res) => {
     const [internships] = await connection.execute(
       `SELECT 
          ir.id AS internship_id, 
+         ir.date_started,
+         ir.date_started IS NOT NULL AND DATE(ir.date_started) <= CURDATE() AS has_started,
          ir.lat AS company_lat, 
          ir.lon AS company_lon,
          dl.lat AS dtr_lat, 
@@ -200,6 +202,15 @@ export const clockIn = async (req, res) => {
     }
 
     const record = internships[0];
+
+    if (!record.date_started) {
+      await connection.rollback();
+      return res.status(409).json({ error: "This internship has no start date. Contact your coordinator before using DTR." });
+    }
+    if (!record.has_started) {
+      await connection.rollback();
+      return res.status(409).json({ error: "DTR becomes available on your internship start date." });
+    }
 
     // 2. Fallback Logic: Use dtr_locations if present; otherwise use internship_records (defaulting radius to 150m)
     const targetLat = record.dtr_lat ?? record.company_lat;
@@ -379,6 +390,8 @@ export const clockOut = async (req, res) => {
          dtr.break_total_seconds,
          ir.lat AS company_lat, 
          ir.lon AS company_lon,
+         ir.date_started,
+         ir.date_started IS NOT NULL AND DATE(ir.date_started) <= CURDATE() AS has_started,
          dl.lat AS dtr_lat,
          dl.lon AS dtr_lon,
          dl.radius_meters
@@ -398,6 +411,14 @@ export const clockOut = async (req, res) => {
     }
 
     const record = activeRecords[0];
+    if (!record.date_started) {
+      await connection.rollback();
+      return res.status(409).json({ error: "This internship has no start date. Contact your coordinator before using DTR." });
+    }
+    if (!record.has_started) {
+      await connection.rollback();
+      return res.status(409).json({ error: "DTR becomes available on your internship start date." });
+    }
     if (record.status === "on-break" || record.break_started_at != null) {
       await connection.rollback();
       return res.status(409).json({
