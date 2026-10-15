@@ -3,6 +3,7 @@ import { reportCacheHit } from "../middleware/report-cache.js";
 import { invalidateAnnualReportsCache } from "../config/reportsCache.js";
 import { invalidateActivityLogsCache } from "../config/activityLogsCache.js";
 import { db } from "../config/db.js";
+import { formatCreatorPreparedBy, formatPersonName } from "../config/personName.js";
 import {
   getCurrentAcademicYear,
   isRegistrarHeadOrAdmin,
@@ -86,7 +87,7 @@ export const getHteCompanyList = async (req, res) => {
         `SELECT 
            ir.company_name, ir.company_address,
            ir.date_started, ir.date_ended,
-           up.first_name, up.last_name, up.gender,
+           up.first_name, up.middle_initial, up.last_name, up.gender,
            c.course_name
          FROM internship_records_with_ay ir
          INNER JOIN user_profiles up ON ir.user_id = up.user_id
@@ -120,7 +121,7 @@ export const getHteCompanyList = async (req, res) => {
         company_name: rows[0].company_name,
         company_address: rows[0].company_address,
         interns: rows.map((r) => ({
-          name: `${r.first_name} ${r.last_name}`,
+          name: formatPersonName(r.first_name, r.middle_initial, r.last_name),
           course: r.course_name,
           gender: r.gender || null,
           date_started: r.date_started,
@@ -209,7 +210,7 @@ export const getHteCompanyList = async (req, res) => {
     const [internRows] = await connection.execute(
       `SELECT 
          MD5(CONCAT(ROUND(ir.lat, 5), '_', ROUND(ir.lon, 5), '_', LOWER(TRIM(ir.company_name)))) AS company_key,
-         up.first_name, up.last_name, up.gender,
+         up.first_name, up.middle_initial, up.last_name, up.gender,
          c.course_name, ir.date_started, ir.date_ended
        FROM internship_records_with_ay ir
        INNER JOIN user_profiles up ON ir.user_id = up.user_id
@@ -237,7 +238,7 @@ export const getHteCompanyList = async (req, res) => {
       if (!internsByCompany[r.company_key])
         internsByCompany[r.company_key] = [];
       internsByCompany[r.company_key].push({
-        name: `${r.first_name} ${r.last_name}`,
+        name: formatPersonName(r.first_name, r.middle_initial, r.last_name),
         course: r.course_name,
         gender: r.gender || null,
         date_started: r.date_started,
@@ -308,7 +309,7 @@ export const getHteCompanyReport = async (req, res) => {
       `SELECT 
          ir.company_name, ir.company_address,
          ir.date_started, ir.date_ended,
-         up.first_name, up.last_name, up.gender,
+         up.first_name, up.middle_initial, up.last_name, up.gender,
          c.course_name
        FROM internship_records_with_ay ir
        INNER JOIN user_profiles up ON ir.user_id = up.user_id
@@ -342,7 +343,7 @@ export const getHteCompanyReport = async (req, res) => {
       company_name: rows[0].company_name,
       company_address: rows[0].company_address,
       interns: rows.map((r) => ({
-        name: `${r.first_name} ${r.last_name}`,
+        name: formatPersonName(r.first_name, r.middle_initial, r.last_name),
         course: r.course_name,
         gender: r.gender || null,
         date_started: r.date_started,
@@ -522,7 +523,12 @@ export const getProgramAnnualReportById = async (req, res) => {
     if (reportCacheHit(req, res)) return;
 
     const [reportRows] = await connection.execute(
-      `SELECT * FROM program_annual_reports WHERE id = ?`,
+      `SELECT par.*, up.first_name AS creator_first_name,
+              up.middle_initial AS creator_middle_initial,
+              up.last_name AS creator_last_name
+       FROM program_annual_reports par
+       LEFT JOIN user_profiles up ON up.user_id = par.created_by
+       WHERE par.id = ?`,
       [reportId],
     );
 
@@ -536,7 +542,19 @@ export const getProgramAnnualReportById = async (req, res) => {
       [reportId],
     );
 
-    res.status(200).json({ ...reportRows[0], entries });
+    const { creator_first_name, creator_middle_initial, creator_last_name, ...report } = reportRows[0];
+    const preparedByExport = formatCreatorPreparedBy(
+      report.prepared_by,
+      creator_first_name,
+      creator_middle_initial,
+      creator_last_name,
+    );
+    res.status(200).json({
+      ...report,
+      ...(report.prepared_by && preparedByExport !== report.prepared_by
+        ? { prepared_by_export: preparedByExport } : {}),
+      entries,
+    });
   } catch (error) {
     reportError("Get program annual report error:", error);
     res.status(500).json({ error: "Failed to load report." });

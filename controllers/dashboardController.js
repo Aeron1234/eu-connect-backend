@@ -661,7 +661,7 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
          ) AS sai ON ir.user_id = sai.user_id
          WHERE sai.department_id = ? AND sem.status = 'completed'
          GROUP BY sec.category
-         ORDER BY sec.category ASC`,
+         ORDER BY MIN(sec.id) ASC`,
         [departmentId],
       );
       studentEvaluationAverages = rows.map((r) => ({

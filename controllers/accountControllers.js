@@ -594,6 +594,7 @@ export const createUser = async (req, res) => {
       username,
       password,
       first_name,
+      middle_initial,
       last_name,
       course,
       department,
@@ -615,6 +616,12 @@ export const createUser = async (req, res) => {
         });
       }
     }
+
+    const submittedMiddleInitial = String(middle_initial ?? "").trim();
+    if (submittedMiddleInitial && !/^[A-Za-z]\.?$/.test(submittedMiddleInitial)) {
+      return res.status(400).json({ message: "Middle initial must be one letter." });
+    }
+    const normalizedMiddleInitial = submittedMiddleInitial.replace(/\.$/, "").toUpperCase();
 
     const roleId = Number(role);
     if (Number.isNaN(roleId)) {
@@ -728,8 +735,8 @@ export const createUser = async (req, res) => {
     }
 
     await connection.execute(
-      `INSERT INTO user_profiles (user_id, first_name, last_name, gender) VALUES (?, ?, ?, ?)`,
-      [newId, first_name, last_name, roleName === "student" ? gender : null],
+      `INSERT INTO user_profiles (user_id, first_name, middle_initial, last_name, gender) VALUES (?, ?, ?, ?, ?)`,
+      [newId, first_name, normalizedMiddleInitial || null, last_name, roleName === "student" ? gender : null],
     );
 
     if (roleName === "student") {
@@ -768,6 +775,7 @@ export const createUser = async (req, res) => {
             username,
             role: roleName,
             first_name,
+            middle_initial: normalizedMiddleInitial || null,
             last_name,
             department_id:
               roleName === "student"

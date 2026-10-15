@@ -3,6 +3,10 @@ import { invalidateCriteriaCache } from "../config/criteriaCache.js";
 import { db } from "../config/db.js";
 
 function createCriteriaEndpoints(tableName) {
+  const isStudentCriteria = tableName === "student_evaluation_criteria";
+  const cleanCategory = (value) => isStudentCriteria
+    ? value.trim().replace(/^\d+\.\s*/, "").trim()
+    : value.trim();
   const getCriteria = async (req, res) => {
     let connection;
     try {
@@ -17,7 +21,7 @@ function createCriteriaEndpoints(tableName) {
         `SELECT id, category, criterion_name, is_active
          FROM ${tableName}
          ${whereClause}
-         ORDER BY category ASC, id ASC`,
+         ORDER BY ${isStudentCriteria ? "id ASC" : "category ASC, id ASC"}`,
       );
 
       // Group flat rows into [{ category, items: [{ id, name, is_active }] }]
@@ -48,7 +52,8 @@ function createCriteriaEndpoints(tableName) {
     try {
       const { category, criterion_name } = req.body;
 
-      if (!category?.trim() || !criterion_name?.trim()) {
+      const categoryName = typeof category === "string" ? cleanCategory(category) : "";
+      if (!categoryName || !criterion_name?.trim()) {
         return res
           .status(400)
           .json({ error: "category and criterion_name are required." });
@@ -59,7 +64,7 @@ function createCriteriaEndpoints(tableName) {
 
       const [result] = await connection.execute(
         `INSERT INTO ${tableName} (category, criterion_name, is_active) VALUES (?, ?, 1)`,
-        [category.trim(), criterion_name.trim()],
+        [categoryName, criterion_name.trim()],
       );
 
       if (result.affectedRows === 0) {
@@ -183,7 +188,8 @@ function createCriteriaEndpoints(tableName) {
     try {
       const { category } = req.params;
 
-      if (!category?.trim()) {
+      const categoryName = typeof category === "string" ? cleanCategory(category) : "";
+      if (!categoryName) {
         return res.status(400).json({ error: "category is required." });
       }
 
@@ -192,7 +198,7 @@ function createCriteriaEndpoints(tableName) {
 
       const [rows] = await connection.execute(
         `SELECT id FROM ${tableName} WHERE category = ? AND is_active = 1 FOR UPDATE`,
-        [category],
+        [categoryName],
       );
 
       if (rows.length === 0) {
@@ -204,7 +210,7 @@ function createCriteriaEndpoints(tableName) {
 
       const [result] = await connection.execute(
         `UPDATE ${tableName} SET is_active = 0 WHERE category = ? AND is_active = 1`,
-        [category],
+        [categoryName],
       );
 
       await connection.commit();
@@ -232,7 +238,8 @@ function createCriteriaEndpoints(tableName) {
     try {
       const { category } = req.params;
 
-      if (!category?.trim()) {
+      const categoryName = typeof category === "string" ? cleanCategory(category) : "";
+      if (!categoryName) {
         return res.status(400).json({ error: "category is required." });
       }
 
@@ -241,7 +248,7 @@ function createCriteriaEndpoints(tableName) {
 
       const [rows] = await connection.execute(
         `SELECT id FROM ${tableName} WHERE category = ? AND is_active = 0 FOR UPDATE`,
-        [category],
+        [categoryName],
       );
 
       if (rows.length === 0) {
@@ -253,7 +260,7 @@ function createCriteriaEndpoints(tableName) {
 
       const [result] = await connection.execute(
         `UPDATE ${tableName} SET is_active = 1 WHERE category = ? AND is_active = 0`,
-        [category],
+        [categoryName],
       );
 
       await connection.commit();

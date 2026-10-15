@@ -138,7 +138,7 @@ test("print retains its grouped response and checks ownership before reading sco
   assert.equal(ok.res.statusCode, 200);
   assert.equal(ok.calls.length, 2);
   assert.deepEqual(ok.calls.map((call) => call.params), [["evaluation"], ["evaluation"]]);
-  assert.match(ok.calls[1].sql, /ORDER BY sec\.category ASC, sec\.id ASC/);
+  assert.match(ok.calls[1].sql, /ORDER BY sec\.id ASC/);
   assert.deepEqual(ok.res.body, {
     id: "evaluation", student_name: "Pat Lee", company_name: "Company",
     department_name: "Department", other_remarks: "Good work",

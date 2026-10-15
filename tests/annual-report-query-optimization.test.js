@@ -116,6 +116,19 @@ test("annual details retain the parent and ordered entries lookup", async () => 
   assert.match(calls[1].sql, /ORDER BY sort_order ASC/);
 });
 
+test("Annex C exports the creator's initial only when the prepared-by name matches", async () => {
+  const { res, calls } = await invoke(getProgramAnnualReportById,
+    { params: { reportId: "r1" } },
+    (sql) => sql.includes("program_annual_report_entries") ? [] : [{
+      id: "r1", prepared_by: "Jane Cruz, Registrar", certified_by: "Maria Santos",
+      creator_first_name: "Jane", creator_middle_initial: "a", creator_last_name: "Cruz",
+    }]);
+  assert.equal(res.body.prepared_by, "Jane Cruz, Registrar");
+  assert.equal(res.body.prepared_by_export, "Jane A. Cruz, Registrar");
+  assert.equal(res.body.certified_by, "Maria Santos");
+  assert.match(calls[0].sql, /LEFT JOIN user_profiles/);
+});
+
 test("draft year and program edits target their report ID without overwriting another report", async () => {
   let state = "draft";
   let updated = false;

@@ -193,7 +193,7 @@ export const getPastStudentEvaluations = async (req, res) => {
       JOIN user_profiles AS up ON m.evaluated_by = up.user_id
       LEFT JOIN user_profiles AS reviewer_up ON m.reviewed_by = reviewer_up.user_id
       WHERE ir.user_id = ?
-      ORDER BY m.created_at DESC, c.category ASC
+      ORDER BY m.created_at DESC, c.id ASC
     `;
 
     const [rows] = await connection.execute(query, [studentId]);
@@ -1086,7 +1086,7 @@ export const getDisputedStudentEvaluations = async (req, res) => {
       JOIN student_evaluation_criteria AS c ON s.criterion_id = c.id
       JOIN user_profiles AS up ON m.evaluated_by = up.user_id
       WHERE ir.user_id = ? AND m.status = 'disputed'
-      ORDER BY m.created_at DESC, c.category ASC
+      ORDER BY m.created_at DESC, c.id ASC
     `;
 
     const [rows] = await connection.execute(query, [studentId]);
@@ -1204,7 +1204,7 @@ export const getAllStudentEvaluations = async (req, res) => {
       JOIN user_profiles AS up ON m.evaluated_by = up.user_id
       LEFT JOIN user_profiles AS reviewer_up ON m.reviewed_by = reviewer_up.user_id
       WHERE ir.user_id = ? AND m.status = 'completed'
-      ORDER BY m.created_at DESC, c.category ASC
+      ORDER BY m.created_at DESC, c.id ASC
     `;
 
     // 2. Evaluations the student submitted ABOUT their supervisor —
@@ -1374,7 +1374,7 @@ export const getStudentEvaluationForPrint = async (req, res) => {
        FROM student_evaluation_scores ses
        INNER JOIN student_evaluation_criteria sec ON sec.id = ses.criterion_id
        WHERE ses.evaluation_master_id = ?
-       ORDER BY sec.category ASC, sec.id ASC`,
+       ORDER BY sec.id ASC`,
       [evaluationId],
     );
 

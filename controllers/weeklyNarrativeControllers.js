@@ -11,7 +11,11 @@ export const getWeeklyNarrativesForPrint = async (req, res) => {
 
   try {
     const [records] = await db.execute(
-      `SELECT ir.id, ir.company_name, CONCAT_WS(' ', up.first_name, up.last_name) AS student_name
+      `SELECT ir.id, ir.company_name,
+              CONCAT_WS(' ', up.first_name,
+                CASE WHEN NULLIF(TRIM(up.middle_initial), '') IS NOT NULL
+                  THEN CONCAT(UPPER(LEFT(TRIM(up.middle_initial), 1)), '.') END,
+                up.last_name) AS student_name
        FROM internship_records ir
        LEFT JOIN user_profiles up ON up.user_id = ir.user_id
        WHERE ir.id = ? AND ir.user_id = ? AND ir.deleted_at IS NULL

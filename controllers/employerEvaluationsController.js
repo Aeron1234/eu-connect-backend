@@ -78,7 +78,7 @@ export const getPendingStudentEvaluations = async (req, res) => {
       JOIN student_evaluation_criteria AS c ON s.criterion_id = c.id
       JOIN user_profiles AS up ON m.evaluated_by = up.user_id
       WHERE ir.user_id = ? AND m.status = 'pending'
-      ORDER BY m.created_at DESC, c.category ASC
+      ORDER BY m.created_at DESC, c.id ASC
     `;
 
     const [rows] = await connection.execute(query, [studentId]);

@@ -81,7 +81,10 @@ export async function listSummaryReports(req, res) {
               sr.id AS report_id, sr.organization_experience, sr.work_schedule,
               sr.memorable_moment, sr.difficulties_solutions, sr.memorabilia_note,
               sr.attachment_name, sr.attachment_type, sr.created_at, sr.updated_at,
-              CONCAT_WS(' ', up.first_name, up.last_name) AS student_name
+              CONCAT_WS(' ', up.first_name,
+                CASE WHEN NULLIF(TRIM(up.middle_initial), '') IS NOT NULL
+                  THEN CONCAT(UPPER(LEFT(TRIM(up.middle_initial), 1)), '.') END,
+                up.last_name) AS student_name
        FROM internship_records ir
        LEFT JOIN summary_reports sr ON sr.internship_id = ir.id
        LEFT JOIN user_profiles up ON up.user_id = ir.user_id
@@ -105,7 +108,10 @@ export async function getInternshipRecordSummaryReport(req, res) {
     await verifyRecordAccess(connection, internshipId, requesterId, role);
     const [rows] = await connection.execute(
       `SELECT sr.id AS report_id, sr.internship_id, ir.company_name,
-              CONCAT_WS(' ', up.first_name, up.last_name) AS student_name,
+              CONCAT_WS(' ', up.first_name,
+                CASE WHEN NULLIF(TRIM(up.middle_initial), '') IS NOT NULL
+                  THEN CONCAT(UPPER(LEFT(TRIM(up.middle_initial), 1)), '.') END,
+                up.last_name) AS student_name,
               sr.organization_experience, sr.work_schedule, sr.memorable_moment,
               sr.difficulties_solutions, sr.memorabilia_note,
               sr.attachment_name, sr.attachment_type, sr.created_at, sr.updated_at
