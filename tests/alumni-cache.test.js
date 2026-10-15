@@ -222,3 +222,41 @@ test("forced completion logs the student full name and preserves student ID meta
  connection.execute=async(sql,params)=>{if(sql.includes("INSERT INTO activity_logs")&&params[2]==="internship_record_force_finished"){description=params[5];metadata=JSON.parse(params[6]);}return execute(sql,params);};
  const res=response();await internships.markInternshipFinished(request("admin"),res);assert.ok(res.statusCode<300);assert.ok(description.includes("student: Test User"));assert.equal(metadata.student_id,"student");
 });
+
+test("finished internship notifications persist and emit the record UUID after commit", async () => {
+  seed();
+  const internshipId = "e531092e-4d22-4e1b-b909-e89d2c6ac3ea";
+  const query = connection.query;
+  let notificationBatch;
+  const events = [];
+  connection.query = async (sql, params) => {
+    if (sql.includes("INSERT INTO notifications")) notificationBatch = { sql, values: params[0] };
+    return query(sql, params);
+  };
+  const req = request("student");
+  req.params.internshipId = internshipId;
+  req.app.get = () => ({
+    to: (room) => ({ emit: (event, payload) => {
+      assert.equal(committed, true);
+      events.push({ room, event, payload });
+    } }),
+  });
+  const res = response();
+  await internships.finishInternshipRecord(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.success, true);
+  assert.match(notificationBatch.sql, /message, link_uuid\)/);
+  assert.ok(notificationBatch.values.length > 0);
+  for (const values of notificationBatch.values) {
+    assert.equal(values[2], "internship_record_finished");
+    assert.equal(values[5], internshipId);
+  }
+  assert.equal(events.length, notificationBatch.values.length);
+  for (const { event, payload } of events) {
+    assert.equal(event, "new_notification");
+    assert.equal(payload.type, "internship_record_finished");
+    assert.equal(payload.link_uuid, internshipId);
+    assert.equal("link" in payload, false);
+  }
+});

@@ -891,7 +891,7 @@ export const finishInternshipRecord = async (req, res) => {
 
     if (notifValues.length > 0) {
       await connection.query(
-        `INSERT INTO notifications (user_id, sender_id, type, title, message, link) VALUES ?`,
+        `INSERT INTO notifications (user_id, sender_id, type, title, message, link_uuid) VALUES ?`,
         [notifValues],
       );
     }
@@ -934,7 +934,7 @@ export const finishInternshipRecord = async (req, res) => {
         title: "Internship Record Finished",
         message: finishedMessage,
         type: "internship_record_finished",
-        link: internshipId,
+        link_uuid: internshipId,
       });
     });
 
