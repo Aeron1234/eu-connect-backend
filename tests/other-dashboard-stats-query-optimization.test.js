@@ -5,7 +5,7 @@ import {
   getStudentDashboardStats,
   getEmployerDashboardData,
   getAdminDashboardData,
-} from "../controllers/dashboardController.js";
+} from "../features/dashboard/controllers/dashboardController.js";
 
 function response() {
   return {

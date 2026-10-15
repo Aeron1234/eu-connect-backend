@@ -5,7 +5,7 @@ process.env.SUPABASE_URL = "https://example.supabase.co";
 process.env.SUPABASE_KEY = "no-network";
 
 const { db } = await import("../config/db.js");
-const { setSearchedStudentDtrLocation } = await import("../controllers/searchedUserController.js");
+const { setSearchedStudentDtrLocation } = await import("../features/users/controllers/searchedUserController.js");
 
 async function setLocation({ role, employerId }) {
   const originalGetConnection = db.getConnection;

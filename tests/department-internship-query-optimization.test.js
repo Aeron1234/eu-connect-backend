@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 process.env.SUPABASE_URL = "https://example.supabase.co";
 process.env.SUPABASE_KEY = "no-network";
 const { db } = await import("../config/db.js");
-const { getDepartmentInternshipRecords } = await import("../controllers/internshipRecordControllers.js");
+const { getDepartmentInternshipRecords } = await import("../features/internship-records/controllers/internshipRecordControllers.js");
 
 async function invoke({ role, query, summary, rows = [] }) {
   const original = db.getConnection;

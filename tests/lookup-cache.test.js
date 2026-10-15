@@ -2,14 +2,14 @@ import { test, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
 import express from "express";
 import { once } from "node:events";
-import cache from "../config/cache.js";
+import cache from "../config/cache/cache.js";
 import { db } from "../config/db.js";
 
 process.env.ACCESS_TOKEN_SECRET = "lookup-test-access";
 process.env.REFRESH_TOKEN_SECRET = "lookup-test-refresh";
 process.env.TEMP_PASSWORD_SECRET = "lookup-test-temp";
 process.env.CACHE_ENABLED = "true";
-const { default: routes } = await import("../routes/departmentsAndCoursesRoutes.js");
+const { default: routes } = await import("../features/departments-and-courses/routes/departmentsAndCoursesRoutes.js");
 const { signAccessToken } = await import("../config/jwt.js");
 const originalGetConnection = db.getConnection;
 const originalExecute = db.execute;

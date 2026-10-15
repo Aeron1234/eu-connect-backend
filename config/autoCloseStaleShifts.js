@@ -1,7 +1,7 @@
-import { invalidateAttendanceHistoryCache } from "./attendanceHistoryCache.js";
-import { invalidateProfileOverviewCache } from "./profileOverviewCache.js";
-import { invalidateDepartmentInternshipsCache } from "./staffInternshipsCache.js";
-import { invalidateDashboardCache } from "./dashboardCache.js";
+import { invalidateAttendanceHistoryCache } from "./cache/attendanceHistoryCache.js";
+import { invalidateProfileOverviewCache } from "./cache/profileOverviewCache.js";
+import { invalidateDepartmentInternshipsCache } from "./cache/staffInternshipsCache.js";
+import { invalidateDashboardCache } from "./cache/dashboardCache.js";
 import { db } from "./db.js";
 import { reportBackgroundError } from "./errorTracking.js";
 import { getMaxShiftHours } from "./shiftLimits.js";

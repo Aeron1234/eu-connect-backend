@@ -5,7 +5,7 @@ import {
   getAvailableAcademicYears,
   getHteCompanyList,
   getHteCompanyReport,
-} from "../controllers/hteReportControllers.js";
+} from "../features/sipp-reports/controllers/hteReportControllers.js";
 
 async function invoke(handler, query, responses) {
   const original = db.getConnection;

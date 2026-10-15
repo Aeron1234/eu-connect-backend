@@ -1,8 +1,10 @@
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+import { createHash } from "node:crypto";
+import { verifyRefreshToken } from "../config/jwt.js";
 
 // Protected routes run verifyUser before their limiter. Use that verified
 // identity so people on the same school network do not share a request budget.
-// Login and other unverified requests still fall back to the client IP.
+// Unverified requests without an account identifier fall back to the client IP.
 const authenticatedOrIpKey = (req) => {
   const userId = req.verifiedUser?.id;
   if (userId !== undefined && userId !== null && String(userId).trim()) {
@@ -71,15 +73,46 @@ export const mediumLimiter = rateLimit({
   },
 });
 
-// Preserve the previous 10-per-hour IP budget for unauthenticated actions,
-// while keeping it separate from authenticated submissions.
+// Next.js relays auth requests, so its IP is shared by many legitimate users.
+// Hash normalized identifiers to keep credentials/PII out of rate-limit keys.
+const authIdentifierKey = (field, scope) => (req) => {
+  const identifier = req.body?.[field];
+  if (typeof identifier !== "string" || !identifier.trim()) {
+    return `${scope}:ip:${ipKeyGenerator(req.ip)}`;
+  }
+  const digest = createHash("sha256")
+    .update(identifier.trim().toLowerCase())
+    .digest("hex");
+  return `${scope}:${digest}`;
+};
+
+// Account lockout is 15 minutes; don't extend it to an hour via the limiter.
+// Successful logins and server outages do not consume failed-attempt budgets.
 export const authLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
+  keyGenerator: authIdentifierKey("username", "login"),
+  windowMs: 15 * 60 * 1000,
   max: 10,
+  skipSuccessfulRequests: true,
+  requestWasSuccessful: (_req, res) => res.statusCode < 400 || res.statusCode >= 500,
+  standardHeaders: true,
+  legacyHeaders: false,
   message: {
     status: 429,
-    error:
-      "Too many authentication attempts. Please try again after an hour.",
+    error: "Too many login attempts for this account. Please try again after 15 minutes.",
+  },
+});
+
+// Recovery returns a generic 200 even for unknown emails. Count every request
+// in its own budget so successful responses cannot bypass email throttling.
+export const passwordRecoveryLimiter = rateLimit({
+  keyGenerator: authIdentifierKey("email", "password-recovery"),
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    status: 429,
+    error: "Too many password recovery requests. Please try again after an hour.",
   },
 });
 
@@ -104,8 +137,20 @@ export const clockInLimiter = rateLimit({
 });
 
 export const refreshLimiter = rateLimit({
+  keyGenerator: (req) => {
+    try {
+      // Verify, never merely decode: forged subjects must not create budgets.
+      const payload = verifyRefreshToken(req.cookies?.refresh_token);
+      if (typeof payload.sub === "string" && payload.sub.trim() && payload.jti) {
+        return `refresh:user:${payload.sub}`;
+      }
+    } catch {
+      // Invalid/missing tokens retain an IP-based abuse budget.
+    }
+    return `refresh:ip:${ipKeyGenerator(req.ip)}`;
+  },
   windowMs: 60 * 1000,
-  max: 30, // generous — it's called automatically, not by user clicks
+  max: 30, // per verified user, including across token rotations
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many refresh attempts, please try again shortly." },

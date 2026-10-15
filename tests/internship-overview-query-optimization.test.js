@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 process.env.SUPABASE_URL = "https://example.supabase.co";
 process.env.SUPABASE_KEY = "no-network";
 const { db } = await import("../config/db.js");
-const { getInternshipRecordOverview } = await import("../controllers/internshipRecordControllers.js");
+const { getInternshipRecordOverview } = await import("../features/internship-records/controllers/internshipRecordControllers.js");
 const original = db.getConnection;
 after(async () => { db.getConnection = original; await db.end(); });
 
@@ -20,6 +20,7 @@ test("overview keeps its response while loading three indexed counts with detail
       return [[{
         student_id: "student", first_name: "Pat", last_name: "Lee",
         student_number: "123", course_name: "BSIT", company_name: "Company",
+        company_address: "Lucena City", lat: "13.9411", lon: "121.6234",
         internship_position: "Intern", status: "ongoing", created_at: "2026-09-01",
         date_started: "2026-09-01", date_ended: null,
         supervisor_first_name: "Sam", supervisor_last_name: "Reyes",
@@ -43,10 +44,12 @@ test("overview keeps its response while loading three indexed counts with detail
   for (const table of ["daily_time_records", "weekly_narratives", "internship_documents"])
     assert.match(calls[1].sql, new RegExp(`SELECT COUNT\\(\\*\\) FROM ${table} WHERE internship_id = ir\\.id`));
   assert.match(calls[1].sql, /MAX\(sai_latest\.id\)/);
+  assert.match(calls[1].sql, /ir\.company_address, ir\.lat, ir\.lon/);
   assert.doesNotMatch(calls[1].sql, /GROUP BY user_id/);
   assert.deepEqual(res.body, {
     created_at: "2026-09-01", student_id: "student", student_name: "Pat Lee",
     student_number: "123", course_name: "BSIT", company_name: "Company",
+    company_address: "Lucena City", lat: "13.9411", lon: "121.6234",
     internship_position: "Intern", status: "ongoing", supervisor_name: "Sam Reyes",
     date_started: "2026-09-01", date_ended: null, submitted_at: "2026-09-01",
     total_hours: 100, accumulated_hours: 20, percent_complete: 20,

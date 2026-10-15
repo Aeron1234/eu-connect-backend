@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { db } from "../config/db.js";
-import { searchUsers } from "../controllers/searchHistoryController.js";
+import { searchUsers } from "../features/search-history/controllers/searchHistoryController.js";
 
 function response() {
   return {

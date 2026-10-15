@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { db } from "../config/db.js";
-import { getUnreadNotificationCount } from "../controllers/notificationControllers.js";
+import { getUnreadNotificationCount } from "../features/notifications/controllers/notificationControllers.js";
 
 test("unread notification count retries a reset read on a new connection", async () => {
   const original = db.getConnection;

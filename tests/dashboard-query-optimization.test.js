@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { db } from "../config/db.js";
-import { getDepartmentHeadDashboardData } from "../controllers/dashboardController.js";
+import { getDepartmentHeadDashboardData } from "../features/dashboard/controllers/dashboardController.js";
 
 test("department statistics use one internship scan without changing response values", async () => {
   const original = db.getConnection;

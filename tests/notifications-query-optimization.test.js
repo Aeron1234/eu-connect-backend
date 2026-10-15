@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 const { db } = await import('../config/db.js');
-const { getAllNotifications } = await import('../controllers/notificationControllers.js');
+const { getAllNotifications } = await import('../features/notifications/controllers/notificationControllers.js');
 
 async function invoke(query, rows, totals) {
   const original = db.getConnection;

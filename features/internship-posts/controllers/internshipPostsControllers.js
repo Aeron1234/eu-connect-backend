@@ -1,0 +1,730 @@
+import { reportError } from "../../../config/errorTracking.js";
+import { invalidatePostingsCache, invalidatePostingFavoritesCache } from "../../../config/cache/postingsCache.js";
+import { invalidateActivityLogsCache } from "../../../config/cache/activityLogsCache.js";
+import { db } from "../../../config/db.js";
+import { newUUID } from "../../../config/helpers.js";
+
+const ALLOWED_WORK_TYPES = ["on-site", "hybrid", "remote"];
+const ALLOWED_STATUSES = ["open", "filled"];
+
+export const getInternshipPostings = async (req, res) => {
+  let connection;
+  try {
+    const { id: requesterId } = req.verifiedUser;
+    const {
+      workType,
+      courseId,
+      search,
+      mine,
+      favorite,
+      page = 1,
+      limit = 10,
+    } = req.query;
+
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const pageSize = Math.max(1, Math.min(50, parseInt(limit) || 10)); // cap to avoid abuse
+    const offset = (pageNum - 1) * pageSize;
+
+    const conditions = ["ip.deleted_at IS NULL"];
+    const params = [];
+
+    if (workType) {
+      conditions.push("ip.work_type = ?");
+      params.push(workType);
+    }
+
+    if (search) {
+      conditions.push("(ip.company_name LIKE ? OR ip.position LIKE ?)");
+      params.push(`%${search}%`, `%${search}%`);
+    }
+
+    if (mine === "true") {
+      conditions.push("ip.employer_id = ?");
+      params.push(requesterId);
+    }
+
+    if (courseId) {
+      conditions.push(
+        `EXISTS (
+           SELECT 1 FROM internship_posting_courses ipc
+           WHERE ipc.posting_id = ip.id AND ipc.course_id = ?
+         )`,
+      );
+      params.push(courseId);
+    }
+
+    if (favorite === "favorited") {
+      conditions.push(
+        `EXISTS (
+           SELECT 1 FROM internship_favorites fav
+           WHERE fav.posting_id = ip.id AND fav.student_id = ?
+         )`,
+      );
+      params.push(requesterId);
+    } else if (favorite === "not_favorited") {
+      conditions.push(
+        `NOT EXISTS (
+           SELECT 1 FROM internship_favorites fav
+           WHERE fav.posting_id = ip.id AND fav.student_id = ?
+         )`,
+      );
+      params.push(requesterId);
+    }
+
+    const whereClause = conditions.join(" AND ");
+
+    connection = await db.getConnection();
+
+    // Keep the page and its filtered total in one database round trip.
+    const [postings] = await connection.execute(
+      `SELECT 
+         ip.id, ip.employer_id, ip.company_name, ip.position, ip.vacancies,
+         ip.location, ip.work_type, ip.duration_hours, ip.description,
+         ip.requirements, ip.contact_name, ip.contact_email, ip.contact_phone,
+         ip.contact_website, ip.status, ip.created_at, ip.updated_at,
+         EXISTS (
+           SELECT 1 FROM internship_favorites fav
+           WHERE fav.posting_id = ip.id AND fav.student_id = ?
+         ) AS favorite_for_requester,
+         (SELECT COUNT(*) FROM internship_postings ip WHERE ${whereClause}) AS total_postings
+       FROM internship_postings ip
+       WHERE ${whereClause}
+       ORDER BY ip.created_at DESC
+       LIMIT ? OFFSET ?`,
+      [requesterId, ...params, ...params, pageSize, offset],
+    );
+
+    if (postings.length === 0) {
+      // Page one can only be empty when there are no matches. Later pages
+      // still need the filtered total even when their offset is out of range.
+      let total = 0;
+      if (pageNum > 1) {
+        [[{ total }]] = await connection.execute(
+          `SELECT COUNT(*) AS total FROM internship_postings ip WHERE ${whereClause}`,
+          params,
+        );
+      }
+      return res.status(200).json({
+        data: [],
+        pagination: {
+          page: pageNum,
+          limit: pageSize,
+          total,
+          totalPages: Math.ceil(total / pageSize),
+        },
+      });
+    }
+
+    const total = postings[0].total_postings;
+    const postingIds = postings.map((p) => p.id);
+    const placeholders = postingIds.map(() => "?").join(",");
+
+    const [courseLinks] = await connection.execute(
+      `SELECT ipc.posting_id, c.id AS course_id, c.course_name, c.short_name
+       FROM internship_posting_courses ipc
+       JOIN courses c ON ipc.course_id = c.id
+       WHERE ipc.posting_id IN (${placeholders})`,
+      postingIds,
+    );
+
+    const coursesByPostingId = new Map();
+    for (const course of courseLinks) {
+      if (!coursesByPostingId.has(course.posting_id)) {
+        coursesByPostingId.set(course.posting_id, []);
+      }
+      coursesByPostingId.get(course.posting_id).push({
+        id: course.course_id,
+        name: course.course_name,
+        shortName: course.short_name,
+      });
+    }
+
+    const records = postings.map(({ favorite_for_requester, total_postings, ...posting }) => ({
+      ...posting,
+      isOwner: posting.employer_id === requesterId,
+      isFavorited: Boolean(favorite_for_requester),
+      courses: coursesByPostingId.get(posting.id) ?? [],
+    }));
+
+    return res.status(200).json({
+      data: records,
+      pagination: {
+        page: pageNum,
+        limit: pageSize,
+        total,
+        totalPages: Math.ceil(total / pageSize),
+      },
+    });
+  } catch (error) {
+    reportError("Get internship postings error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Database query failed to get internship postings.",
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const createInternshipPosting = async (req, res) => {
+  let connection;
+  try {
+    const { id: employerId } = req.verifiedUser;
+    const {
+      company_name,
+      position,
+      vacancies,
+      location,
+      work_type,
+      duration_hours,
+      description,
+      requirements,
+      contact_name,
+      contact_email,
+      contact_phone,
+      contact_website,
+      course_ids, // expected: array of course ids
+    } = req.body;
+
+    // Required fields, matching the frontend form's marked-required fields
+    if (
+      !company_name ||
+      !position ||
+      !location ||
+      !description ||
+      !contact_email
+    ) {
+      return res.status(400).json({
+        error:
+          "company_name, position, location, description, and contact_email are required.",
+      });
+    }
+
+    if (!work_type || !ALLOWED_WORK_TYPES.includes(work_type)) {
+      return res.status(400).json({
+        error: `work_type must be one of: ${ALLOWED_WORK_TYPES.join(", ")}.`,
+      });
+    }
+
+    if (!Array.isArray(course_ids) || course_ids.length === 0) {
+      return res
+        .status(400)
+        .json({ error: "At least one eligible course is required." });
+    }
+
+    const vacancyCount = parseInt(vacancies);
+    if (!Number.isInteger(vacancyCount) || vacancyCount < 1) {
+      return res
+        .status(400)
+        .json({ error: "vacancies must be a positive integer." });
+    }
+
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    // Validate the submitted course ids actually exist — never trust
+    // client-sent ids blindly into a FK insert
+    const coursePlaceholders = course_ids.map(() => "?").join(",");
+    const [validCourses] = await connection.execute(
+      `SELECT id, course_name, short_name FROM courses WHERE id IN (${coursePlaceholders})`,
+      course_ids,
+    );
+
+    if (validCourses.length !== course_ids.length) {
+      await connection.rollback();
+      return res
+        .status(400)
+        .json({ error: "One or more selected courses are invalid." });
+    }
+    const courseNamesById = new Map(validCourses.map((course) => [
+      String(course.id),
+      course.course_name || course.short_name || String(course.id),
+    ]));
+
+    const postingId = newUUID();
+
+    const [result] = await connection.execute(
+      `INSERT INTO internship_postings
+        (id, employer_id, company_name, position, vacancies, location, work_type,
+         duration_hours, description, requirements, contact_name, contact_email,
+         contact_phone, contact_website)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        postingId,
+        employerId,
+        company_name,
+        position,
+        vacancyCount,
+        location,
+        work_type,
+        duration_hours || null,
+        description,
+        requirements || null,
+        contact_name || null,
+        contact_email,
+        contact_phone || null,
+        contact_website || null,
+      ],
+    );
+
+    if (result.affectedRows === 0) {
+      await connection.rollback();
+      return res.status(400).json({ error: "Failed to create posting." });
+    }
+
+    // Insert one row per eligible course into the join table
+    const courseValues = course_ids.map((courseId) => [postingId, courseId]);
+    await connection.query(
+      `INSERT INTO internship_posting_courses (posting_id, course_id) VALUES ?`,
+      [courseValues],
+    );
+
+    // Activity log is supplementary — isolated so a logging failure can
+    // never roll back or fail the actual posting creation.
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          employerId,
+          "employer",
+          "internship_posting_created",
+          "internship_postings",
+          postingId,
+          `Employer created internship post "${position}" at ${company_name}.`,
+          JSON.stringify({
+            company_name,
+            position,
+            vacancies: vacancyCount,
+            location,
+            work_type,
+            duration_hours: duration_hours || null,
+            description,
+            requirements: requirements || null,
+            contact_name: contact_name || null,
+            contact_email,
+            contact_phone: contact_phone || null,
+            contact_website: contact_website || null,
+            course_ids,
+            eligible_courses: course_ids.map((courseId) =>
+              courseNamesById.get(String(courseId)),
+            ),
+          }),
+        ],
+      );
+    } catch (logError) {
+      reportError("Activity log insert failed (posting created):", logError);
+    }
+
+    await connection.commit();
+    invalidatePostingsCache();
+
+    invalidateActivityLogsCache();
+
+    return res.status(201).json({
+      message: "Internship posting created successfully.",
+      success: true,
+      id: postingId,
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    reportError("Create internship posting error:", error);
+    return res.status(500).json({ error: "Server failed to create posting." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const updateInternshipPosting = async (req, res) => {
+  let connection;
+  try {
+    const { id: requesterId } = req.verifiedUser;
+    const { postingId } = req.params;
+
+    if (!postingId) {
+      return res.status(400).json({ error: "postingId is required." });
+    }
+
+    const {
+      company_name,
+      position,
+      vacancies,
+      location,
+      work_type,
+      duration_hours,
+      description,
+      requirements,
+      contact_name,
+      contact_email,
+      contact_phone,
+      contact_website,
+      status,
+      course_ids, // optional: array of course ids, replaces the existing set if provided
+    } = req.body;
+
+    if (work_type !== undefined && !ALLOWED_WORK_TYPES.includes(work_type)) {
+      return res.status(400).json({
+        error: `work_type must be one of: ${ALLOWED_WORK_TYPES.join(", ")}.`,
+      });
+    }
+
+    if (status !== undefined && !ALLOWED_STATUSES.includes(status)) {
+      return res.status(400).json({
+        error: `status must be one of: ${ALLOWED_STATUSES.join(", ")}.`,
+      });
+    }
+
+    let vacancyCount;
+    if (vacancies !== undefined) {
+      vacancyCount = parseInt(vacancies);
+      if (!Number.isInteger(vacancyCount) || vacancyCount < 1) {
+        return res
+          .status(400)
+          .json({ error: "vacancies must be a positive integer." });
+      }
+    }
+
+    if (
+      course_ids !== undefined &&
+      (!Array.isArray(course_ids) || course_ids.length === 0)
+    ) {
+      return res
+        .status(400)
+        .json({ error: "course_ids must be a non-empty array if provided." });
+    }
+
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    const [rows] = await connection.execute(
+      `SELECT id, employer_id, position, company_name, deleted_at FROM internship_postings WHERE id = ? FOR UPDATE`,
+      [postingId],
+    );
+
+    if (rows.length === 0 || rows[0].deleted_at !== null) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Posting not found." });
+    }
+
+    const posting = rows[0];
+
+    // Same ownership rule as delete — only the original poster can edit
+    if (posting.employer_id !== requesterId) {
+      await connection.rollback();
+      return res.status(403).json({
+        error: "You can only edit postings you created yourself.",
+      });
+    }
+
+    // Validate course ids actually exist before swapping the join table
+    if (course_ids !== undefined) {
+      const coursePlaceholders = course_ids.map(() => "?").join(",");
+      const [validCourses] = await connection.execute(
+        `SELECT id FROM courses WHERE id IN (${coursePlaceholders})`,
+        course_ids,
+      );
+
+      if (validCourses.length !== course_ids.length) {
+        await connection.rollback();
+        return res
+          .status(400)
+          .json({ error: "One or more selected courses are invalid." });
+      }
+    }
+
+    // Build the SET clause dynamically from whatever fields were sent
+    const fieldMap = {
+      company_name,
+      position,
+      vacancies: vacancyCount,
+      location,
+      work_type,
+      duration_hours,
+      description,
+      requirements,
+      contact_name,
+      contact_email,
+      contact_phone,
+      contact_website,
+      status,
+    };
+
+    const setClauses = [];
+    const setValues = [];
+
+    for (const [column, value] of Object.entries(fieldMap)) {
+      if (value !== undefined) {
+        setClauses.push(`${column} = ?`);
+        setValues.push(value);
+      }
+    }
+
+    if (setClauses.length === 0 && course_ids === undefined) {
+      await connection.rollback();
+      return res.status(400).json({ error: "No fields provided to update." });
+    }
+
+    // Bump updated_at whenever anything actually changed — including a
+    // course-only edit, which the plain column loop above wouldn't catch
+    if (setClauses.length > 0 || course_ids !== undefined) {
+      if (setClauses.length > 0) {
+        setClauses.push("updated_at = CURRENT_TIMESTAMP");
+        await connection.execute(
+          `UPDATE internship_postings SET ${setClauses.join(", ")} WHERE id = ?`,
+          [...setValues, postingId],
+        );
+      } else {
+        await connection.execute(
+          `UPDATE internship_postings SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+          [postingId],
+        );
+      }
+    }
+
+    // Replace course links wholesale if a new set was provided
+    if (course_ids !== undefined) {
+      await connection.execute(
+        `DELETE FROM internship_posting_courses WHERE posting_id = ?`,
+        [postingId],
+      );
+      const courseValues = course_ids.map((courseId) => [postingId, courseId]);
+      await connection.query(
+        `INSERT INTO internship_posting_courses (posting_id, course_id) VALUES ?`,
+        [courseValues],
+      );
+    }
+
+    // Re-fetch the full posting + its current courses so the client
+    // gets back the true persisted state, not just a success flag
+    const [[updatedPosting]] = await connection.execute(
+      `SELECT id, employer_id, company_name, position, vacancies, location,
+              work_type, duration_hours, description, requirements,
+              contact_name, contact_email, contact_phone, contact_website,
+              status, created_at, updated_at
+       FROM internship_postings WHERE id = ?`,
+      [postingId],
+    );
+
+    const [updatedCourseLinks] = await connection.execute(
+      `SELECT c.id AS course_id, c.course_name, c.short_name
+       FROM internship_posting_courses ipc
+       JOIN courses c ON ipc.course_id = c.id
+       WHERE ipc.posting_id = ?`,
+      [postingId],
+    );
+
+    // Activity log is supplementary — isolated so a logging failure can
+    // never roll back or fail the actual update. Only the fields actually
+    // sent are recorded (setClauses/course_ids), not the full row.
+    try {
+      const changedFields = Object.keys(fieldMap).filter(
+        (key) => fieldMap[key] !== undefined,
+      );
+      if (course_ids !== undefined) changedFields.push("course_ids");
+
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          requesterId,
+          "employer",
+          "internship_posting_updated",
+          "internship_postings",
+          postingId,
+          `Employer updated posting "${updatedPosting.position}" at ${updatedPosting.company_name} (${changedFields.join(", ") || "no fields"}).`,
+          JSON.stringify({ changed_fields: changedFields }),
+        ],
+      );
+    } catch (logError) {
+      reportError("Activity log insert failed (posting updated):", logError);
+    }
+
+    await connection.commit();
+    invalidatePostingsCache();
+
+    invalidateActivityLogsCache();
+
+    const responseData = {
+      ...updatedPosting,
+      isOwner: true, // requester was just confirmed as the owner above
+      courses: updatedCourseLinks.map((c) => ({
+        id: c.course_id,
+        name: c.course_name,
+        shortName: c.short_name,
+      })),
+    };
+
+    return res.status(200).json({
+      message: "Posting updated successfully.",
+      success: true,
+      data: responseData,
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    reportError("Update internship posting error:", error);
+    return res.status(500).json({ error: "Failed to update posting." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const deleteInternshipPosting = async (req, res) => {
+  let connection;
+  try {
+    const { id: requesterId, role } = req.verifiedUser;
+    const { postingId } = req.params;
+
+    if (!postingId) {
+      return res.status(400).json({ error: "postingId is required." });
+    }
+
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    const [rows] = await connection.execute(
+      `SELECT id, employer_id, position, company_name, deleted_at FROM internship_postings WHERE id = ? FOR UPDATE`,
+      [postingId],
+    );
+
+    if (rows.length === 0 || rows[0].deleted_at !== null) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Posting not found." });
+    }
+
+    const posting = rows[0];
+
+    // The original poster can always delete their own posting. Admins get
+    // a moderation override on top of that — everyone else is blocked.
+    const isOwner = posting.employer_id === requesterId;
+    const isAdmin = role === "admin";
+
+    if (!isOwner && !isAdmin) {
+      await connection.rollback();
+      return res.status(403).json({
+        error: "You can only delete postings you created yourself.",
+      });
+    }
+
+    const [result] = await connection.execute(
+      `UPDATE internship_postings SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [postingId],
+    );
+
+    if (result.affectedRows === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Posting not found." });
+    }
+
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          requesterId,
+          role,
+          "internship_posting_deleted",
+          "internship_postings",
+          postingId,
+          `${isAdmin && !isOwner ? "Admin" : "Employer"} deleted posting "${posting.position}" at ${posting.company_name}.`,
+          JSON.stringify({ employer_id: posting.employer_id }),
+        ],
+      );
+    } catch (logError) {
+      reportError("Activity log insert failed (posting deleted):", logError);
+    }
+
+    await connection.commit();
+    invalidatePostingsCache();
+
+    invalidateActivityLogsCache();
+
+    return res.status(200).json({
+      message: "Posting deleted successfully.",
+      success: true,
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    reportError("Delete internship posting error:", error);
+    return res.status(500).json({ error: "Failed to delete posting." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+// Note: toggleInternshipFavorite is intentionally NOT logged to activity_logs.
+// Same reasoning as skipping DTR clock-in/out: favoriting is a high-frequency,
+// personal preference action with no audit value for the school (nobody needs
+// to know a student liked/unliked a posting), and internship_favorites already
+// is its own source of truth for current favorite state. Logging every toggle
+// would just add volume without adding anything an admin/dept head would ever
+// want to review.
+export const toggleInternshipFavorite = async (req, res) => {
+  let connection;
+  try {
+    const { id: studentId } = req.verifiedUser;
+    const { postingId } = req.params;
+
+    if (!postingId) {
+      return res.status(400).json({ error: "postingId is required." });
+    }
+
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    const [rows] = await connection.execute(
+      `SELECT id, deleted_at FROM internship_postings WHERE id = ? FOR UPDATE`,
+      [postingId],
+    );
+
+    if (rows.length === 0 || rows[0].deleted_at !== null) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Posting not found." });
+    }
+
+    const [existing] = await connection.execute(
+      `SELECT id FROM internship_favorites WHERE posting_id = ? AND student_id = ?`,
+      [postingId, studentId],
+    );
+
+    if (existing.length > 0) {
+      await connection.execute(
+        `DELETE FROM internship_favorites WHERE id = ?`,
+        [existing[0].id],
+      );
+
+      await connection.commit();
+      invalidatePostingFavoritesCache(studentId);
+
+      return res.status(200).json({
+        message: "Removed from favorites.",
+        success: true,
+        isFavorited: false,
+      });
+    }
+
+    const favoriteId = newUUID();
+
+    const [result] = await connection.execute(
+      `INSERT INTO internship_favorites (id, posting_id, student_id) VALUES (?, ?, ?)`,
+      [favoriteId, postingId, studentId],
+    );
+
+    if (result.affectedRows === 0) {
+      await connection.rollback();
+      return res.status(400).json({ error: "Failed to add favorite." });
+    }
+
+    await connection.commit();
+    invalidatePostingFavoritesCache(studentId);
+
+    return res.status(201).json({
+      message: "Added to favorites.",
+      success: true,
+      isFavorited: true,
+      id: favoriteId,
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    reportError("Toggle internship favorite error:", error);
+    return res.status(500).json({ error: "Failed to update favorite status." });
+  } finally {
+    if (connection) connection.release();
+  }
+};

@@ -1,0 +1,1762 @@
+import { reportError } from "../../../config/errorTracking.js";
+import { getActivityLogUserName } from "../../../config/activityLogNames.js";
+import { attendanceHistoryCacheHit } from "../../../middleware/attendance-history-cache.js";
+import { invalidateAttendanceHistoryCache } from "../../../config/cache/attendanceHistoryCache.js";
+import { internshipOverviewCacheHit } from "../../../middleware/internship-overview-cache.js";
+import { invalidateProfileOverviewCache } from "../../../config/cache/profileOverviewCache.js";
+import { invalidateWeeklyNarrativesCache } from "../../../config/cache/weeklyNarrativesCache.js";
+import { evaluationHistoryCacheHit } from "../../../middleware/evaluation-history-cache.js";
+import { invalidateEvaluationHistoryCache } from "../../../config/cache/evaluationHistoryCache.js";
+import { documentMetadataCacheHit } from "../../../middleware/document-metadata-cache.js";
+import { invalidateDocumentMetadataCache } from "../../../config/cache/documentMetadataCache.js";
+import { invalidateStaffInternshipsCache } from "../../../config/cache/staffInternshipsCache.js";
+import { departmentInternshipsCacheHit } from "../../../middleware/staff-internships-cache.js";
+import { invalidatePastInternshipsCache } from "../../../config/cache/pastInternshipsCache.js";
+import { invalidateHteReportsCache } from "../../../config/cache/reportsCache.js";
+import { invalidateAlumniCache } from "../../../config/cache/alumniCache.js";
+import { invalidateDashboardCache } from "../../../config/cache/dashboardCache.js";
+import { invalidateNotificationsCache } from "../../../config/cache/notificationsCache.js";
+import { invalidateActivityLogsCache } from "../../../config/cache/activityLogsCache.js";
+import { db } from "../../../config/db.js";
+import { newUUID, verifyRecordAccess } from "../../../config/helpers.js";
+import { supabase } from "../../../config/supabase.js";
+
+export const getRegions = async (req, res) => {
+  try {
+    const [rows] = await db.execute(`SELECT * FROM regions`);
+
+    const record = rows.length > 0 ? rows : [];
+
+    res.status(200).json(record);
+  } catch (error) {
+    reportError("Get all regions error: ", error);
+    res.status(500).json({ error: "Database query failed", success: false });
+  }
+};
+
+export const getActiveInternship = async (req, res) => {
+  try {
+    const { id } = req.verifiedUser;
+
+    const [rows] = await db.execute(
+      `SELECT * FROM internship_records
+       WHERE user_id = ? AND deleted_at IS NULL
+         AND (status = "ongoing" OR status = "pending")
+       ORDER BY (status = 'ongoing') DESC, created_at DESC
+       LIMIT 1`,
+      [id],
+    );
+
+    const record = rows.length > 0 ? rows[0] : null;
+
+    res.status(200).json(record);
+  } catch (error) {
+    reportError("Get active internship error: ", error);
+    res.status(500).json({ error: "Database query failed", success: false });
+  }
+};
+
+export const getMyPastInternshipRecords = async (req, res) => {
+  try {
+    const { id: userId } = req.verifiedUser;
+
+    const [rows] = await db.execute(
+      `SELECT 
+         ir.id, ir.company_name, ir.internship_position, ir.status,
+         ir.date_started, ir.date_ended,
+         (SELECT COUNT(*) FROM internship_documents doc WHERE doc.internship_id = ir.id) AS file_count
+       FROM internship_records ir
+       WHERE ir.user_id = ? AND ir.deleted_at IS NULL AND ir.status != 'ongoing'
+       ORDER BY ir.date_ended DESC, ir.created_at DESC`,
+      [userId],
+    );
+
+    res.status(200).json(rows);
+  } catch (error) {
+    reportError("Get my past internship records error: ", error);
+    res.status(500).json({ error: "Database query failed", success: false });
+  }
+};
+
+export const getAllActiveInternships = async (req, res) => {
+  try {
+    const [rows] = await db.execute(
+      `SELECT ir.id, ir.user_id, ir.company_name, ir.company_address, ir.lon, ir.lat, up.first_name, up.last_name, c.course_name, r.short_name
+        FROM internship_records AS ir
+       INNER JOIN user_profiles AS up ON ir.user_id = up.user_id
+       INNER JOIN student_academic_info AS sai ON ir.user_id = sai.user_id
+       INNER JOIN courses AS c ON sai.course_id = c.id
+       INNER JOIN regions AS r ON ir.region_id = r.id
+       WHERE ir.status = "ongoing" AND ir.deleted_at IS NULL
+       `,
+    );
+
+    const records = rows.length > 0 ? rows : [];
+
+    res.status(200).json(records);
+  } catch (error) {
+    reportError("Get all active internships error: ", error);
+    res.status(500).json({ error: "Database query failed", success: false });
+  }
+};
+
+export const getAllUserInternships = async (req, res) => {
+  try {
+    const { id: userId } = req.verifiedUser;
+    const { role } = req.verifiedUser;
+
+    if (role === "student") {
+      const [rows] = await db.execute(
+        `SELECT ir.id, ir.created_at, ir.company_name, ir.company_address, ir.internship_position, ir.company_website, ir.description, ir.status, ir.date_started, ir.date_ended, ir.total_hours, up.first_name, up.last_name, c.course_name, r.short_name,
+                NULLIF(TRIM(CONCAT_WS(' ', supervisor.first_name, supervisor.last_name)), '') AS supervisor_name
+        FROM internship_records AS ir
+       INNER JOIN user_profiles AS up ON ir.user_id = up.user_id
+       LEFT JOIN user_profiles AS supervisor ON ir.employer_id = supervisor.user_id
+       INNER JOIN student_academic_info AS sai ON ir.user_id = sai.user_id
+       INNER JOIN courses AS c ON sai.course_id = c.id
+       INNER JOIN regions AS r ON ir.region_id = r.id
+       WHERE ir.user_id = ? AND ir.deleted_at IS NULL
+       ORDER BY ir.created_at DESC
+       `,
+        [userId],
+      );
+
+      const records = rows.length > 0 ? rows : [];
+
+      res.status(200).json(records);
+    }
+
+    if (role === "department_head" || role === "admin") {
+      const [rows] = await db.execute(
+        `SELECT ir.id, ir.user_id, ir.created_at, ir.company_name, ir.company_address, ir.internship_position, ir.company_website, ir.description, ir.status, ir.date_started, ir.date_ended, ir.total_hours, ir.lat, ir.lon, up.first_name, up.last_name, c.course_name, r.short_name AS region_name
+        FROM internship_records AS ir
+       INNER JOIN user_profiles AS up ON ir.user_id = up.user_id
+       INNER JOIN student_academic_info AS sai ON ir.user_id = sai.user_id
+       INNER JOIN courses AS c ON sai.course_id = c.id
+       INNER JOIN regions AS r ON ir.region_id = r.id
+       WHERE ir.deleted_at IS NULL
+       ORDER BY ir.created_at DESC
+       `,
+      );
+
+      const records = rows.length > 0 ? rows : [];
+
+      res.status(200).json(records);
+    }
+  } catch (error) {
+    reportError("Get all user internships error:", error);
+    res.status(500).json({ error: "Database query failed", success: false });
+  }
+};
+
+export const createInternshipRecord = async (req, res) => {
+  let connection;
+  try {
+    connection = await db.getConnection();
+
+    const { id: userId, role, department_id } = req.verifiedUser;
+    const data = req.body;
+
+    if (role !== "student") {
+      return res
+        .status(403)
+        .json({ error: "Only students can create internship records." });
+    }
+
+    if (!department_id) {
+      return res.status(400).json({
+        error: "Academic profile incomplete. Please set your department first.",
+      });
+    }
+
+    const requiredFields = [
+      "company_name",
+      "company_address",
+      "internship_position",
+      "description",
+      "date_started",
+      "date_ended",
+      "total_hours",
+      "lon",
+      "lat",
+      "region_id",
+      "semester",
+    ];
+
+    for (const field of requiredFields) {
+      const value = data[field];
+      if (
+        value === undefined ||
+        value === null ||
+        String(value).trim() === ""
+      ) {
+        return res.status(400).json({
+          error: `${field.replace(/_/g, " ")} is required for the map.`,
+        });
+      }
+    }
+
+    if (!["1st", "2nd", "summer"].includes(data.semester)) {
+      return res
+        .status(400)
+        .json({ error: "semester must be '1st', '2nd', or 'summer'." });
+    }
+
+    const [studentProfile] = await connection.execute(
+      `SELECT first_name, last_name FROM user_profiles WHERE user_id = ?`,
+      [userId],
+    );
+
+    const studentName =
+      studentProfile.length > 0
+        ? `${studentProfile[0].first_name} ${studentProfile[0].last_name}`
+        : "A Student";
+
+    await connection.beginTransaction();
+
+    const DEPARTMENT_HEAD = 3;
+    const ADMIN = 4;
+    const newId = newUUID();
+
+    const [recipients] = await connection.execute(
+      `
+      SELECT DISTINCT u.id, up.first_name, up.last_name
+      FROM users AS u
+      INNER JOIN user_profiles AS up ON u.id = up.user_id
+      LEFT JOIN dept_heads_background_info AS dhbi ON u.id = dhbi.user_id
+      WHERE 
+        (u.role_id = ? AND dhbi.department_id = ?)
+        OR 
+        (u.role_id = ?)
+      `,
+      [DEPARTMENT_HEAD, department_id, ADMIN],
+    );
+
+    const [result] = await connection.execute(
+      `
+      INSERT INTO internship_records (id, user_id, company_name, company_address, internship_position, description, lon, lat, date_started, date_ended, total_hours, region_id, company_website, semester)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      FROM DUAL
+      WHERE NOT EXISTS (
+        SELECT 1 FROM internship_records WHERE user_id = ? AND status = 'ongoing'
+      )
+      `,
+      [
+        newId,
+        userId,
+        data.company_name,
+        data.company_address,
+        data.internship_position,
+        data.description,
+        data.lon,
+        data.lat,
+        data.date_started,
+        data.date_ended,
+        Number(data.total_hours),
+        data.region_id,
+        data.company_website || null,
+        data.semester,
+        userId,
+      ],
+    );
+
+    if (result.affectedRows === 0) {
+      await connection.rollback();
+      return res.status(400).json({
+        error: "You already have an ongoing internship record.",
+      });
+    }
+
+    const requestMessage = `New request from ${studentName}`;
+
+    const values = recipients.map((recipient) => [
+      recipient.id,
+      userId,
+      "internship_record_request",
+      "New Internship Request",
+      requestMessage,
+      newId,
+    ]);
+
+    if (values.length > 0) {
+      await connection.query(
+        `INSERT INTO notifications (user_id, sender_id, type, title, message, link_uuid) VALUES ?`,
+        [values],
+      );
+    }
+
+    await connection.execute(
+      `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        userId,
+        role,
+        "internship_record_created",
+        "internship_records",
+        newId,
+        `${studentName} created an internship record for ${data.company_name}.`,
+        JSON.stringify({
+          company_name: data.company_name,
+          semester: data.semester,
+          department_id,
+        }),
+      ],
+    );
+
+    await connection.commit();
+    invalidateAttendanceHistoryCache();
+    invalidateProfileOverviewCache();
+    invalidateWeeklyNarrativesCache();
+    invalidateEvaluationHistoryCache();
+    invalidateDocumentMetadataCache();
+    invalidateStaffInternshipsCache();
+    invalidatePastInternshipsCache();
+    invalidateHteReportsCache();
+    invalidateAlumniCache();
+    invalidateNotificationsCache();
+
+    invalidateActivityLogsCache();
+
+    const io = req.app.get("socketio");
+
+    recipients.forEach((admin) => {
+      io.to(`user-${admin.id}`).emit("new_notification", {
+        title: "New Internship Request",
+        // Matches the message actually stored in the notifications row.
+        message: requestMessage,
+        type: "internship_record_request",
+        link: newId,
+      });
+    });
+
+    res.status(201).json({
+      message: "Success! Wait for the approval from your Department Head.",
+      success: true,
+    });
+  } catch (error) {
+    reportError(error);
+    if (connection) await connection.rollback();
+    res.status(500).json({ error: "Database query failed", success: false });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const approveInternshipRecord = async (req, res) => {
+  let connection;
+  try {
+    connection = await db.getConnection();
+
+    const { id: userId, role } = req.verifiedUser;
+    const { internshipId } = req.params;
+    const { status } = req.body;
+
+    if (!internshipId || !status) {
+      return res.status(400).json({
+        error: "Internship ID and status are required",
+      });
+    }
+
+    if (!["ongoing", "rejected"].includes(status)) {
+      return res.status(400).json({ error: "Invalid status value." });
+    }
+
+    if (!["department_head", "admin"].includes(role)) {
+      return res.status(403).json({ error: "Access denied." });
+    }
+
+    await connection.beginTransaction();
+
+    const [personInCharge] = await connection.execute(
+      `SELECT first_name, last_name FROM user_profiles WHERE user_id = ?`,
+      [userId],
+    );
+
+    if (personInCharge.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Unauthorized user." });
+    }
+
+    const personInChargeName = `${personInCharge[0].first_name} ${personInCharge[0].last_name}`;
+
+    // Combine the recipient + status + department lookups into one locked read
+    const [recordRows] = await connection.execute(
+      `SELECT ir.user_id, ir.company_name, ir.status, sai.department_id
+       FROM internship_records ir
+       INNER JOIN (
+         SELECT sai1.*
+         FROM student_academic_info AS sai1
+         INNER JOIN (
+           SELECT user_id, MAX(id) AS max_id
+           FROM student_academic_info
+           GROUP BY user_id
+         ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
+       ) AS sai ON ir.user_id = sai.user_id
+       WHERE ir.id = ? AND ir.deleted_at IS NULL FOR UPDATE`,
+      [internshipId],
+    );
+
+    if (recordRows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Internship record not found." });
+    }
+
+    const {
+      user_id: studentId,
+      company_name,
+      status: currentStatus,
+      department_id: recordDeptId,
+    } = recordRows[0];
+
+    // Department heads can only act on records within their own department
+    if (role === "department_head") {
+      const [deptHeadRows] = await connection.execute(
+        `SELECT department_id FROM dept_heads_background_info WHERE user_id = ? LIMIT 1`,
+        [userId],
+      );
+      if (
+        deptHeadRows.length === 0 ||
+        deptHeadRows[0].department_id !== recordDeptId
+      ) {
+        await connection.rollback();
+        return res.status(403).json({
+          error: "You can only manage records within your own department.",
+        });
+      }
+    }
+
+    if (currentStatus !== "pending") {
+      await connection.rollback();
+      return res.status(400).json({
+        error: "This record has already been processed.",
+      });
+    }
+
+    const [result] = await connection.execute(
+      `UPDATE internship_records SET updated_at = NOW(), status = ? WHERE id = ?`,
+      [status, internshipId],
+    );
+
+    if (result.affectedRows === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        error:
+          "Failed to update or can't find the internship record. Please try again.",
+      });
+    }
+
+    // The original request notification was inserted with link_uuid
+    // (see createInternshipRecord) — matching that here.
+    await connection.execute(
+      `UPDATE notifications 
+      SET is_read = 1 
+      WHERE link_uuid = ? AND type = 'internship_record_request' AND user_id = ?`,
+      [internshipId, userId],
+    );
+
+    const isApproved = status === "ongoing";
+    const notifMessage = isApproved
+      ? `Your internship at ${company_name} has been approved by ${personInChargeName}!`
+      : `Your internship request for ${company_name} was rejected by ${personInChargeName}.`;
+    const notifType = isApproved
+      ? "internship_record_approved"
+      : "internship_record_rejected";
+    const notifTitle = isApproved
+      ? "Internship Record Approved"
+      : "Internship Record Rejected";
+
+    // internshipId is a char(36) UUID (internship_records.id) — belongs in
+    // link_uuid, matching the request notification above and the same
+    // convention link_uuid=UUID-based refs / link=int-based refs (e.g.
+    // announcements' auto-increment id) used elsewhere in this app.
+    await connection.execute(
+      `INSERT INTO notifications (user_id, sender_id, type, message, title, link_uuid) VALUES (?, ?, ?, ?, ?, ?)`,
+      [studentId, userId, notifType, notifMessage, notifTitle, internshipId],
+    );
+
+    await connection.execute(
+      `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        userId,
+        role,
+        isApproved
+          ? "internship_record_approved"
+          : "internship_record_rejected",
+        "internship_records",
+        internshipId,
+        `${personInChargeName} ${isApproved ? "approved" : "rejected"} the internship record for ${company_name}.`,
+        JSON.stringify({
+          student_id: studentId,
+          company_name,
+          previous_status: currentStatus,
+          new_status: status,
+        }),
+      ],
+    );
+
+    await connection.commit();
+    invalidateAttendanceHistoryCache();
+    invalidateProfileOverviewCache();
+    invalidateWeeklyNarrativesCache();
+    invalidateEvaluationHistoryCache();
+    invalidateDocumentMetadataCache();
+    invalidateStaffInternshipsCache();
+    invalidatePastInternshipsCache();
+    invalidateHteReportsCache();
+    invalidateAlumniCache();
+    invalidateNotificationsCache();
+
+    invalidateActivityLogsCache();
+
+    const io = req.app.get("socketio");
+    io.to(`user-${studentId}`).emit("new_notification", {
+      title: notifTitle,
+      message: notifMessage,
+      type: notifType,
+      link_uuid: internshipId,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Status updated and student notified!",
+    });
+  } catch (error) {
+    reportError("Approve internship record error: ", error);
+    if (connection) await connection.rollback();
+    res.status(500).json({ error: "Database query failed", success: false });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const markInternshipFinished = async (req, res) => {
+  let connection;
+  try {
+    const { id: userId, role } = req.verifiedUser;
+    const { internshipId } = req.params;
+
+    if (!["department_head", "admin"].includes(role)) {
+      return res.status(403).json({ error: "Access denied." });
+    }
+
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    const [recordRows] = await connection.execute(
+      `SELECT ir.user_id, ir.company_name, ir.company_address, ir.industry, ir.internship_position, ir.status,
+              ir.total_hours, ir.accumulated_hours, ir.date_started, ir.academic_year, ir.employer_id,
+              sai.department_id, sai.course_id,
+              emp.first_name AS employer_first_name, emp.last_name AS employer_last_name
+       FROM internship_records_with_ay ir
+       INNER JOIN (
+         SELECT sai1.*
+         FROM student_academic_info AS sai1
+         INNER JOIN (
+           SELECT user_id, MAX(id) AS max_id
+           FROM student_academic_info
+           GROUP BY user_id
+         ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
+       ) AS sai ON ir.user_id = sai.user_id
+       LEFT JOIN user_profiles emp ON ir.employer_id = emp.user_id
+       WHERE ir.id = ? FOR UPDATE`,
+      [internshipId],
+    );
+
+    if (recordRows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Internship record not found." });
+    }
+
+    const {
+      user_id: studentId,
+      company_name,
+      company_address: companyAddress,
+      industry,
+      internship_position: internshipPosition,
+      status: currentStatus,
+      department_id: recordDeptId,
+      course_id: courseId,
+      total_hours: totalHours,
+      accumulated_hours: accumulatedHours,
+      date_started: dateStarted,
+      academic_year: academicYear,
+      employer_first_name: employerFirstName,
+      employer_last_name: employerLastName,
+    } = recordRows[0];
+
+    const supervisorName =
+      employerFirstName && employerLastName
+        ? `${employerFirstName} ${employerLastName}`
+        : null;
+
+    if (role === "department_head") {
+      const [deptHeadRows] = await connection.execute(
+        `SELECT department_id FROM dept_heads_background_info WHERE user_id = ? LIMIT 1`,
+        [userId],
+      );
+      if (
+        deptHeadRows.length === 0 ||
+        deptHeadRows[0].department_id !== recordDeptId
+      ) {
+        await connection.rollback();
+        return res.status(403).json({
+          error: "You can only manage records within your own department.",
+        });
+      }
+    }
+
+    if (currentStatus !== "ongoing") {
+      await connection.rollback();
+      return res.status(400).json({
+        error: "Only an ongoing record can be marked as finished.",
+      });
+    }
+
+    await connection.execute(
+      `UPDATE internship_records 
+       SET status = 'finished', date_ended = COALESCE(date_ended, CURDATE()), updated_at = NOW() 
+       WHERE id = ?`,
+      [internshipId],
+    );
+
+    const [personInCharge] = await connection.execute(
+      `SELECT first_name, last_name FROM user_profiles WHERE user_id = ?`,
+      [userId],
+    );
+    const personInChargeName =
+      personInCharge.length > 0
+        ? `${personInCharge[0].first_name} ${personInCharge[0].last_name}`
+        : "Your department head";
+
+    const [studentProfile] = await connection.execute(
+      `SELECT first_name, last_name FROM user_profiles WHERE user_id = ?`,
+      [studentId],
+    );
+    const alumniName =
+      studentProfile.length > 0
+        ? `${studentProfile[0].first_name} ${studentProfile[0].last_name}`
+        : null;
+
+    // batch_year isn't a tracked field anywhere in the schema — derived from the
+    // internship's start year as a stand-in. Confirm this matches what "batch year"
+    // is meant to represent before relying on it downstream.
+    const batchYear = dateStarted
+      ? new Date(dateStarted).getFullYear().toString()
+      : null;
+
+    try {
+      await connection.execute(
+        `INSERT INTO alumni_internship_records
+          (id, entered_by, alumni_name, company_name, company_address, industry,
+           internship_position, course_id, batch_year, academic_year,
+           total_hours, accumulated_hours, supervisor_name, notes,
+           internship_record_id, source, department_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 'system', ?)`,
+        [
+          newUUID(),
+          userId,
+          alumniName,
+          company_name,
+          companyAddress,
+          industry,
+          internshipPosition,
+          courseId,
+          batchYear,
+          academicYear,
+          totalHours,
+          accumulatedHours,
+          supervisorName,
+          internshipId,
+          recordDeptId,
+        ],
+      );
+    } catch (err) {
+      if (err.code !== "ER_DUP_ENTRY") throw err;
+    }
+
+    const notifMessage = `Your internship at ${company_name} has been marked finished by ${personInChargeName}. Congratulations!`;
+
+    await connection.execute(
+      `INSERT INTO notifications (user_id, sender_id, type, message, title, link) VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        studentId,
+        userId,
+        "internship_record_force_finished",
+        notifMessage,
+        "Internship Finished",
+        internshipId,
+      ],
+    );
+
+    await connection.execute(
+      `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        userId,
+        role,
+        "internship_record_force_finished",
+        "internship_records",
+        internshipId,
+        `${personInChargeName} marked the internship record for ${company_name} (student: ${await getActivityLogUserName(connection, studentId)}) as finished.`,
+        JSON.stringify({
+          student_id: studentId,
+          company_name,
+          total_hours: totalHours,
+          accumulated_hours: accumulatedHours,
+        }),
+      ],
+    );
+
+    await connection.commit();
+    invalidateAttendanceHistoryCache();
+    invalidateProfileOverviewCache();
+    invalidateWeeklyNarrativesCache();
+    invalidateEvaluationHistoryCache();
+    invalidateDocumentMetadataCache();
+    invalidateStaffInternshipsCache();
+    invalidatePastInternshipsCache();
+    invalidateHteReportsCache();
+    invalidateAlumniCache();
+    invalidateNotificationsCache();
+
+    invalidateActivityLogsCache();
+
+    const io = req.app.get("socketio");
+    io.to(`user-${studentId}`).emit("new_notification", {
+      title: "Internship Finished",
+      message: notifMessage,
+      type: "internship_record_force_finished",
+      link: internshipId,
+    });
+
+    res
+      .status(200)
+      .json({ success: true, message: "Record marked as finished." });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    reportError("Mark internship finished error:", error);
+    res.status(500).json({ error: "Failed to mark record as finished." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const finishInternshipRecord = async (req, res) => {
+  let connection;
+  try {
+    const { id: userId } = req.verifiedUser;
+    const internshipId = req.params.internshipId;
+
+    if (!internshipId) {
+      return res.status(400).json({ error: "Internship ID is required" });
+    }
+
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    const [result] = await connection.execute(
+      `
+      UPDATE internship_records
+      SET 
+        date_ended = CURRENT_DATE(),
+        status = 'finished'
+      WHERE user_id = ? 
+        AND id = ? 
+        AND accumulated_hours >= total_hours
+        AND status = 'ongoing'
+      `,
+      [userId, internshipId],
+    );
+
+    if (result.affectedRows === 0) {
+      const [record] = await connection.execute(
+        `SELECT accumulated_hours, total_hours FROM internship_records WHERE id = ?`,
+        [internshipId],
+      );
+
+      await connection.rollback();
+
+      if (record.length > 0) {
+        const { accumulated_hours, total_hours } = record[0];
+        if (accumulated_hours < total_hours) {
+          const remaining = (total_hours - accumulated_hours).toFixed(2);
+          return res.status(400).json({
+            error: `You cannot finish yet. You still need ${remaining} more hours!`,
+          });
+        }
+      }
+
+      return res.status(404).json({
+        error: "Internship record not found or already finished.",
+      });
+    }
+
+    const [recordRows] = await connection.execute(
+      `SELECT ir.company_name, ir.company_address, ir.industry, ir.internship_position,
+              ir.total_hours, ir.accumulated_hours, ir.date_started, ir.academic_year,
+              emp.first_name AS employer_first_name, emp.last_name AS employer_last_name
+       FROM internship_records_with_ay ir
+       LEFT JOIN user_profiles emp ON ir.employer_id = emp.user_id
+       WHERE ir.id = ?`,
+      [internshipId],
+    );
+    const {
+      company_name,
+      company_address: companyAddress,
+      industry,
+      internship_position: internshipPosition,
+      total_hours,
+      accumulated_hours,
+      date_started: dateStarted,
+      academic_year: academicYear,
+      employer_first_name: employerFirstName,
+      employer_last_name: employerLastName,
+    } = recordRows[0];
+
+    const supervisorName =
+      employerFirstName && employerLastName
+        ? `${employerFirstName} ${employerLastName}`
+        : null;
+
+    const [studentProfile] = await connection.execute(
+      `SELECT first_name, last_name FROM user_profiles WHERE user_id = ?`,
+      [userId],
+    );
+    const alumniName =
+      studentProfile.length > 0
+        ? `${studentProfile[0].first_name} ${studentProfile[0].last_name}`
+        : null;
+
+    const [studentSai] = await connection.execute(
+      `SELECT course_id, department_id
+       FROM student_academic_info
+       WHERE user_id = ? ORDER BY id DESC LIMIT 1`,
+      [userId],
+    );
+    const courseId = studentSai.length > 0 ? studentSai[0].course_id : null;
+    const departmentId =
+      studentSai.length > 0 ? studentSai[0].department_id : null;
+
+    // Same batch_year caveat as markInternshipFinished — derived, not tracked.
+    const batchYear = dateStarted
+      ? new Date(dateStarted).getFullYear().toString()
+      : null;
+
+    try {
+      await connection.execute(
+        `INSERT INTO alumni_internship_records
+          (id, entered_by, alumni_name, company_name, company_address, industry,
+           internship_position, course_id, batch_year, academic_year,
+           total_hours, accumulated_hours, supervisor_name, notes,
+           internship_record_id, source, department_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 'system', ?)`,
+        [
+          newUUID(),
+          userId,
+          alumniName,
+          company_name,
+          companyAddress,
+          industry,
+          internshipPosition,
+          courseId,
+          batchYear,
+          academicYear,
+          total_hours,
+          accumulated_hours,
+          supervisorName,
+          internshipId,
+          departmentId,
+        ],
+      );
+    } catch (err) {
+      if (err.code !== "ER_DUP_ENTRY") throw err;
+    }
+
+    const [recipients] = await connection.execute(
+      `SELECT u.id
+       FROM users u
+       INNER JOIN dept_heads_background_info dhbi ON dhbi.user_id = u.id
+       WHERE dhbi.department_id = ?`,
+      [departmentId],
+    );
+
+    const finishedMessage = `${alumniName ?? "A student"} has finished their internship at ${company_name}.`;
+
+    const notifValues = recipients.map((recipient) => [
+      recipient.id,
+      userId,
+      "internship_record_finished",
+      "Internship Record Finished",
+      finishedMessage,
+      internshipId,
+    ]);
+
+    if (notifValues.length > 0) {
+      await connection.query(
+        `INSERT INTO notifications (user_id, sender_id, type, title, message, link) VALUES ?`,
+        [notifValues],
+      );
+    }
+
+    await connection.execute(
+      `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        userId,
+        "student",
+        "internship_record_finished",
+        "internship_records",
+        internshipId,
+        `${alumniName ?? "A student"} finished their internship at ${company_name}.`,
+        JSON.stringify({
+          company_name,
+          total_hours,
+          accumulated_hours,
+          department_id: departmentId,
+        }),
+      ],
+    );
+
+    await connection.commit();
+    invalidateAttendanceHistoryCache();
+    invalidateProfileOverviewCache();
+    invalidateWeeklyNarrativesCache();
+    invalidateEvaluationHistoryCache();
+    invalidateDocumentMetadataCache();
+    invalidateStaffInternshipsCache();
+    invalidatePastInternshipsCache();
+    invalidateHteReportsCache();
+    invalidateAlumniCache();
+    invalidateNotificationsCache();
+
+    invalidateActivityLogsCache();
+
+    const io = req.app.get("socketio");
+    recipients.forEach((recipient) => {
+      io.to(`user-${recipient.id}`).emit("new_notification", {
+        title: "Internship Record Finished",
+        message: finishedMessage,
+        type: "internship_record_finished",
+        link: internshipId,
+      });
+    });
+
+    res.status(200).json({
+      message: "Congrats on finishing your current internship!",
+      success: true,
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.log("Finish internship record error:", error);
+    res.status(500).json({ error: "Database query failed", success: false });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const getDepartmentInternshipRecords = async (req, res) => {
+  let connection;
+  try {
+    const { id: requesterId, role } = req.verifiedUser;
+
+    const { status, search, page = 1, limit = 10 } = req.query;
+
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const pageSize = Math.max(1, Math.min(50, parseInt(limit) || 10));
+    const offset = (pageNum - 1) * pageSize;
+
+    connection = await db.getConnection();
+
+    // Resolve the department head's own department — never trust a
+    // client-supplied department_id, derive it server-side from who's asking
+    let userDepartmentId = null;
+    if (role === "department_head") {
+      const [deptHeadRows] = await connection.execute(
+        `SELECT department_id FROM dept_heads_background_info WHERE user_id = ? LIMIT 1`,
+        [requesterId],
+      );
+      if (deptHeadRows.length === 0) {
+        return res
+          .status(403)
+          .json({ error: "Department head profile not found." });
+      }
+      userDepartmentId = deptHeadRows[0].department_id;
+    }
+
+    if (departmentInternshipsCacheHit(req, res, userDepartmentId)) return;
+
+    const scopedConditions = ["ir.deleted_at IS NULL"];
+    const scopedParams = [];
+
+    if (role === "department_head") {
+      scopedConditions.push("sai.department_id = ?");
+      scopedParams.push(userDepartmentId);
+    }
+
+    const filterConditions = [];
+    const filterParams = [];
+    if (status) {
+      filterConditions.push("ir.status = ?");
+      filterParams.push(status);
+    }
+
+    if (search) {
+      filterConditions.push(
+        `(up.first_name LIKE ? OR up.last_name LIKE ? 
+          OR sai.student_number LIKE ? 
+          OR ir.company_name LIKE ? 
+          OR c.course_name LIKE ?)`,
+      );
+      const term = `%${search}%`;
+      filterParams.push(term, term, term, term, term);
+    }
+
+    const whereClause = [...scopedConditions, ...filterConditions].join(" AND ");
+    const pageParams = [...scopedParams, ...filterParams];
+
+    const baseFrom = `
+      FROM internship_records ir
+      INNER JOIN user_profiles up ON ir.user_id = up.user_id
+      INNER JOIN (
+        SELECT sai1.user_id, sai1.department_id, sai1.course_id,
+               sai1.student_number
+        FROM student_academic_info AS sai1
+        INNER JOIN (
+          SELECT user_id, MAX(id) AS max_id
+          FROM student_academic_info
+          GROUP BY user_id
+        ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
+      ) AS sai ON ir.user_id = sai.user_id
+      INNER JOIN courses c ON sai.course_id = c.id
+    `;
+
+    // The total applies status/search while the status cards remain scoped
+    // only to non-deleted records in the requester's department.
+    const totalExpression = filterConditions.length
+      ? `COUNT(CASE WHEN ${filterConditions.join(" AND ")} THEN 1 END)`
+      : "COUNT(*)";
+    const [[summary]] = await connection.execute(
+      `SELECT ${totalExpression} AS total,
+              COUNT(CASE WHEN ir.status = 'pending' THEN 1 END) AS pending,
+              COUNT(CASE WHEN ir.status = 'ongoing' THEN 1 END) AS ongoing,
+              COUNT(CASE WHEN ir.status = 'finished' THEN 1 END) AS finished,
+              COUNT(CASE WHEN ir.status = 'rejected' THEN 1 END) AS rejected
+       ${baseFrom}
+       WHERE ${scopedConditions.join(" AND ")}`,
+      [...filterParams, ...scopedParams],
+    );
+
+    const [records] = await connection.execute(
+      `SELECT 
+         ir.id, ir.company_name, ir.internship_position, ir.status,
+         ir.date_started, ir.date_ended, ir.total_hours, ir.accumulated_hours,
+         ir.user_id,
+         up.first_name, up.last_name,
+         sai.student_number,
+         c.course_name
+       ${baseFrom}
+       WHERE ${whereClause}
+       ORDER BY ir.updated_at DESC
+       LIMIT ? OFFSET ?`,
+      [...pageParams, pageSize, offset],
+    );
+
+    // Stats — scoped by department, independent of the current status/search
+    // filter, so the count cards always reflect department-wide totals
+    const total = summary.total;
+    const stats = {
+      pending: summary.pending,
+      ongoing: summary.ongoing,
+      finished: summary.finished,
+      rejected: summary.rejected,
+    };
+
+    const data = records.map((r) => ({
+      id: r.id,
+      student_name: `${r.first_name} ${r.last_name}`,
+      student_id: r.user_id,
+      student_number: r.student_number,
+      company_name: r.company_name,
+      internship_position: r.internship_position,
+      course_name: r.course_name,
+      status: r.status,
+      date_started: r.date_started,
+      date_ended: r.date_ended,
+      total_hours: r.total_hours,
+      accumulated_hours: r.accumulated_hours,
+    }));
+
+    res.status(200).json({
+      data,
+      stats,
+      pagination: {
+        page: pageNum,
+        limit: pageSize,
+        total,
+        totalPages: Math.ceil(total / pageSize),
+      },
+    });
+  } catch (error) {
+    reportError("Get department internship records error:", error);
+    res.status(500).json({ error: "Failed to load internship records." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const restoreInternshipRecord = async (req, res) => {
+  let connection;
+  try {
+    const { id: requesterId, role } = req.verifiedUser;
+    const { internshipId } = req.params;
+
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    let userDepartmentId = null;
+    if (role === "department_head") {
+      const [deptHeadRows] = await connection.execute(
+        `SELECT department_id FROM dept_heads_background_info WHERE user_id = ? LIMIT 1`,
+        [requesterId],
+      );
+      if (deptHeadRows.length === 0) {
+        await connection.rollback();
+        return res
+          .status(403)
+          .json({ error: "Department head profile not found." });
+      }
+      userDepartmentId = deptHeadRows[0].department_id;
+    }
+
+    const [rows] = await connection.execute(
+      `SELECT ir.id, ir.status, sai.department_id
+       FROM internship_records ir
+       INNER JOIN (
+         SELECT sai1.*
+         FROM student_academic_info AS sai1
+         INNER JOIN (
+           SELECT user_id, MAX(id) AS max_id
+           FROM student_academic_info
+           GROUP BY user_id
+         ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
+       ) AS sai ON ir.user_id = sai.user_id
+       WHERE ir.id = ? AND ir.deleted_at IS NULL FOR UPDATE`,
+      [internshipId],
+    );
+
+    if (rows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Internship record not found." });
+    }
+
+    const record = rows[0];
+
+    if (
+      role === "department_head" &&
+      record.department_id !== userDepartmentId
+    ) {
+      await connection.rollback();
+      return res.status(403).json({
+        error: "You can only manage records within your own department.",
+      });
+    }
+
+    if (record.status !== "rejected") {
+      await connection.rollback();
+      return res.status(400).json({
+        error: "Only a rejected record can be restored.",
+      });
+    }
+
+    await connection.execute(
+      `UPDATE internship_records SET status = 'pending', updated_at = NOW() WHERE id = ?`,
+      [internshipId],
+    );
+
+    await connection.commit();
+    invalidateAttendanceHistoryCache();
+    invalidateProfileOverviewCache();
+    invalidateWeeklyNarrativesCache();
+    invalidateEvaluationHistoryCache();
+    invalidateDocumentMetadataCache();
+    invalidateStaffInternshipsCache();
+    invalidatePastInternshipsCache();
+    invalidateHteReportsCache();
+    invalidateAlumniCache();
+    invalidateDashboardCache();
+
+    res.status(200).json({
+      success: true,
+      message:
+        "Record restored to pending. It will re-enter the approval queue.",
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    reportError("Restore internship record error:", error);
+    res.status(500).json({ error: "Failed to restore internship record." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const deleteOwnInternshipRecord = async (req, res) => {
+  let connection;
+  try {
+    const { id: studentId, role } = req.verifiedUser;
+    const { internshipId } = req.params;
+
+    if (role !== "student") {
+      return res.status(403).json({ error: "Only students can delete their own internship records." });
+    }
+    if (!internshipId) {
+      return res.status(400).json({ error: "internshipId is required." });
+    }
+
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    const [rows] = await connection.execute(
+      `SELECT id, user_id, status, deleted_at, company_name
+       FROM internship_records WHERE id = ? FOR UPDATE`,
+      [internshipId],
+    );
+    const record = rows[0];
+    if (!record || record.deleted_at !== null) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Internship record not found." });
+    }
+    if (record.user_id !== studentId) {
+      await connection.rollback();
+      return res.status(403).json({ error: "You can only delete your own internship records." });
+    }
+    if (!["pending", "rejected"].includes(record.status)) {
+      await connection.rollback();
+      return res.status(409).json({ error: "Only pending or rejected internship records can be deleted." });
+    }
+
+    const [result] = await connection.execute(
+      `UPDATE internship_records SET deleted_at = NOW(), updated_at = NOW()
+       WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND status IN ('pending', 'rejected')`,
+      [internshipId, studentId],
+    );
+    if (result.affectedRows !== 1) {
+      await connection.rollback();
+      return res.status(409).json({ error: "The internship record changed. Please refresh and try again." });
+    }
+
+    // A withdrawn pending request must not remain actionable in staff inboxes.
+    await connection.execute(
+      `DELETE FROM notifications WHERE link_uuid = ? AND type = 'internship_record_request'`,
+      [internshipId],
+    );
+
+    const studentName = await getActivityLogUserName(connection, studentId);
+    await connection.execute(
+      `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        studentId,
+        role,
+        "internship_record_deleted",
+        "internship_records",
+        internshipId,
+        `${studentName} deleted a ${record.status} internship record for ${record.company_name}.`,
+        JSON.stringify({ company_name: record.company_name, previous_status: record.status }),
+      ],
+    );
+
+    await connection.commit();
+    invalidateAttendanceHistoryCache();
+    invalidateProfileOverviewCache();
+    invalidateWeeklyNarrativesCache();
+    invalidateEvaluationHistoryCache();
+    invalidateDocumentMetadataCache();
+    invalidateStaffInternshipsCache();
+    invalidatePastInternshipsCache();
+    invalidateHteReportsCache();
+    invalidateAlumniCache();
+    invalidateDashboardCache();
+    invalidateNotificationsCache();
+    invalidateActivityLogsCache();
+
+    return res.status(200).json({ success: true, message: "Internship record deleted." });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    reportError("Delete own internship record error:", error);
+    return res.status(500).json({ error: "Failed to delete internship record." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const deleteInternshipRecord = async (req, res) => {
+  let connection;
+  try {
+    const { role } = req.verifiedUser;
+    const { internshipId } = req.params;
+
+    if (!internshipId) {
+      return res.status(400).json({ error: "internshipId is required." });
+    }
+
+    // Restricted to admin only — unlike approve/reject/restore, a delete is
+    // destructive and irreversible from the department head's own view, so
+    // it's kept out of their hands even within their own department
+    if (role !== "admin") {
+      return res
+        .status(403)
+        .json({ error: "Only an admin can delete an internship record." });
+    }
+
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    const [rows] = await connection.execute(
+      `SELECT id, deleted_at FROM internship_records WHERE id = ? FOR UPDATE`,
+      [internshipId],
+    );
+
+    if (rows.length === 0 || rows[0].deleted_at !== null) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Internship record not found." });
+    }
+
+    const [result] = await connection.execute(
+      `UPDATE internship_records SET deleted_at = NOW() WHERE id = ?`,
+      [internshipId],
+    );
+
+    if (result.affectedRows === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Internship record not found." });
+    }
+
+    await connection.commit();
+    invalidateAttendanceHistoryCache();
+    invalidateProfileOverviewCache();
+    invalidateWeeklyNarrativesCache();
+    invalidateEvaluationHistoryCache();
+    invalidateDocumentMetadataCache();
+    invalidateStaffInternshipsCache();
+    invalidatePastInternshipsCache();
+    invalidateHteReportsCache();
+    invalidateAlumniCache();
+    invalidateDashboardCache();
+
+    res.status(200).json({
+      success: true,
+      message: "Internship record deleted.",
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    reportError("Delete internship record error:", error);
+    res.status(500).json({ error: "Failed to delete internship record." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const getInternshipRecordOverview = async (req, res) => {
+  let connection;
+  try {
+    const { id: requesterId, role } = req.verifiedUser;
+    const { internshipId } = req.params;
+
+    connection = await db.getConnection();
+    const record = await verifyRecordAccess(
+      connection,
+      internshipId,
+      requesterId,
+      role,
+    );
+
+    if (internshipOverviewCacheHit(req, res)) return;
+
+    const [rows] = await connection.execute(
+      `SELECT 
+         ir.user_id AS student_id, ir.company_name, ir.internship_position, ir.status,
+         ir.company_address, ir.lat, ir.lon,
+         ir.date_started, ir.date_ended, ir.created_at,
+         ir.total_hours, ir.accumulated_hours, ir.created_at,
+         up.first_name, up.last_name,
+         sai.student_number,
+         c.course_name,
+         supervisor.first_name AS supervisor_first_name,
+         supervisor.last_name AS supervisor_last_name,
+         (SELECT COUNT(*) FROM daily_time_records WHERE internship_id = ir.id) AS dtr_count,
+         (SELECT COUNT(*) FROM weekly_narratives WHERE internship_id = ir.id) AS narrative_count,
+         (SELECT COUNT(*) FROM internship_documents WHERE internship_id = ir.id) AS document_count
+       FROM internship_records ir
+       INNER JOIN user_profiles up ON ir.user_id = up.user_id
+       INNER JOIN student_academic_info sai
+         ON sai.user_id = ir.user_id
+        AND sai.id = (
+          SELECT MAX(sai_latest.id)
+          FROM student_academic_info sai_latest
+          WHERE sai_latest.user_id = ir.user_id
+        )
+       INNER JOIN courses c ON sai.course_id = c.id
+       LEFT JOIN user_profiles supervisor ON ir.employer_id = supervisor.user_id
+       WHERE ir.id = ?`,
+      [internshipId],
+    );
+
+    const data = rows[0];
+
+    const totalHours = Number(data.total_hours) || 0;
+    const accumulatedHours = Number(data.accumulated_hours) || 0;
+
+    res.status(200).json({
+      created_at: data.created_at,
+      student_id: data.student_id,
+      student_name: `${data.first_name} ${data.last_name}`,
+      student_number: data.student_number,
+      course_name: data.course_name,
+      company_name: data.company_name,
+      company_address: data.company_address,
+      lat: data.lat,
+      lon: data.lon,
+      internship_position: data.internship_position,
+      status: data.status,
+      supervisor_name: data.supervisor_first_name
+        ? `${data.supervisor_first_name} ${data.supervisor_last_name}`
+        : null,
+      date_started: data.date_started,
+      date_ended: data.date_ended,
+      submitted_at: data.created_at,
+      total_hours: totalHours,
+      accumulated_hours: accumulatedHours,
+      percent_complete:
+        totalHours > 0 ? Math.round((accumulatedHours / totalHours) * 100) : 0,
+      dtr_count: data.dtr_count,
+      narrative_count: data.narrative_count,
+      document_count: data.document_count,
+    });
+  } catch (error) {
+    if (error.status)
+      return res.status(error.status).json({ error: error.message });
+    reportError("Get internship record overview error:", error);
+    res.status(500).json({ error: "Failed to load overview." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const getInternshipRecordDtr = async (req, res) => {
+  let connection;
+  try {
+    const { id: requesterId, role } = req.verifiedUser;
+    const { internshipId } = req.params;
+    const paginated = req.query.page !== undefined;
+    const page = Number(req.query.page);
+    if (paginated && (!Number.isSafeInteger(page) || page < 1 || page > 1000000)) {
+      return res.status(400).json({ error: "Invalid DTR page." });
+    }
+
+    connection = await db.getConnection();
+    await verifyRecordAccess(connection, internshipId, requesterId, role);
+    if (attendanceHistoryCacheHit(req, res)) return;
+
+    if (paginated) {
+      const pageSize = 5;
+      const [[countRow]] = await connection.execute(
+        `SELECT COUNT(*) AS total FROM daily_time_records WHERE internship_id = ?`,
+        [internshipId],
+      );
+      const total = Number(countRow?.total) || 0;
+      const [rows] = await connection.execute(
+        `SELECT id, total_hours, clock_in, clock_out, lat_in, lon_in, lat_out, lon_out,
+            status, flagged, flag_reason, auto_closed, created_at
+         FROM daily_time_records
+         WHERE internship_id = ?
+         ORDER BY clock_in DESC, id DESC
+         LIMIT ? OFFSET ?`,
+        [internshipId, pageSize, (page - 1) * pageSize],
+      );
+      return res.status(200).json({
+        dtrs: rows,
+        page,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      });
+    }
+
+    const [rows] = await connection.execute(
+      `SELECT id, total_hours, clock_in, clock_out, lat_in, lon_in, lat_out, lon_out,
+          status, flagged, flag_reason, auto_closed, created_at
+       FROM daily_time_records
+       WHERE internship_id = ?
+       ORDER BY clock_in DESC
+       LIMIT 500`,
+      [internshipId],
+    );
+
+    res.status(200).json(rows);
+  } catch (error) {
+    if (error.status)
+      return res.status(error.status).json({ error: error.message });
+    reportError("Get internship record DTR error:", error);
+    res.status(500).json({ error: "Failed to load DTR entries." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const getInternshipRecordEvaluations = async (req, res) => {
+  let connection;
+  try {
+    const { id: requesterId, role } = req.verifiedUser;
+    const { internshipId } = req.params;
+
+    connection = await db.getConnection();
+    await verifyRecordAccess(connection, internshipId, requesterId, role);
+    if (evaluationHistoryCacheHit(req, res)) return;
+
+    const POINTS_PER_CRITERION = 5;
+
+    // 1. Evaluations ABOUT the student, from their employer — now fetched
+    // regardless of status (pending, completed, or disputed)
+    const receivedQuery = `
+      SELECT 
+        m.id AS evaluation_id,
+        m.status AS status,
+        m.other_remarks AS comments,
+        m.created_at AS submitted_date,
+        m.evaluated_by AS actor_id,
+        m.reviewed_by,
+        m.reviewed_at,
+        m.review_notes,
+        ir.company_name AS company,
+        CONCAT(up.first_name, ' ', up.last_name) AS actor_name,
+        CONCAT(reviewer_up.first_name, ' ', reviewer_up.last_name) AS reviewer_name,
+        c.category AS breakdown_label,
+        s.score AS breakdown_score
+      FROM student_evaluation_masters AS m
+      JOIN internship_records AS ir ON m.internship_record_id = ir.id
+      JOIN student_evaluation_scores AS s ON s.evaluation_master_id = m.id
+      JOIN student_evaluation_criteria AS c ON s.criterion_id = c.id
+      JOIN user_profiles AS up ON m.evaluated_by = up.user_id
+      LEFT JOIN user_profiles AS reviewer_up ON m.reviewed_by = reviewer_up.user_id
+      WHERE ir.id = ?
+      ORDER BY m.created_at DESC, c.category ASC
+    `;
+
+    // 2. Evaluations the student submitted ABOUT their supervisor —
+    // this direction has no review step, so reviewer fields stay null
+    const givenQuery = `
+      SELECT 
+        m.id AS evaluation_id,
+        m.other_remarks AS comments,
+        m.created_at AS submitted_date,
+        m.employer_id AS actor_id,
+        ir.company_name AS company,
+        CONCAT(student_up.first_name, ' ', student_up.last_name) AS actor_name,
+        c.category AS breakdown_label,
+        s.score AS breakdown_score
+      FROM employer_evaluation_masters AS m
+      JOIN internship_records AS ir ON m.internship_record_id = ir.id
+      JOIN employer_evaluation_scores AS s ON s.evaluation_master_id = m.id
+      JOIN employer_evaluation_criteria AS c ON s.criterion_id = c.id
+      LEFT JOIN user_profiles AS student_up ON ir.user_id = student_up.user_id
+      WHERE ir.id = ?
+      ORDER BY m.created_at DESC, c.category ASC
+    `;
+
+    const [receivedRows] = await connection.execute(receivedQuery, [
+      internshipId,
+    ]);
+    const [givenRows] = await connection.execute(givenQuery, [internshipId]);
+
+    // Maps the raw enum value to a display-friendly label
+    function formatStatus(rawStatus) {
+      switch (rawStatus) {
+        case "completed":
+          return "Confirmed";
+        case "disputed":
+          return "Disputed";
+        case "pending":
+        default:
+          return "Pending";
+      }
+    }
+
+    function groupRows(rows, type, actorLabel, { useRowStatus = false } = {}) {
+      const group = {};
+      const categoryGroups = new Map();
+
+      rows.forEach((row) => {
+        const evalId = row.evaluation_id;
+
+        if (!group[evalId]) {
+          const dateObj = new Date(row.submitted_date);
+
+          const formattedDate = dateObj.toLocaleDateString("en-US", {
+            month: "short",
+            day: "numeric",
+            year: "numeric",
+          });
+
+          const formattedPeriod = dateObj.toLocaleDateString("en-US", {
+            month: "long",
+            year: "numeric",
+          });
+
+          group[evalId] = {
+            id: evalId,
+            type,
+            status: useRowStatus ? formatStatus(row.status) : "Confirmed",
+            period: formattedPeriod,
+            evaluator:
+              actorLabel === "self"
+                ? row.actor_name || "Unknown Student"
+                : row.actor_name || "Your Supervisor",
+            evaluator_id: row.actor_id,
+            company: row.company,
+            submittedDate: formattedDate,
+            comments: row.comments || "",
+            reviewed_by: row.reviewed_by || null,
+            reviewer_name: row.reviewer_name || null,
+            reviewed_at: row.reviewed_at || null,
+            review_notes: row.review_notes || null,
+            breakdown: [],
+          };
+          categoryGroups.set(evalId, new Map());
+        }
+
+        const categories = categoryGroups.get(evalId);
+        const existingCategory = categories.get(row.breakdown_label);
+
+        const currentScore = Number(row.breakdown_score);
+
+        if (existingCategory) {
+          existingCategory.score += currentScore;
+          existingCategory.max += POINTS_PER_CRITERION;
+        } else {
+          const category = {
+            label: row.breakdown_label,
+            score: currentScore,
+            max: POINTS_PER_CRITERION,
+          };
+          group[evalId].breakdown.push(category);
+          categories.set(row.breakdown_label, category);
+        }
+      });
+
+      return Object.values(group);
+    }
+
+    const received = groupRows(
+      receivedRows,
+      "Performance Evaluation",
+      "employer",
+      { useRowStatus: true },
+    );
+    const given = groupRows(givenRows, "Supervisor Evaluation", "self");
+
+    const combined = [...received, ...given].sort(
+      (a, b) => new Date(b.submittedDate) - new Date(a.submittedDate),
+    );
+
+    return res.status(200).json(combined);
+  } catch (error) {
+    if (error.status)
+      return res.status(error.status).json({ error: error.message });
+    reportError("Get internship record evaluations error:", error);
+    return res.status(500).json({ error: "Failed to load evaluations." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const getInternshipRecordDocuments = async (req, res) => {
+  let connection;
+  try {
+    const { id: requesterId, role } = req.verifiedUser;
+    const { internshipId } = req.params;
+
+    connection = await db.getConnection();
+    await verifyRecordAccess(connection, internshipId, requesterId, role);
+    if (documentMetadataCacheHit(req, res)) return;
+
+    const [rows] = await connection.execute(
+      `SELECT 
+         d.id, d.file_name, d.company_name, d.category, d.file_type,
+         d.verification_status, d.uploaded_by_id, d.uploaded_by_role,
+         d.created_at, d.requirement_type_id,
+         rt.name AS requirement_name
+       FROM internship_documents d
+       LEFT JOIN requirement_types rt ON d.requirement_type_id = rt.id
+       WHERE d.internship_id = ?
+       ORDER BY d.created_at DESC`,
+      [internshipId],
+    );
+
+    res.status(200).json(rows);
+  } catch (error) {
+    if (error.status)
+      return res.status(error.status).json({ error: error.message });
+    reportError("Get internship record documents error:", error);
+    res.status(500).json({ error: "Failed to load documents." });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const downloadInternshipRecordFile = async (req, res) => {
+  const BUCKET = process.env.SUPABASE_BUCKET;
+  let connection;
+  try {
+    const { id: requesterId, role } = req.verifiedUser;
+    const { internshipId, fileId } = req.params;
+
+    if (!internshipId || !fileId) {
+      return res
+        .status(400)
+        .json({ error: "internshipId and fileId are required." });
+    }
+
+    connection = await db.getConnection();
+
+    // Same access check as the rest of the internship record detail view —
+    // department heads only see records within their own department
+    await verifyRecordAccess(connection, internshipId, requesterId, role);
+
+    const [rows] = await connection.execute(
+      `SELECT internship_id, path, file_name FROM internship_documents WHERE id = ?`,
+      [fileId],
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "File not found." });
+    }
+
+    const doc = rows[0];
+
+    // Confirm the file actually belongs to the internship record named in
+    // the route — never trust fileId alone, or a caller could pull a file
+    // by guessing/reusing an id that belongs to a different internship
+    if (doc.internship_id !== internshipId) {
+      // 404 rather than 403 — don't reveal that a file with this id
+      // exists under a *different* internship record
+      return res.status(404).json({ error: "File not found." });
+    }
+
+    const { data, error } = await supabase.storage
+      .from(BUCKET)
+      .createSignedUrl(doc.path, 120);
+
+    if (error) {
+      reportError("Signed URL error:", error.message);
+      return res.status(404).json({ error: "File not found on server." });
+    }
+
+    return res.status(200).json({
+      url: data.signedUrl,
+      fileName: doc.file_name,
+    });
+  } catch (error) {
+    if (error.status)
+      return res.status(error.status).json({ error: error.message });
+    reportError("Download internship record file error:", error.message);
+    res.status(500).json({ error: "Failed to retrieve file." });
+  } finally {
+    if (connection) connection.release();
+  }
+};

@@ -5,9 +5,9 @@ process.env.SUPABASE_URL = "https://example.supabase.co";
 process.env.SUPABASE_KEY = "no-network";
 process.env.CACHE_ENABLED = "false";
 const { db } = await import("../config/db.js");
-const student = await import("../controllers/studentEvaluationControllers.js");
-const employer = await import("../controllers/employerEvaluationsController.js");
-const records = await import("../controllers/internshipRecordControllers.js");
+const student = await import("../features/evaluations/controllers/studentEvaluationControllers.js");
+const employer = await import("../features/evaluations/controllers/employerEvaluationsController.js");
+const records = await import("../features/internship-records/controllers/internshipRecordControllers.js");
 const original = db.getConnection;
 after(async () => { db.getConnection = original; await db.end(); });
 

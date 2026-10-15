@@ -1,5 +1,5 @@
-import cache, { getCacheGeneration } from "../config/cache.js";
-import { cacheMetricRoute, recordCacheMetric } from "../config/cacheMetrics.js";
+import cache, { getCacheGeneration } from "../config/cache/cache.js";
+import { cacheMetricRoute, recordCacheMetric } from "../config/cache/cacheMetrics.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
 

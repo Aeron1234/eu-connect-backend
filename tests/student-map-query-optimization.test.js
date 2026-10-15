@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Readable } from "node:stream";
 import { db } from "../config/db.js";
-import { getStudentMap } from "../controllers/mapControllers.js";
+import { getStudentMap } from "../features/map/controllers/mapControllers.js";
 
 function response() {
   return {

@@ -4,7 +4,7 @@ import { db } from "../config/db.js";
 import {
   addStudentEvaluationCriterion,
   getStudentEvaluationCriteria,
-} from "../controllers/evaluationsCriteriaController.js";
+} from "../features/evaluation-criteria/controllers/evaluationsCriteriaController.js";
 
 function response() {
   return {

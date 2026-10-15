@@ -6,7 +6,7 @@ import {
   requestSupervisor,
   respondToSupervisorRequest,
   removeSupervisor,
-} from "../controllers/supervisorRequestController.js";
+} from "../features/supervisor-requests/controllers/supervisorRequestController.js";
 
 async function invoke(handler, req, execute) {
   const original = db.getConnection;

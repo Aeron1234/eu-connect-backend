@@ -2,26 +2,28 @@ import { test, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
 import express from "express";
 import { once } from "node:events";
-import cache from "../config/cache.js";
+import cache from "../config/cache/cache.js";
 import { db } from "../config/db.js";
-import * as announcements from "../controllers/announcementControllers.js";
-import { updateUserInfo } from "../controllers/accountControllers.js";
-import { invalidateAnnouncementCategoriesCache } from "../config/announcementsCache.js";
+import * as announcements from "../features/announcements/controllers/announcementControllers.js";
+import { updateUserInfo } from "../features/accounts/controllers/accountControllers.js";
+import { invalidateAnnouncementCategoriesCache } from "../config/cache/announcementsCache.js";
 
 process.env.ACCESS_TOKEN_SECRET = "announcements-test-access";
 process.env.REFRESH_TOKEN_SECRET = "announcements-test-refresh";
 process.env.TEMP_PASSWORD_SECRET = "announcements-test-temp";
 process.env.CACHE_ENABLED = "true";
-const { default: routes } = await import("../routes/announcementRoutes.js");
+const { default: routes } = await import("../features/announcements/routes/announcementRoutes.js");
 const { signAccessToken } = await import("../config/jwt.js");
 const originalExecute = db.execute;
 const originalGetConnection = db.getConnection;
 const base = "/eu-connect/api/announcements/";
 const announcementId = "73cd551e-c61f-4fd8-9628-d69709b77d52";
 let calls, connection, mode, pinned, categoryName, committed, emitted, fixtures, activityLog, announcementWrite;
+let existingEventDates;
 beforeEach(() => {
   cache.flushAll(); calls = 0; mode = "success"; pinned = false;
   categoryName = "General"; committed = false; emitted = 0; activityLog = null; announcementWrite = null;
+  existingEventDates = { event_date: null, event_end_date: null };
   fixtures = [
     { id: 1, public_id: "41038a27-bc63-4506-9c4f-20ffbe88396c", category: "General", department: null, is_pinned: true, title: "General" },
     { id: 2, public_id: "e531092e-4d22-4e1b-b909-e89d2c6ac3ea", category: "Department", department: 1, is_pinned: false, title: "Dept one" },
@@ -36,7 +38,8 @@ beforeEach(() => {
       assert.equal(duplicateRole, role);
       assert.ok(sql.includes("authorDept.department_id = ?"));
       const row = fixtures.find((item) => String(sql.includes("WHERE a.id = ?") ? item.id : item.public_id) === String(target));
-      return [row && (row.category !== "Department" || (role !== "employer" && (role === "admin" || row.department === department)))
+      return [row && (!sql.includes("ac.name = 'General'") || row.category === "General") &&
+        (row.category !== "Department" || (role !== "employer" && (role === "admin" || row.department === department)))
         ? [{ ...row, id: row.public_id }] : []];
     }
     assert.ok(sql.includes("authorDept.department_id = ?"));
@@ -45,6 +48,7 @@ beforeEach(() => {
     const [role, duplicateRole, department] = filters.slice(-3);
     assert.equal(duplicateRole, role);
     let rows = mode === "empty" ? [] : fixtures.filter(row => row.category !== "Department" || (role !== "employer" && (role === "admin" || row.department === department)));
+    if (sql.includes("ac.name = 'General'")) rows = rows.filter(row => row.category === "General");
     let index = 0;
     if (sql.includes("ac.name = ?")) { const category = filters[index++]; rows = rows.filter(row => row.category === category); }
     if (sql.includes("a.title LIKE ?")) { const search = filters[index].replaceAll("%", ""); rows = rows.filter(row => row.title.includes(search)); }
@@ -73,7 +77,7 @@ beforeEach(() => {
       }
       if (sql.includes("FROM user_profiles")) return [[{ first_name: "Author", last_name: "Name" }]];
       if (sql.includes("SELECT name FROM announcement_categories")) return [mode === "invalid-category" ? [] : [{ name: categoryName }]];
-      if (sql.includes("FROM announcements a") && sql.includes("FOR UPDATE")) return [mode === "forbidden" ? [] : [{ category_id: 1, category_name: "General", title: "Old" }]];
+      if (sql.includes("FROM announcements a") && sql.includes("FOR UPDATE")) return [mode === "forbidden" ? [] : [{ category_id: 1, category_name: "General", title: "Old", ...existingEventDates }]];
       if (sql.includes("SELECT id, title FROM announcements")) return [[{ id: 1, title: "Old" }]];
       if (sql.includes("SELECT a.*")) return [[{ id: 1, title: "New", first_name: "Author", last_name: "Name", category: categoryName }]];
       if (sql.includes("FROM dept_heads_background_info")) return [[{ department_id: 1 }]];
@@ -89,8 +93,8 @@ async function client(t) {
   const app = express(); app.use("/eu-connect/api", routes);
   const server = app.listen(0, "127.0.0.1"); await once(server, "listening");
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
-  return (path = "history", role = "student", department_id = 1, id = "viewer") => fetch(`http://127.0.0.1:${server.address().port}${base}${path}`, {
-    headers: id ? { Authorization: `Bearer ${signAccessToken({ id, role, department_id })}` } : {},
+  return (path = "history", role = "student", department_id = 1, id = "viewer", department_code = null) => fetch(`http://127.0.0.1:${server.address().port}${base}${path}`, {
+    headers: id ? { Authorization: `Bearer ${signAccessToken({ id, role, department_id, department_code })}` } : {},
   });
 }
 function seed() {
@@ -135,6 +139,83 @@ test("UUID and legacy announcement links load only posts visible to the viewer",
   assert.equal((await get(uuid, "employer", 1)).status, 404);
   assert.equal((await get(uuid, "admin", null)).status, 200);
   assert.equal((await get("not-an-id", "student", 1)).status, 400);
+});
+
+test("REG department heads only receive General announcements on feeds, cached reads and direct links", async (t) => {
+  fixtures.push({ id: 4, public_id: "42038a27-bc63-4506-9c4f-20ffbe88396c", category: "General", department: null, is_pinned: false, title: "General regular" });
+  const get = await client(t);
+  const ordinary = await (await get("history", "department_head", 1, "head", "CCS")).json();
+  assert.ok(ordinary.regular.some(row => row.category === "Department"));
+
+  const first = await (await get("history", "department_head", 1, "head", "REG")).json();
+  assert.deepEqual(first.pinned.map(row => row.category), ["General"]);
+  assert.deepEqual(first.regular.map(row => row.category), ["General"]);
+  assert.equal(first.totalRecords, 1);
+  const before = calls;
+  assert.deepEqual(await (await get("history", "department_head", 1, "head", "REG")).json(), first);
+  assert.equal(calls, before);
+
+  const restricted = await (await get("history?category=Department", "department_head", 1, "head", "REG")).json();
+  assert.deepEqual(restricted.pinned, []);
+  assert.deepEqual(restricted.regular, []);
+  assert.equal(restricted.totalRecords, 0);
+  assert.equal((await get(fixtures[0].public_id, "department_head", 1, "head", "REG")).status, 200);
+  assert.equal((await get(fixtures[1].public_id, "department_head", 1, "head", "REG")).status, 404);
+  assert.equal((await get("2", "department_head", 1, "head", "REG")).status, 404);
+});
+
+test("admins can read all departments including direct announcement links", async (t) => {
+  const get = await client(t);
+  const feed = await (await get("history?category=Department", "admin", null, "administrator", "REG")).json();
+  assert.deepEqual(feed.regular.map(row => row.department), [1, 2]);
+  for (const item of fixtures) {
+    assert.equal((await get(item.public_id, "admin", null, "administrator", "REG")).status, 200);
+  }
+});
+
+test("admin announcement writes accept General and reject every non-General category", async () => {
+  for (const handler of [announcements.createAnnouncement, announcements.updateAnnouncement]) {
+    for (const name of ["General", "Department", "Other"]) {
+      cache.flushAll(); seed(); categoryName = name; announcementWrite = null; committed = false;
+      const req = request({ category_id: 2 });
+      req.verifiedUser = { id: "administrator", role: "admin", department_id: null };
+      const res = response();
+      await handler(req, res);
+      if (name === "General") {
+        assert.ok(res.statusCode < 300);
+        assert.ok(announcementWrite);
+        assert.equal(committed, true);
+      } else {
+        assert.equal(res.statusCode, 400);
+        assert.equal(announcementWrite, null);
+        assert.equal(committed, false);
+        assert.equal(cache.has("feed-a"), true);
+      }
+    }
+  }
+});
+
+test("admins can delete another department's announcement without owning it", async () => {
+  for (const item of fixtures.filter(row => row.category === "Department")) {
+    cache.flushAll(); seed();
+    const req = request();
+    req.verifiedUser = { id: "administrator", role: "admin", department_id: null };
+    req.params.announcementId = item.public_id;
+    let deletion;
+    const execute = connection.execute;
+    connection.execute = async (sql, params) => {
+      if (sql.startsWith("DELETE FROM announcements")) deletion = { sql, params };
+      return execute(sql, params);
+    };
+    const res = response();
+    await announcements.deleteAnnouncement(req, res);
+    connection.execute = execute;
+    assert.equal(res.statusCode, 200);
+    assert.match(deletion.sql, /author_id = \? OR \? = 'admin'/);
+    assert.deepEqual(deletion.params, [item.public_id, "administrator", "admin"]);
+    assert.equal(committed, true);
+    assert.equal(cache.has("feed-a"), false);
+  }
 });
 
 test("search/category/page variants remain separate, including pinned and regular data", async (t) => {
@@ -203,20 +284,76 @@ test("event date is saved, can be cleared, and invalid calendar dates are reject
     assert.ok(res.statusCode < 300);
     assert.ok(announcementWrite.sql.includes("event_date"));
     assert.equal(handler === announcements.createAnnouncement
-      ? announcementWrite.params.at(-1)
-      : announcementWrite.params.at(-3), expected);
+      ? announcementWrite.params[5]
+      : announcementWrite.params[4], expected);
   }
 
   seed(); announcementWrite = null; const unchanged = response();
   await announcements.updateAnnouncement(request(), unchanged);
   assert.equal(unchanged.statusCode, 200);
-  assert.equal(announcementWrite.params.at(-4), 0);
+  assert.equal(announcementWrite.params[3], 0);
 
   for (const handler of [announcements.createAnnouncement, announcements.updateAnnouncement]) {
     announcementWrite = null; const invalid = response();
     await handler(request({ event_date: "2026-02-30" }), invalid);
     assert.equal(invalid.statusCode, 400);
     assert.equal(announcementWrite, null);
+  }
+});
+
+test("announcement ranges are saved inclusively and invalid ranges never write or invalidate cache", async () => {
+  for (const handler of [announcements.createAnnouncement, announcements.updateAnnouncement]) {
+    for (const end of ["2026-10-30", "2026-11-02"]) {
+      seed(); announcementWrite = null;
+      const res = response();
+      await handler(request({ event_date: "2026-10-30", event_end_date: end }), res);
+      assert.ok(res.statusCode < 300);
+      assert.match(announcementWrite.sql, /event_end_date/);
+      assert.equal(announcementWrite.params[6], end);
+      assert.equal(cache.has("feed-a"), false);
+    }
+    for (const input of [
+      { event_date: "2026-10-30", event_end_date: "2026-10-29" },
+      { event_date: "", event_end_date: "2026-10-30" },
+      { event_date: "2026-10-30", event_end_date: "2026-02-30" },
+      { event_date: "2026-10-30", event_end_date: 123 },
+    ]) {
+      seed(); announcementWrite = null;
+      const res = response();
+      await handler(request(input), res);
+      assert.equal(res.statusCode, 400);
+      assert.equal(announcementWrite, null);
+      assert.equal(cache.has("feed-a"), true);
+    }
+  }
+});
+
+test("partial announcement edits validate against saved dates and clearing the start also clears its end", async () => {
+  existingEventDates = { event_date: "2026-10-30", event_end_date: "2026-11-02" };
+  for (const input of [{ title: "Only title" }, { event_end_date: "2026-11-03" }, { event_end_date: "" }, { event_date: "" }]) {
+    seed(); announcementWrite = null;
+    const res = response();
+    await announcements.updateAnnouncement(request(input), res);
+    assert.equal(res.statusCode, 200);
+    if (!Object.hasOwn(input, "event_date")) assert.equal(announcementWrite.params[3], 0);
+    if (input.event_end_date === "") {
+      assert.equal(announcementWrite.params[5], 1);
+      assert.equal(announcementWrite.params[6], null);
+    } else if (input.event_date === "") {
+      assert.deepEqual(announcementWrite.params.slice(3, 7), [1, null, 1, null]);
+    } else if (input.event_end_date) {
+      assert.equal(announcementWrite.params[6], input.event_end_date);
+    } else {
+      assert.equal(announcementWrite.params[5], 0);
+    }
+  }
+  for (const input of [{ event_date: "2026-11-03" }, { event_end_date: "2026-10-29" }]) {
+    seed(); announcementWrite = null;
+    const res = response();
+    await announcements.updateAnnouncement(request(input), res);
+    assert.equal(res.statusCode, 400);
+    assert.equal(announcementWrite, null);
+    assert.equal(cache.has("feed-a"), true);
   }
 });
 

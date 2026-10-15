@@ -1,9 +1,9 @@
 import {test,beforeEach,after} from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';import {once} from 'node:events';
-import cache from '../config/cache.js';import {db} from '../config/db.js';
+import cache from '../config/cache/cache.js';import {db} from '../config/db.js';
 process.env.ACCESS_TOKEN_SECRET='staff-test';process.env.REFRESH_TOKEN_SECRET='staff-refresh';process.env.TEMP_PASSWORD_SECRET='staff-temp';process.env.SUPABASE_URL='https://example.supabase.co';process.env.SUPABASE_KEY='no-network';process.env.CACHE_ENABLED='true';
-const {default:routes}=await import('../routes/internshipRecordRoutes.js');const {signAccessToken}=await import('../config/jwt.js');
+const {default:routes}=await import('../features/internship-records/routes/internshipRecordRoutes.js');const {signAccessToken}=await import('../config/jwt.js');
 const original=db.execute,originalConnection=db.getConnection;let calls,dept,mode,releases;
 beforeEach(()=>{cache.flushAll();calls=0;dept=1;mode='success';releases=0;db.execute=async()=>{calls++;if(mode==='error')throw Error('offline');return [mode==='empty'?[]:[{id:'record',company_name:'Company'}]];};db.getConnection=async()=>({release(){releases++;},async execute(sql,params){if(sql.includes('FROM dept_heads_background_info')){if(mode==='auth-error')throw Error('offline');return [dept===null?[]:[{department_id:dept}]];}calls++;if(mode==='error')throw Error('offline');if(sql.includes('COUNT(*) AS total'))return [[{total:mode==='empty'?0:1}]];if(sql.includes('GROUP BY ir.status'))return [mode==='empty'?[]:[{status:'ongoing',count:1}]];return [mode==='empty'?[]:[{id:String(params[0]??'admin'),first_name:'Test',last_name:'Student',accumulated_hours:20,status:'ongoing'}]];}});});
 after(async()=>{db.execute=original;db.getConnection=originalConnection;cache.close();await db.end();});

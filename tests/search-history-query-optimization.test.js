@@ -1,7 +1,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { db } from "../config/db.js";
-import { getSearchHistory } from "../controllers/searchHistoryController.js";
+import { getSearchHistory } from "../features/search-history/controllers/searchHistoryController.js";
 
 const original = db.getConnection;
 after(async () => { db.getConnection = original; await db.end(); });

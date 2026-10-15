@@ -12,7 +12,7 @@ const {
   signSocketTicket,
   verifySocketTicket,
 } = await import("../config/socketAuth.js");
-const { createSocketTicket } = await import("../controllers/socketAuthController.js");
+const { createSocketTicket } = await import("../features/auth/controllers/socketAuthController.js");
 
 function response() {
   return {

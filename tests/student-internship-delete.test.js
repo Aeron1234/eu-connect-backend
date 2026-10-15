@@ -2,7 +2,7 @@ import { after, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import express from "express";
-import cache from "../config/cache.js";
+import cache from "../config/cache/cache.js";
 import { db } from "../config/db.js";
 
 process.env.ACCESS_TOKEN_SECRET = "student-delete-test";
@@ -11,7 +11,7 @@ process.env.TEMP_PASSWORD_SECRET = "student-delete-temp";
 process.env.SUPABASE_URL = "https://example.supabase.co";
 process.env.SUPABASE_KEY = "no-network";
 
-const { default: routes } = await import("../routes/internshipRecordRoutes.js");
+const { default: routes } = await import("../features/internship-records/routes/internshipRecordRoutes.js");
 const { signAccessToken } = await import("../config/jwt.js");
 
 const originalGetConnection = db.getConnection;

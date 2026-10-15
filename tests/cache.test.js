@@ -1,6 +1,6 @@
 import { test, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
-import cache, { invalidateUserCache, invalidateRouteCache } from "../config/cache.js";
+import cache, { invalidateUserCache, invalidateRouteCache } from "../config/cache/cache.js";
 import { cacheRoute } from "../middleware/cache-middleware.js";
 
 const profile = "/eu-connect/api/account/user";

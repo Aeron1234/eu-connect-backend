@@ -8,7 +8,7 @@ import {
   getDepartmentHeadDashboardData,
   getDepartmentStudentHoursPage,
   getAdminDashboardData,
-} from "../controllers/dashboardController.js";
+} from "../features/dashboard/controllers/dashboardController.js";
 
 function response() {
   return { statusCode: 200, locals: {}, status(code) { this.statusCode = code; return this; },
@@ -57,6 +57,42 @@ test("student dashboard keeps today's first row and independent live status with
   assert.match(calls[1].sql, /created_at >= CURDATE\(\).*created_at < CURDATE\(\) \+ INTERVAL 1 DAY/s);
   assert.doesNotMatch(calls[1].sql, /DATE\(created_at\)/);
   assert.equal(releases, 1);
+});
+
+test("student dashboard fails closed for each required read instead of reporting empty attendance", async () => {
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    for (const failingStep of [1, 2, 3, 4]) {
+      const { res, calls, releases } = await invoke(getStudentDashboardData, { id: "student" }, (_sql, _params, step) => {
+        if (step === failingStep) throw Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+        if (step === 1) return [{ id: "internship", status: "ongoing" }];
+        return [];
+      });
+      assert.equal(res.statusCode, 500, `query ${failingStep}`);
+      assert.equal(res.body.success, false);
+      assert.ok(res.body.error);
+      assert.equal(Object.hasOwn(res.body, "internshipData"), false);
+      assert.equal(Object.hasOwn(res.body, "dtrStatus"), false);
+      assert.equal(calls.length, failingStep, "stop reading after the failure");
+      assert.equal(releases, 1);
+    }
+  } finally {
+    console.error = originalError;
+  }
+});
+
+test("successful absence of an active internship or DTR stays a legitimate empty state", async () => {
+  for (const internship of [null, { id: "pending", status: "pending" }, { id: "active", status: "ongoing" }]) {
+    const { res, releases } = await invoke(getStudentDashboardData, { id: "student" }, (_sql, _params, step) =>
+      step === 1 && internship ? [internship] : []);
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.success, true);
+    assert.deepEqual(res.body.internshipData, internship);
+    assert.deepEqual(res.body.dtrStatus, { status: "CLOCKED_OUT", record: null });
+    assert.equal(res.body.dtrToday, null);
+    assert.equal(releases, 1);
+  }
 });
 
 test("department dashboard sends only the first hours page and a full-course chart aggregate", async () => {

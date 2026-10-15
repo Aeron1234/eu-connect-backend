@@ -8,7 +8,7 @@ import {
   createCalendarSchedule,
   updateCalendarSchedule,
   deleteCalendarSchedule,
-} from "../controllers/calendarControllers.js";
+} from "../features/calendar/controllers/calendarControllers.js";
 
 const originalExecute = db.execute;
 const originalGetConnection = db.getConnection;
@@ -36,7 +36,9 @@ test("month feed reads the full date range and scopes announcement and schedule 
   await getCalendarMonth({ verifiedUser: { id: "student", role: "student", department_id: 7 }, query: { month: "2026-10" } }, res);
   assert.equal(res.statusCode, 200);
   assert.equal(calls.length, 4);
-  assert.deepEqual(calls[0].params, ["2026-10-01", "2026-11-01", "student", 7]);
+  assert.deepEqual(calls[0].params, ["2026-11-01", "2026-10-01", "student", 7]);
+  assert.match(calls[0].sql, /a\.event_date < \? AND COALESCE\(a\.event_end_date, a\.event_date\) >= \?/);
+  assert.match(calls[0].sql, /DATE_FORMAT\(a\.event_end_date, '%Y-%m-%d'\) AS event_end_date/);
   assert.match(calls[0].sql, /author_dept\.department_id = \?/);
   assert.deepEqual(calls[1].params, ["2026-11-01", "2026-10-01", "student", 7]);
   assert.deepEqual(calls[3].params, ["student", "2026-10-01", "2026-11-01"]);
@@ -53,9 +55,39 @@ test("employers receive only school-wide calendar items without internship or to
   await getCalendarMonth({ verifiedUser: { id: "employer", role: "employer", department_id: 7 }, query: { month: "2026-10" } }, res);
   assert.equal(res.statusCode, 200);
   assert.equal(calls.length, 2);
-  assert.deepEqual(calls[0].params, ["2026-10-01", "2026-11-01", "employer", -1]);
+  assert.deepEqual(calls[0].params, ["2026-11-01", "2026-10-01", "employer", -1]);
   assert.deepEqual(calls[1].params, ["2026-11-01", "2026-10-01", "employer", -1]);
   assert.deepEqual(res.body, { announcements: [], schedules: [], internship: null, todos: [] });
+});
+
+test("REG calendar announcement reads stay General-only", async () => {
+  const calls = [];
+  db.execute = async (sql, params) => { calls.push({ sql, params }); return [[]]; };
+  const res = response();
+  await getCalendarMonth({ verifiedUser: { id: "registrar", role: "department_head", department_id: 7, department_code: "REG" }, query: { month: "2026-10" } }, res);
+  assert.equal(res.statusCode, 200);
+  assert.match(calls[0].sql, /AND ac.name = 'General'/);
+  assert.match(calls[0].sql, /COALESCE\(a\.event_end_date, a\.event_date\)/);
+  assert.equal(calls[1].sql.includes("ac.name"), false);
+});
+
+test("month feed returns overlapping announcement ranges from a previous month", async () => {
+  const items = [
+    { id: "spans-months", event_date: "2026-09-30", event_end_date: "2026-10-03" },
+    { id: "last-day", event_date: "2026-10-31", event_end_date: null },
+    { id: "expired", event_date: "2026-09-29", event_end_date: "2026-09-30" },
+    { id: "next-month", event_date: "2026-11-01", event_end_date: null },
+  ];
+  db.execute = async (sql, params) => {
+    if (!sql.includes("FROM announcements")) return [[]];
+    const [until, from] = params;
+    return [items.filter((item) => item.event_date < until && (item.event_end_date || item.event_date) >= from)];
+  };
+  const res = response();
+  await getCalendarMonth({ verifiedUser: { id: "head", role: "department_head", department_id: 7 }, query: { month: "2026-10" } }, res);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body.announcements.map((item) => item.id), ["spans-months", "last-day"]);
+  assert.equal(res.body.announcements[0].event_end_date, "2026-10-03");
 });
 
 test("employers can open school-wide schedules but not department schedules", async () => {

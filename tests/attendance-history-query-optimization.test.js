@@ -5,8 +5,8 @@ process.env.SUPABASE_URL = 'https://example.supabase.co';
 process.env.SUPABASE_KEY = 'no-network';
 
 const { db } = await import('../config/db.js');
-const { getAllDTRs } = await import('../controllers/dtrControllers.js');
-const { getSearchedStudentDTRs } = await import('../controllers/searchedUserController.js');
+const { getAllDTRs } = await import('../features/dtr/controllers/dtrControllers.js');
+const { getSearchedStudentDTRs } = await import('../features/users/controllers/searchedUserController.js');
 
 async function invoke(handler, query, answer) {
   const original = db.getConnection;

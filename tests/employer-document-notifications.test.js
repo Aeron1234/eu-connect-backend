@@ -2,7 +2,7 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { db } from "../config/db.js";
 import { supabase } from "../config/supabase.js";
-import { approveInternshipDocument, deleteFile } from "../controllers/fileControllers.js";
+import { approveInternshipDocument, deleteFile } from "../features/documents/controllers/fileControllers.js";
 
 const originalGetConnection = db.getConnection;
 const originalStorageFrom = supabase.storage.from;

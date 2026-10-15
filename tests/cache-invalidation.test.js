@@ -1,10 +1,10 @@
 import { test, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
-import cache from "../config/cache.js";
+import cache from "../config/cache/cache.js";
 import { db } from "../config/db.js";
 import { AVAILABLE_AVATARS } from "../config/avatars.js";
-import { updateUserAvatar, deleteUserAvatar, deactivateAccount, reactivateAccount, getCreateAccountFormData } from "../controllers/accountControllers.js";
-import { addDepartment, addCourse, activateCourse, deactivateCourse, activateDepartment, deactivateDepartment } from "../controllers/departmentsAndCoursesControllers.js";
+import { updateUserAvatar, deleteUserAvatar, deactivateAccount, reactivateAccount, getCreateAccountFormData } from "../features/accounts/controllers/accountControllers.js";
+import { addDepartment, addCourse, activateCourse, deactivateCourse, activateDepartment, deactivateDepartment } from "../features/departments-and-courses/controllers/departmentsAndCoursesControllers.js";
 
 const originalGetConnection = db.getConnection;
 const profile = "/eu-connect/api/account/user";

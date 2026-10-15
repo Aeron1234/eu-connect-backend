@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { db } from "../config/db.js";
-import { getAverageShiftHoursByWeek } from "../controllers/dashboardController.js";
+import { getAverageShiftHoursByWeek } from "../features/dashboard/controllers/dashboardController.js";
 
 function response() {
   return {

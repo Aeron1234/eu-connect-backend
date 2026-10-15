@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 process.env.SUPABASE_URL = "https://example.supabase.co";
 process.env.SUPABASE_KEY = "no-network";
 const { db } = await import("../config/db.js");
-const { updateDepartment, updateCourse } = await import("../controllers/departmentsAndCoursesControllers.js");
-const { removeSearchedStudentDtrLocation } = await import("../controllers/searchedUserController.js");
+const { updateDepartment, updateCourse } = await import("../features/departments-and-courses/controllers/departmentsAndCoursesControllers.js");
+const { removeSearchedStudentDtrLocation } = await import("../features/users/controllers/searchedUserController.js");
 
 async function invoke(handler, req, execute) {
   const original = db.getConnection;

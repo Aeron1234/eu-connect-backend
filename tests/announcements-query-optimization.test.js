@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 const { db } = await import('../config/db.js');
-const { getAllAnnouncements } = await import('../controllers/announcementControllers.js');
+const { getAllAnnouncements } = await import('../features/announcements/controllers/announcementControllers.js');
 
 async function invoke(query, answer) {
   const original = db.execute;

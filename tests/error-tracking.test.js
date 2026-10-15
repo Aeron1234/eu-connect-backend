@@ -8,7 +8,7 @@ import { errorTrackingContext, reportError } from "../config/errorTracking.js";
 process.env.ACCESS_TOKEN_SECRET = "test-only-access-secret";
 process.env.REFRESH_TOKEN_SECRET = "test-only-refresh-secret";
 const { signAccessToken } = await import("../config/jwt.js");
-const { default: routes } = await import("../routes/errorTrackingRoutes.js");
+const { default: routes } = await import("../features/error-tracking/routes/errorTrackingRoutes.js");
 const originalExecute = db.execute;
 const originalQuery = db.query;
 const writes = [];

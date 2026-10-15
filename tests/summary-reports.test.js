@@ -2,7 +2,7 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { db } from "../config/db.js";
 import { supabase } from "../config/supabase.js";
-import { listSummaryReports, saveSummaryReport, deleteSummaryReport, getSummaryAttachment, getInternshipRecordSummaryReport, getInternshipRecordSummaryAttachment } from "../controllers/summaryReportControllers.js";
+import { listSummaryReports, saveSummaryReport, deleteSummaryReport, getSummaryAttachment, getInternshipRecordSummaryReport, getInternshipRecordSummaryAttachment } from "../features/summary-reports/controllers/summaryReportControllers.js";
 
 const originalGetConnection = db.getConnection;
 const originalExecute = db.execute;

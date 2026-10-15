@@ -9,7 +9,7 @@ const {
   getMyPastInternshipRecords,
   getAllActiveInternships,
   getAllUserInternships,
-} = await import('../controllers/internshipRecordControllers.js');
+} = await import('../features/internship-records/controllers/internshipRecordControllers.js');
 
 async function invoke(handler, user, expectedRows) {
   const originalExecute = db.execute;

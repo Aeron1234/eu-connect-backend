@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 const { db } = await import('../config/db.js');
-const { getMyActivityLogs, getAllActivityLogs } = await import('../controllers/activityLogsControllers.js');
+const { getMyActivityLogs, getAllActivityLogs } = await import('../features/activity-logs/controllers/activityLogsControllers.js');
 
 async function invoke(handler, query, answer) {
   const original = db.getConnection;

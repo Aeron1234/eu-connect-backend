@@ -1,8 +1,8 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import cache from "../config/cache.js";
+import cache from "../config/cache/cache.js";
 import { db } from "../config/db.js";
-import { openAnnouncementNotification } from "../controllers/notificationControllers.js";
+import { openAnnouncementNotification } from "../features/notifications/controllers/notificationControllers.js";
 
 const originalGetConnection = db.getConnection;
 const uuid = "e531092e-4d22-4e1b-b909-e89d2c6ac3ea";

@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { db } from "../config/db.js";
-import { getAllAccounts, getUserProfile, updatePassword } from "../controllers/accountControllers.js";
+import { getAllAccounts, getUserProfile, updatePassword } from "../features/accounts/controllers/accountControllers.js";
 import bcrypt from "bcryptjs";
-import cache from "../config/cache.js";
+import cache from "../config/cache/cache.js";
 
 test("account count retains filters and row multiplicity without detail joins", async () => {
   const original = db.getConnection;

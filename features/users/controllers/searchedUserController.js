@@ -1,0 +1,1269 @@
+import { reportError } from "../../../config/errorTracking.js";
+import { invalidateDocumentMetadataCache } from "../../../config/cache/documentMetadataCache.js";
+import { invalidatePastInternshipsCache } from "../../../config/cache/pastInternshipsCache.js";
+import { invalidateNotificationsCache } from "../../../config/cache/notificationsCache.js";
+import { invalidateActivityLogsCache } from "../../../config/cache/activityLogsCache.js";
+import { db } from "../../../config/db.js";
+import { supabase } from "../../../config/supabase.js";
+import { ALLOWED_TYPES, UPLOAD_ROOT, newUUID } from "../../../config/helpers.js";
+import { withUploadConnection, uploadValidationError, cleanupUploadPaths, afterUploadCommit } from "../../../config/uploadLifecycle.js";
+
+const BUCKET = process.env.SUPABASE_BUCKET;
+
+const EMPTY_SUPERVISION = {
+  status: null,
+  direction: null,
+  hasOngoingInternship: false,
+  requestId: null,
+};
+
+/**
+ * Resolves the supervision relationship between the *viewer* and the
+ * *searched user*. Only two directions are meaningful:
+ *   employer viewing a student  -> is this student my intern?
+ *   student viewing an employer -> is this employer my supervisor?
+ * Everything else resolves to EMPTY_SUPERVISION.
+ *
+ * `direction` tells the client whose perspective the status is from, so a
+ * single "accepted" can render as "Your intern" or "Your supervisor".
+ */
+async function resolveSupervision({
+  connection,
+  viewerId,
+  viewerRole,
+  searchedUserId,
+  searchedRole,
+  studentInternship, // { id, employerId } from the main query; student rows only
+}) {
+  if (!viewerId || viewerId === searchedUserId) return EMPTY_SUPERVISION;
+
+  // --- employer is viewing a student ---
+  if (viewerRole === "employer" && searchedRole === "student") {
+    if (!studentInternship?.id) return EMPTY_SUPERVISION;
+
+    if (studentInternship.employerId === viewerId) {
+      return {
+        status: "accepted",
+        direction: "viewer_is_supervisor",
+        hasOngoingInternship: true,
+        requestId: null,
+      };
+    }
+
+    // Has this student asked *me* to supervise them?
+    const [requests] = await connection.execute(
+      `SELECT id FROM supervisor_requests
+       WHERE internship_id = ? AND employer_id = ? AND status = 'pending'
+       LIMIT 1`,
+      [studentInternship.id, viewerId],
+    );
+
+    const requestId = requests[0]?.id || null;
+
+    return {
+      status: requestId ? "pending" : null,
+      direction: requestId ? "viewer_is_supervisor" : null,
+      hasOngoingInternship: true,
+      requestId,
+    };
+  }
+
+  // --- student is viewing an employer ---
+  if (viewerRole === "student" && searchedRole === "employer") {
+    // The viewer's own ongoing internship, plus any pending request aimed
+    // specifically at this employer. One round trip instead of two.
+    const [rows] = await connection.execute(
+      `SELECT ir.employer_id, sr.id AS request_id
+       FROM internship_records ir
+       LEFT JOIN supervisor_requests sr
+         ON sr.internship_id = ir.id
+        AND sr.employer_id = ?
+        AND sr.status = 'pending'
+       WHERE ir.user_id = ? AND ir.status = 'ongoing' AND ir.deleted_at IS NULL
+       LIMIT 1`,
+      [searchedUserId, viewerId],
+    );
+
+    if (rows.length === 0) return EMPTY_SUPERVISION;
+
+    const row = rows[0];
+
+    if (row.employer_id === searchedUserId) {
+      return {
+        status: "accepted",
+        direction: "viewer_is_intern",
+        hasOngoingInternship: true,
+        requestId: null,
+      };
+    }
+
+    return {
+      status: row.request_id ? "pending" : null,
+      direction: row.request_id ? "viewer_is_intern" : null,
+      hasOngoingInternship: true,
+      requestId: row.request_id || null,
+    };
+  }
+
+  return EMPTY_SUPERVISION;
+}
+
+export const getSearchedUser = async (req, res) => {
+  const { searchedUserId } = req.params;
+
+  if (!searchedUserId) {
+    return res.status(400).json({
+      success: false,
+      error: "User ID parameter is required.",
+    });
+  }
+
+  let connection;
+  try {
+    // Joins are role-scoped (AND r.role = '...') rather than unconditional —
+    // a department_head's department lives in dept_heads_background_info,
+    // not student_academic_info, and an employer's company details live in
+    // employer_background_info.
+    const query = `
+      SELECT 
+        u.id AS user_id,
+        up.first_name, up.last_name, up.contact_number, up.full_address, up.gender, up.avatar,
+        r.role AS role_name,
+
+        -- student-only
+        c.course_name AS course,
+        sd.name AS student_department_name,
+        IFNULL(ir.accumulated_hours, 0) AS hours_rendered,
+        IFNULL(ir.total_hours, 0) AS total_hours,
+        ir.company_name AS student_company_name,
+        ir.id AS student_internship_id,
+        ir.employer_id AS student_internship_employer_id,
+
+        -- department_head-only
+        dd.name AS dept_head_department_name,
+        dhbi.employee_number,
+
+        -- employer-only
+        ebi.company_name AS employer_company_name,
+        ebi.position AS employer_position,
+        ebi.company_address AS employer_company_address,
+        ebi.contact_number AS employer_contact_number
+
+      FROM users u
+      INNER JOIN user_profiles up ON u.id = up.user_id
+      INNER JOIN roles r ON u.role_id = r.id
+
+      LEFT JOIN student_academic_info sai ON u.id = sai.user_id AND r.role = 'student'
+      LEFT JOIN courses c ON sai.course_id = c.id
+      LEFT JOIN departments sd ON sai.department_id = sd.id
+      LEFT JOIN internship_records ir 
+        ON u.id = ir.user_id 
+       AND ir.status = 'ongoing' 
+       AND ir.deleted_at IS NULL 
+       AND r.role = 'student'
+
+      LEFT JOIN dept_heads_background_info dhbi ON u.id = dhbi.user_id AND r.role = 'department_head'
+      LEFT JOIN departments dd ON dhbi.department_id = dd.id
+
+      LEFT JOIN employer_background_info ebi ON u.id = ebi.user_id AND r.role = 'employer'
+
+      WHERE u.id = ? AND u.deleted_at IS NULL
+      LIMIT 1;
+    `;
+
+    let rows;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        connection = await db.getConnection();
+        [rows] = await connection.execute(query, [searchedUserId]);
+        break;
+      } catch (error) {
+        if (connection) {
+          connection.release();
+          connection = undefined;
+        }
+        // Reacquire a dropped pooled connection once for this read only.
+        if (
+          attempt > 0 ||
+          !["ECONNRESET", "PROTOCOL_CONNECTION_LOST", "EPIPE"].includes(error?.code)
+        ) {
+          throw error;
+        }
+      }
+    }
+    const user = rows[0];
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: "Target profile does not exist",
+      });
+    }
+
+    const role = user.role_name.toLowerCase();
+
+    const { id: viewerId, role: rawViewerRole } = req.verifiedUser || {};
+    const viewerRole = rawViewerRole?.toLowerCase() || null;
+
+    // Supervision is supplementary — a failure here should degrade the tag,
+    // not take down the whole profile.
+    let supervision = EMPTY_SUPERVISION;
+    try {
+      supervision = await resolveSupervision({
+        connection,
+        viewerId,
+        viewerRole,
+        searchedUserId,
+        searchedRole: role,
+        studentInternship:
+          role === "student" && user.student_internship_id
+            ? {
+                id: user.student_internship_id,
+                employerId: user.student_internship_employer_id,
+              }
+            : null,
+      });
+    } catch (supervisionError) {
+      res.locals.skipCache = true;
+      reportError(
+        "Supervision resolve failed (getSearchedUser):",
+        supervisionError,
+      );
+    }
+
+    // ---- HEADER: exactly what <SearchedUserHeader> renders, nothing more ----
+    const header = {
+      first_name: user.first_name,
+      last_name: user.last_name,
+      avatar: user.avatar,
+      role,
+      ...(role === "student" && {
+        course: user.course,
+        department: user.student_department_name,
+        hours_rendered: Number(user.hours_rendered),
+        total_hours: Number(user.total_hours),
+      }),
+      ...(role === "department_head" && {
+        department: user.dept_head_department_name,
+      }),
+      ...(role === "employer" && {
+        company_name: user.employer_company_name,
+      }),
+    };
+
+    // ---- INFO: everything else, for the info tab / detail view ----
+    // Admin gets nothing beyond the shared contact fields, per your instruction.
+    const roleSpecificInfo =
+      role === "student"
+        ? {
+            company_name: user.student_company_name,
+          }
+        : role === "department_head"
+          ? {
+              employee_number: user.employee_number,
+            }
+          : role === "employer"
+            ? {
+                position: user.employer_position,
+                company_address: user.employer_company_address,
+                contact_number: user.employer_contact_number,
+              }
+            : {};
+
+    const info = {
+      id: user.user_id,
+      contact_number: user.contact_number,
+      full_address: user.full_address,
+      gender: user.gender,
+      role,
+      ...roleSpecificInfo,
+    };
+
+    return res.status(200).json({
+      success: true,
+      user: {
+        header,
+        info,
+        supervision,
+        hasOngoingInternship:
+          role === "student" && Boolean(user.student_internship_id),
+      },
+    });
+  } catch (error) {
+    reportError("Database failure inside getSearchedUser endpoint:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Internal server registry failure",
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+export const getSearchedStudentDTRs = async (req, res) => {
+  // 🛡️ GUARD CLAUSE: Validate searched user route parameter
+  const { studentId } = req.params;
+  if (!studentId) {
+    return res
+      .status(400)
+      .json({ error: "Searched User ID parameter is required." });
+  }
+
+  // Parse pagination limits safely
+  const limit = parseInt(req.query.limit) || 5;
+  const offset = parseInt(req.query.offset) || 0;
+
+  let connection;
+  try {
+    // 🌟 Acquire explicit pool connection
+    connection = await db.getConnection();
+
+    // Query 1: Fetch only the specific columns needed for the UI layout (excluding lats/lons)
+    const dtrQuery = `
+      SELECT 
+        dtr.id,
+        dtr.created_at,
+        dtr.internship_id,
+        dtr.total_hours,
+        dtr.clock_in,
+        dtr.clock_out,
+        dtr.user_id,
+        dtr.status,
+        (
+          SELECT COUNT(*)
+          FROM daily_time_records countedDtr
+          INNER JOIN internship_records countedIr
+            ON countedDtr.internship_id = countedIr.id
+          WHERE countedDtr.user_id = ?
+            AND countedIr.status = 'ongoing'
+            AND countedIr.deleted_at IS NULL
+        ) AS total_dtrs
+      FROM daily_time_records dtr
+      INNER JOIN internship_records ir 
+         ON dtr.internship_id = ir.id
+      WHERE dtr.user_id = ? 
+        AND ir.status = 'ongoing'
+        AND ir.deleted_at IS NULL
+      ORDER BY dtr.created_at DESC
+      LIMIT ? OFFSET ?
+    `;
+
+    // Query 2: Fetch total row counts for dynamic pagination calculations
+    const countQuery = `
+      SELECT COUNT(*) AS total 
+      FROM daily_time_records dtr
+      INNER JOIN internship_records ir 
+         ON dtr.internship_id = ir.id
+      WHERE dtr.user_id = ? 
+        AND ir.status = 'ongoing'
+        AND ir.deleted_at IS NULL
+    `;
+
+    // Execute queries using the allocated connection thread
+    const [pageRows] = await connection.execute(dtrQuery, [
+      studentId,
+      studentId,
+      limit,
+      offset,
+    ]);
+    let totalRecords = pageRows[0]?.total_dtrs;
+    if (pageRows.length === 0) {
+      const [[{ total }]] = await connection.execute(countQuery, [studentId]);
+      totalRecords = total;
+    }
+    const rows = pageRows.map(({ total_dtrs, ...row }) => row);
+    const totalPages = Math.ceil(totalRecords / limit);
+
+    return res.status(200).json({
+      success: true,
+      dtrs: rows,
+      totalPages,
+      totalRecords,
+      currentPage: Math.floor(offset / limit) + 1,
+    });
+  } catch (error) {
+    reportError("Get searched user DTRs query failure:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Database query failed to get DTR logs.",
+    });
+  } finally {
+    // 🌟 Ensure pool connection thread is always released back to pool safely
+    if (connection) connection.release();
+  }
+};
+
+export const getSearchedStudentDtrLocation = async (req, res) => {
+  try {
+    const { studentId } = req.params;
+
+    if (!studentId) {
+      return res.status(400).json({ error: "studentId is required." });
+    }
+
+    const [rows] = await db.execute(
+      `SELECT 
+         ir.id AS internship_id,
+         ir.lat AS company_lat,
+         ir.lon AS company_lon,
+         dl.id AS dtr_location_id,
+         dl.set_by,
+         dl.lat AS dtr_lat,
+         dl.lon AS dtr_lon,
+         dl.radius_meters,
+         dl.address,
+         dl.label,
+         dl.created_at AS dtr_created_at,
+         dl.updated_at AS dtr_updated_at
+       FROM internship_records AS ir
+       LEFT JOIN dtr_locations AS dl ON ir.id = dl.internship_id
+       WHERE ir.user_id = ? AND ir.status = 'ongoing' AND ir.deleted_at IS NULL
+       LIMIT 1`,
+      [studentId],
+    );
+
+    if (rows.length === 0) {
+      return res.status(200).json({
+        success: true,
+        internship_id: null,
+        is_custom_location: false,
+        location: null,
+      });
+    }
+
+    const record = rows[0];
+    const isCustom = record.dtr_location_id !== null;
+
+    res.status(200).json({
+      success: true,
+      internship_id: record.internship_id,
+      is_custom_location: isCustom,
+      location: {
+        lat: isCustom ? record.dtr_lat : record.company_lat,
+        lon: isCustom ? record.dtr_lon : record.company_lon,
+        radius_meters: isCustom ? record.radius_meters : 150, // keep in sync with your default elsewhere
+        label: isCustom ? record.label : "Company address (default)",
+        address: isCustom ? record.address : null,
+        set_by: isCustom ? record.set_by : null,
+        created_at: isCustom ? record.dtr_created_at : null,
+        updated_at: isCustom ? record.dtr_updated_at : null,
+      },
+    });
+  } catch (error) {
+    reportError("Get DTR location error:", error);
+    res.status(500).json({ error: "Database query failed.", success: false });
+  }
+};
+
+export const setSearchedStudentDtrLocation = async (req, res) => {
+  const { searchedUserId } = req.params;
+  const { internshipId } = req.query;
+  const { id: setterId, role } = req.verifiedUser;
+  const { lat, lon, radius_meter, label, address } = req.body;
+
+  let connection;
+  try {
+    // Fixed: this used to run before checking whether label was even
+    // provided — label is optional everywhere else in this function
+    // (label ?? null), so an omitted label crashed here with
+    // "Cannot read properties of undefined (reading 'length')".
+    if (label && label.length > 1000) {
+      return res.status(400).json({ error: "Label is too long." });
+    }
+
+    if (address && address.length > 255) {
+      return res.status(400).json({ error: "Address is too long." });
+    }
+
+    // 1. Validate required params/body
+    if (!searchedUserId) {
+      return res.status(400).json({ error: "searchedUserId is required." });
+    }
+
+    if (!internshipId) {
+      return res
+        .status(400)
+        .json({ error: "internshipId is required as a query parameter." });
+    }
+
+    if (
+      lat === undefined ||
+      lat === null ||
+      lon === undefined ||
+      lon === null
+    ) {
+      return res
+        .status(400)
+        .json({ error: "lat and lon are required to set a DTR location." });
+    }
+
+    const latNum = Number(lat);
+    const lonNum = Number(lon);
+
+    if (Number.isNaN(latNum) || Number.isNaN(lonNum)) {
+      return res
+        .status(400)
+        .json({ error: "lat and lon must be valid numbers." });
+    }
+
+    if (latNum < -90 || latNum > 90 || lonNum < -180 || lonNum > 180) {
+      return res
+        .status(400)
+        .json({ error: "lat/lon values are out of range." });
+    }
+
+    // radius_meter is optional; fall back to a sane default if not provided
+    const radiusMeters =
+      radius_meter === undefined || radius_meter === null
+        ? 150
+        : Number(radius_meter);
+
+    if (Number.isNaN(radiusMeters) || radiusMeters <= 0) {
+      return res
+        .status(400)
+        .json({ error: "radius_meter must be a positive number." });
+    }
+
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    // 2. Verify the internship exists AND actually belongs to the searched student
+    const [internships] = await connection.execute(
+      `SELECT ir.id, ir.user_id, ir.employer_id,
+              student.first_name AS student_first_name,
+              student.last_name AS student_last_name
+       FROM internship_records ir
+       LEFT JOIN user_profiles student ON student.user_id = ir.user_id
+       WHERE ir.id = ? AND ir.user_id = ?
+       LIMIT 1`,
+      [internshipId, searchedUserId],
+    );
+
+    if (internships.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        error: "No matching internship found for this student.",
+      });
+    }
+
+    const internship = internships[0];
+
+    // Only this internship's accepted supervisor can set its DTR location —
+    // an employer who hasn't been accepted as supervisor is blocked here.
+    // Staff (admin/department_head) are unaffected by this check.
+    if (role === "employer" && internship.employer_id !== setterId) {
+      await connection.rollback();
+      return res.status(403).json({
+        error:
+          "Only this student's accepted supervisor can set the DTR location.",
+      });
+    }
+
+    // 3. Check whether a DTR location already exists for this internship (1:1 relation)
+    const [existingLocations] = await connection.execute(
+      `SELECT id FROM dtr_locations WHERE internship_id = ? LIMIT 1`,
+      [internshipId],
+    );
+
+    let dtrLocationId;
+
+    if (existingLocations.length > 0) {
+      // 4a. Update existing custom location
+      dtrLocationId = existingLocations[0].id;
+
+      const [updateResult] = await connection.execute(
+        `UPDATE dtr_locations 
+         SET set_by = ?, lat = ?, lon = ?, radius_meters = ?, label = ?, address = ?, updated_at = NOW()
+         WHERE id = ?`,
+        [
+          setterId,
+          latNum,
+          lonNum,
+          radiusMeters,
+          label ?? null,
+          address ?? null,
+          dtrLocationId,
+        ],
+      );
+
+      if (updateResult.affectedRows === 0) {
+        await connection.rollback();
+        throw new Error("Failed to update DTR location.");
+      }
+    } else {
+      // 4b. Insert new custom location
+      const [insertResult] = await connection.execute(
+        `INSERT INTO dtr_locations 
+         (internship_id, set_by, lat, lon, radius_meters, label, address, created_at, updated_at) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+        [
+          internshipId,
+          setterId,
+          latNum,
+          lonNum,
+          radiusMeters,
+          label ?? null,
+          address ?? null,
+        ],
+      );
+
+      if (insertResult.affectedRows === 0) {
+        await connection.rollback();
+        throw new Error("Failed to insert DTR location.");
+      }
+
+      dtrLocationId = insertResult.insertId;
+    }
+
+    // Notify the student — the label they see this as is the same "note"
+    // the setter attached, folded straight into the notification message.
+    const [setterProfile] = await connection.execute(
+      `SELECT first_name, last_name FROM user_profiles WHERE user_id = ?`,
+      [setterId],
+    );
+    const setterName =
+      setterProfile.length > 0
+        ? `${setterProfile[0].first_name} ${setterProfile[0].last_name}`
+        : "Your supervisor";
+
+    const locationDescription = address ? ` at ${address}` : "";
+
+    const notifMessage = label
+      ? `${setterName} has set your DTR check-in location${locationDescription} with a ${radiusMeters}m radius.\nNote: "${label}"`
+      : `${setterName} has set your DTR check-in location${locationDescription} with a ${radiusMeters}m radius.`;
+
+    // internshipId is a char(36) UUID (internship_records.id) — goes under
+    // link_uuid, matching the convention used for every other internship-
+    // record-related notification (link is reserved for int/auto-increment
+    // ids, like announcements).
+    await connection.execute(
+      `INSERT INTO notifications (user_id, sender_id, type, title, message, link_uuid) VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        internship.user_id,
+        setterId,
+        "dtr_location_set",
+        "DTR Location Set",
+        notifMessage,
+        internshipId,
+      ],
+    );
+
+    // The accepted supervisor also needs to know when school staff changes
+    // the location used to validate their intern's attendance.
+    const supervisorId =
+      (role === "admin" || role === "department_head") &&
+      internship.employer_id &&
+      internship.employer_id !== setterId
+        ? internship.employer_id
+        : null;
+    let supervisorMessage;
+    if (supervisorId) {
+      const studentName =
+        [internship.student_first_name, internship.student_last_name]
+          .filter(Boolean)
+          .join(" ") || "your intern";
+      supervisorMessage = label
+        ? `${setterName} has set ${studentName}'s DTR check-in location${locationDescription} with a ${radiusMeters}m radius.\nNote: "${label}"`
+        : `${setterName} has set ${studentName}'s DTR check-in location${locationDescription} with a ${radiusMeters}m radius.`;
+
+      await connection.execute(
+        `INSERT INTO notifications (user_id, sender_id, type, title, message, link_uuid) VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          supervisorId,
+          setterId,
+          "dtr_location_set",
+          "Intern DTR Location Set",
+          supervisorMessage,
+          internshipId,
+        ],
+      );
+    }
+
+    await connection.commit();
+    invalidateNotificationsCache();
+
+    const io = req.app.get("socketio");
+    io.to(`user-${internship.user_id}`).emit("new_notification", {
+      title: "DTR Location Set",
+      message: notifMessage,
+      type: "dtr_location_set",
+      link_uuid: internshipId,
+    });
+    if (supervisorId) {
+      io.to(`user-${supervisorId}`).emit("new_notification", {
+        title: "Intern DTR Location Set",
+        message: supervisorMessage,
+        type: "dtr_location_set",
+        link_uuid: internshipId,
+      });
+    }
+
+    res.status(200).json({
+      message: "DTR location set successfully.",
+      success: true,
+      dtrLocation: {
+        id: dtrLocationId,
+        internship_id: internshipId,
+        set_by: setterId,
+        lat: latNum,
+        lon: lonNum,
+        radius_meters: radiusMeters,
+        label: label ?? null,
+        address: address ?? null,
+      },
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    reportError("Set DTR location error:", error);
+    res.status(500).json({
+      error: "Server error while setting DTR location.",
+      success: false,
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const removeSearchedStudentDtrLocation = async (req, res) => {
+  const { searchedUserId } = req.params;
+  const { internshipId } = req.query;
+  const { id: setterId, role } = req.verifiedUser;
+  if (!searchedUserId || !internshipId) {
+    return res.status(400).json({ error: "Student and internship are required." });
+  }
+  let connection;
+  try {
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+    const [records] = await connection.execute(
+      "SELECT id, employer_id, lat, lon FROM internship_records WHERE id = ? AND user_id = ? AND status = 'ongoing' AND deleted_at IS NULL LIMIT 1 FOR UPDATE",
+      [internshipId, searchedUserId],
+    );
+    if (!records.length) {
+      await connection.rollback();
+      return res.status(404).json({ error: "No ongoing internship found for this student." });
+    }
+    if (role === "employer" && records[0].employer_id !== setterId) {
+      await connection.rollback();
+      return res.status(403).json({ error: "Only this student's accepted supervisor can remove the DTR location." });
+    }
+    await connection.execute("DELETE FROM dtr_locations WHERE internship_id = ?", [internshipId]);
+    await connection.commit();
+    return res.json({ success: true, dtrLocation: {
+      internship_id: internshipId,
+      lat: records[0].lat,
+      lon: records[0].lon,
+      radius_meters: 150,
+      label: "Company address (default)",
+      address: null,
+      updated_at: null,
+    } });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    reportError("Remove DTR location error:", error);
+    return res.status(500).json({ error: "Failed to remove DTR location." });
+  } finally {
+    connection?.release();
+  }
+};
+
+export const getSearchedStudentFiles = async (req, res) => {
+  const { searchedUserId } = req.params;
+  if (!searchedUserId) {
+    return res
+      .status(400)
+      .json({ error: "Searched User ID parameter is required." });
+  }
+
+  let connection;
+  try {
+    connection = await db.getConnection();
+
+    // 1. Get every internship record for this student — this is the
+    // top-level grouping, since a student may have 1 or several.
+    // Ongoing internship (if any) always sorts first; the rest fall
+    // into "past records" ordered by most recently started.
+    const [internships] = await connection.execute(
+      `SELECT 
+         ir.id, ir.company_name, ir.internship_position,
+         ir.date_started, ir.date_ended, ir.status,
+         (SELECT COUNT(*) FROM requirement_types) AS totalRequirements
+       FROM internship_records ir
+       INNER JOIN users u ON ir.user_id = u.id
+       WHERE ir.user_id = ? AND u.deleted_at IS NULL AND ir.deleted_at IS NULL
+       ORDER BY 
+         (ir.status = 'ongoing') DESC,
+         ir.date_started DESC`,
+      [searchedUserId],
+    );
+
+    if (internships.length === 0) {
+      return res.status(200).json([]);
+    }
+
+    // 2. Get every document belonging to this student, across all
+    // their internships, in one query — cheaper than N queries per record.
+    // Files uploaded directly by the student have no verification_status
+    // (NULL) and always show. Files uploaded by an employer only show once
+    // the student has accepted them — a 'pending' one shouldn't count
+    // toward requirements or appear anywhere until confirmed.
+    const [documents] = await connection.execute(
+      `SELECT 
+         doc.id, doc.internship_id, doc.file_name, doc.company_name,
+         doc.category, doc.requirement_type_id, doc.file_type, doc.created_at,
+         doc.uploaded_by_id, doc.uploaded_by_role, doc.verification_status,
+         rt.name AS requirement_name, rt.requires_notarization, rt.copies_needed
+       FROM internship_documents doc
+       LEFT JOIN requirement_types rt ON doc.requirement_type_id = rt.id
+       WHERE doc.user_id = ?
+         AND (doc.verification_status IS NULL OR doc.verification_status = 'accepted')
+       ORDER BY doc.created_at DESC`,
+      [searchedUserId],
+    );
+
+    // 3. Keep the document order from the query while indexing by internship.
+    const documentsByInternship = new Map();
+    for (const document of documents) {
+      if (!documentsByInternship.has(document.internship_id)) {
+        documentsByInternship.set(document.internship_id, []);
+      }
+      documentsByInternship.get(document.internship_id).push(document);
+    }
+
+    const totalRequirements = internships[0].totalRequirements;
+
+    // 4. Attach each internship's own files + completion stats
+    const records = internships.map((internship) => {
+      const files = documentsByInternship.get(internship.id) || [];
+
+      const submittedCount = new Set(files.map((f) => f.requirement_type_id))
+        .size;
+
+      return {
+        ...internship,
+        totalRequirements,
+        submittedCount,
+        completionPercent:
+          totalRequirements > 0
+            ? Math.round((submittedCount / totalRequirements) * 100)
+            : 0,
+        files,
+      };
+    });
+
+    return res.status(200).json(records);
+  } catch (error) {
+    reportError("Get searched student files query failure:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Database query failed to get student files.",
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const downloadSearchedStudentInternshipFile = async (req, res) => {
+  try {
+    const { id: requesterId, role } = req.verifiedUser;
+    const { searchedUserId, fileId } = req.params;
+
+    if (!searchedUserId || !fileId) {
+      return res
+        .status(400)
+        .json({ error: "searchedUserId and fileId are required." });
+    }
+
+    const [rows] = await db.execute(
+      `SELECT user_id, path, file_name, file_type, uploaded_by_id FROM internship_documents WHERE id = ?`,
+      [fileId],
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "File not found." });
+    }
+
+    const doc = rows[0];
+
+    // Confirm the file actually belongs to the student named in the route —
+    // never trust fileId alone, or an authorized staff member could pull
+    // a file by guessing/reusing an id that belongs to a different student
+    if (doc.user_id !== searchedUserId) {
+      // 404 rather than 403 — don't reveal that a file with this id
+      // exists under a *different* student
+      return res.status(404).json({ error: "File not found." });
+    }
+
+    // Employers can only download files they personally uploaded —
+    // admins/department heads are not restricted this way
+    if (role === "employer" && doc.uploaded_by_id !== requesterId) {
+      return res.status(403).json({
+        error: "You can only download files you uploaded yourself.",
+      });
+    }
+
+    const { data, error } = await supabase.storage
+      .from(BUCKET)
+      .createSignedUrl(doc.path, 120);
+
+    if (error) {
+      reportError("Signed URL error:", error.message);
+      return res.status(404).json({ error: "File not found on server." });
+    }
+
+    return res.status(200).json({
+      url: data.signedUrl,
+      fileName: doc.file_name,
+    });
+  } catch (error) {
+    reportError("Download Error:", error.message);
+    res.status(500).json({ error: "Failed to retrieve file." });
+  }
+};
+
+export const getEmployerUploadedFiles = async (req, res) => {
+  try {
+    const { id: employerId } = req.verifiedUser;
+    const { searchedUserId } = req.params;
+
+    if (!searchedUserId) {
+      return res
+        .status(400)
+        .json({ error: "Searched User ID parameter is required." });
+    }
+
+    const [rows] = await db.execute(
+      `SELECT 
+         doc.id, doc.internship_id, doc.file_name, doc.company_name,
+         doc.category, doc.requirement_type_id, doc.file_type, doc.created_at,
+         doc.uploaded_by_id, doc.uploaded_by_role, doc.verification_status,
+         rt.name AS requirement_name
+       FROM internship_documents doc
+       LEFT JOIN requirement_types rt ON doc.requirement_type_id = rt.id
+       WHERE doc.user_id = ? 
+         AND doc.uploaded_by_id = ? 
+         AND doc.uploaded_by_role = 'employer'
+       ORDER BY doc.created_at DESC`,
+      [searchedUserId, employerId],
+    );
+
+    return res.status(200).json(rows);
+  } catch (error) {
+    reportError("Get employer uploaded file error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Database query failed to get uploaded files.",
+    });
+  }
+};
+
+export const uploadFileToSearchedStudent = async (req, res) => {
+  const CERTIFICATE_OF_COMPLETION_NAME = "Certificate of Completion";
+
+  let uploadedStoragePath;
+  let committed = false;
+  try {
+    const { id: employerId, role } = req.verifiedUser;
+    const { searchedUserId } = req.params;
+    const { file_name, company_name } = req.body;
+    const file = req.file;
+
+    if (!searchedUserId) {
+      return res.status(400).json({ error: "searchedUserId is required." });
+    }
+
+    if (!file) {
+      return res.status(400).json({ error: "No file uploaded." });
+    }
+
+    if (!ALLOWED_TYPES.includes(file.mimetype)) {
+      return res.status(400).json({ error: "Invalid file type." });
+    }
+
+    if (file.size > 50 * 1024 * 1024) {
+      return res.status(400).json({ error: "File is too large (Max 50MB)." });
+    }
+
+    async function eligibility(connection, expectedInternshipId) {
+      const [internships] = await connection.execute(
+        `SELECT id, employer_id FROM internship_records WHERE user_id = ? AND status = 'ongoing'
+         AND deleted_at IS NULL ${expectedInternshipId ? "AND id = ?" : ""}
+         LIMIT 1 ${expectedInternshipId ? "FOR UPDATE" : ""}`,
+        expectedInternshipId ? [searchedUserId, expectedInternshipId] : [searchedUserId],
+      );
+
+      if (internships.length === 0) {
+        throw uploadValidationError(404, "This student does not have an ongoing internship.");
+      }
+
+      const internship = internships[0];
+
+      if (internship.employer_id !== employerId) {
+        throw uploadValidationError(403, "Only this student's accepted supervisor can upload files on their behalf.");
+      }
+
+      const [reqTypes] = await connection.execute(
+        `SELECT id, category FROM requirement_types WHERE name = ? LIMIT 1`,
+        [CERTIFICATE_OF_COMPLETION_NAME],
+      );
+
+      if (reqTypes.length === 0) {
+        reportError(
+          `"${CERTIFICATE_OF_COMPLETION_NAME}" requirement type not found in requirement_types table.`,
+        );
+        throw uploadValidationError(500, "Certificate of Completion requirement type is not configured.");
+      }
+
+      const { id: requirementTypeId, category: catLower } = reqTypes[0];
+
+      // Need both names now — employer's (for the notification/log "from"),
+      // and the student's (so the activity log reads a name, not a raw uuid).
+      const [employerProfile] = await connection.execute(
+        `SELECT first_name, last_name FROM user_profiles WHERE user_id = ?`,
+        [employerId],
+      );
+
+      if (employerProfile.length === 0) {
+        throw uploadValidationError(404, "Employer profile not found.");
+      }
+
+      const [studentProfile] = await connection.execute(
+        `SELECT first_name, last_name FROM user_profiles WHERE user_id = ?`,
+        [searchedUserId],
+      );
+
+      if (studentProfile.length === 0) {
+        throw uploadValidationError(404, "Student profile not found.");
+      }
+
+      const employerName = `${employerProfile[0].first_name} ${employerProfile[0].last_name}`;
+      const studentName = `${studentProfile[0].first_name} ${studentProfile[0].last_name}`;
+      return { internship, requirementTypeId, catLower, employerName, studentName };
+    }
+    const initial = await withUploadConnection((connection) => eligibility(connection));
+
+    const fileExt = file.originalname.split(".").pop();
+    uploadedStoragePath = `requirements/${searchedUserId}/${newUUID()}.${fileExt}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from(BUCKET)
+      .upload(uploadedStoragePath, file.buffer, {
+        contentType: file.mimetype,
+      });
+
+    if (uploadError) throw uploadError;
+
+    const saved = await withUploadConnection(async (connection) => {
+      const { internship, requirementTypeId, catLower, employerName, studentName } = await eligibility(connection, initial.internship.id);
+      const [result] = await connection.execute(
+        `INSERT INTO internship_documents 
+          (user_id, internship_id, file_name, company_name, category, requirement_type_id, file_type, path, uploaded_by_id, uploaded_by_role, verification_status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+        [
+          searchedUserId,
+          internship.id,
+          file_name || CERTIFICATE_OF_COMPLETION_NAME,
+          company_name,
+          catLower,
+          requirementTypeId,
+          file.mimetype,
+          uploadedStoragePath,
+          employerId,
+          role,
+        ],
+      );
+
+      if (result.affectedRows === 0) {
+        throw uploadValidationError(400, "Uploading file failed.");
+      }
+
+      const notifTitle = "Certificate Uploaded";
+      const notifMessage = `${employerName} uploaded a Certificate of Completion on your behalf. Please review it to confirm.`;
+
+      await connection.execute(
+        `INSERT INTO notifications (user_id, sender_id, type, title, message, link) VALUES (?, ?, 'certificate_uploaded', ?, ?, ?)`,
+        [searchedUserId, employerId, notifTitle, notifMessage, result.insertId],
+      );
+
+      try {
+        await connection.execute(
+          `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [
+            employerId,
+            role,
+            "internship_document_uploaded_on_behalf",
+            "internship_documents",
+            String(result.insertId),
+            `${employerName} uploaded a Certificate of Completion on behalf of ${studentName}, pending their confirmation.`,
+            JSON.stringify({
+              student_id: searchedUserId,
+              internship_id: internship.id,
+              company_name,
+              file_name: file_name || CERTIFICATE_OF_COMPLETION_NAME,
+              verification_status: "pending",
+            }),
+          ],
+        );
+      } catch (logError) {
+        reportError(
+          "Activity log insert failed (document uploaded on behalf):",
+          logError,
+        );
+      }
+
+      return { id: result.insertId, notifTitle, notifMessage };
+    }, true);
+    committed = true;
+    afterUploadCommit(() => {
+      invalidateDocumentMetadataCache();
+      invalidatePastInternshipsCache(searchedUserId);
+      invalidateNotificationsCache();
+
+      invalidateActivityLogsCache();
+    });
+
+    afterUploadCommit(() => {
+      const io = req.app.get("socketio");
+      if (io) {
+        io.to(`user-${searchedUserId}`).emit("new_notification", {
+          title: saved.notifTitle,
+          message: saved.notifMessage,
+          type: "certificate_uploaded",
+          link: saved.id,
+        });
+      }
+    });
+
+    return res.status(201).json({
+      message: "Document uploaded successfully on behalf of the student.",
+      success: true,
+      id: saved.id,
+    });
+  } catch (error) {
+    if (!committed && uploadedStoragePath && !error.uploadCommitUncertain) {
+      await cleanupUploadPaths([uploadedStoragePath]);
+    }
+    if (error?.status) return res.status(error.status).json({ error: error.message });
+    reportError("Upload to searched user error:", error, error.uploadCommitUncertain ? { retainedStoragePath: uploadedStoragePath } : undefined);
+    return res.status(500).json({ error: "Server failed to process upload." });
+  }
+};
+
+export const deleteSearchedStudentFile = async (req, res) => {
+  let connection;
+  try {
+    const { id: requesterId, role } = req.verifiedUser;
+    const { searchedUserId, fileId } = req.params;
+
+    if (!searchedUserId || !fileId) {
+      return res
+        .status(400)
+        .json({ error: "searchedUserId and fileId are required." });
+    }
+
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    const [rows] = await connection.execute(
+      `SELECT id, user_id, file_name, path, uploaded_by_id, verification_status FROM internship_documents WHERE id = ? FOR UPDATE`,
+      [fileId],
+    );
+
+    if (rows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "File not found." });
+    }
+
+    const doc = rows[0];
+
+    if (doc.user_id !== searchedUserId) {
+      await connection.rollback();
+      return res.status(404).json({ error: "File not found." });
+    }
+
+    if (role === "employer" && doc.uploaded_by_id !== requesterId) {
+      await connection.rollback();
+      return res.status(403).json({
+        error: "You can only delete files you uploaded yourself.",
+      });
+    }
+
+    if (role === "employer" && doc.verification_status === "accepted") {
+      await connection.rollback();
+      return res.status(403).json({
+        error:
+          "This certificate has already been confirmed by the student and can no longer be deleted.",
+      });
+    }
+
+    // Needed for the activity log description below — fetched before the
+    // delete so it's still available even after the row is gone.
+    const [studentProfile] = await connection.execute(
+      `SELECT first_name, last_name FROM user_profiles WHERE user_id = ?`,
+      [searchedUserId],
+    );
+    const studentName =
+      studentProfile.length > 0
+        ? `${studentProfile[0].first_name} ${studentProfile[0].last_name}`
+        : "Unknown Student";
+
+    const [result] = await connection.execute(
+      `DELETE FROM internship_documents WHERE id = ?`,
+      [fileId],
+    );
+
+    if (result.affectedRows === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "File not found." });
+    }
+
+    try {
+      await connection.execute(
+        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          requesterId,
+          role,
+          "internship_document_deleted",
+          "internship_documents",
+          String(fileId),
+          `${role === "employer" ? "Employer" : role} deleted document "${doc.file_name}" belonging to ${studentName}.`,
+          JSON.stringify({
+            document_owner_id: searchedUserId,
+            uploaded_by_id: doc.uploaded_by_id,
+            verification_status: doc.verification_status,
+            path: doc.path,
+          }),
+        ],
+      );
+    } catch (logError) {
+      reportError(
+        "Activity log insert failed (searched student document deleted):",
+        logError,
+      );
+    }
+
+    await connection.commit();
+    invalidateDocumentMetadataCache();
+    invalidatePastInternshipsCache(searchedUserId);
+
+    invalidateActivityLogsCache();
+
+    const { error: storageError } = await supabase.storage
+      .from(BUCKET)
+      .remove([doc.path]);
+
+    if (storageError) {
+      reportError("Failed to delete from storage:", storageError.message);
+    }
+
+    res.status(200).json({
+      message: "File deleted successfully.",
+      success: true,
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    reportError("Delete searched student file error: ", error);
+    res.status(500).json({ error: "Database query failed", success: false });
+  } finally {
+    if (connection) connection.release();
+  }
+};

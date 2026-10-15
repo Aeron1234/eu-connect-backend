@@ -2,14 +2,14 @@ import { after, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import express from "express";
-import cache, { invalidateRouteCache } from "../config/cache.js";
-import { getCacheMetrics, recordCacheMetric } from "../config/cacheMetrics.js";
+import cache, { invalidateRouteCache } from "../config/cache/cache.js";
+import { getCacheMetrics, recordCacheMetric } from "../config/cache/cacheMetrics.js";
 import { cacheRoute } from "../middleware/cache-middleware.js";
 
 process.env.ACCESS_TOKEN_SECRET = "metrics-test-access";
 process.env.REFRESH_TOKEN_SECRET = "metrics-test-refresh";
 process.env.TEMP_PASSWORD_SECRET = "metrics-test-temp";
-const { default: routes } = await import("../routes/cacheMonitoringRoutes.js");
+const { default: routes } = await import("../features/cache-monitoring/routes/cacheMonitoringRoutes.js");
 const { signAccessToken } = await import("../config/jwt.js");
 
 beforeEach(() => {

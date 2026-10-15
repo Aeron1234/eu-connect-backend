@@ -1,8 +1,8 @@
 import { after, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { db } from "../config/db.js";
-import { clockIn, clockOut, getLatestDtrStatus, startBreak, resumeDuty } from "../controllers/dtrControllers.js";
-import { getStudentDashboardData } from "../controllers/dashboardController.js";
+import { clockIn, clockOut, getLatestDtrStatus, startBreak, resumeDuty } from "../features/dtr/controllers/dtrControllers.js";
+import { getStudentDashboardData } from "../features/dashboard/controllers/dashboardController.js";
 import { autoCloseStaleShifts } from "../config/autoCloseStaleShifts.js";
 
 const originalGetConnection = db.getConnection;

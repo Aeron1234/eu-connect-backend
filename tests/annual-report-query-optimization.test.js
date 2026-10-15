@@ -1,7 +1,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { db } from "../config/db.js";
-import { getProgramAnnualReports, getProgramAnnualReportById, saveProgramAnnualReport } from "../controllers/hteReportControllers.js";
+import { getProgramAnnualReports, getProgramAnnualReportById, saveProgramAnnualReport } from "../features/sipp-reports/controllers/hteReportControllers.js";
 
 const original = db.getConnection;
 after(async () => { db.getConnection = original; await db.end(); });

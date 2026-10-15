@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 const { db } = await import('../config/db.js');
-const { getAllWeeklyNarratives, getSearchedStudentWeeklyNarratives } = await import('../controllers/weeklyNarrativeControllers.js');
+const { getAllWeeklyNarratives, getSearchedStudentWeeklyNarratives } = await import('../features/weekly-narratives/controllers/weeklyNarrativeControllers.js');
 
 async function invoke(handler, query, answer) {
   const original = db.getConnection;

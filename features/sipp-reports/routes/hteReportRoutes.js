@@ -1,0 +1,81 @@
+import { cacheRoute } from "../../../middleware/cache-middleware.js";
+import express from "express";
+import multer from "multer";
+import { verifyUser } from "../../../middleware/verifyUser.js";
+import { verifyRole } from "../../../middleware/verifyRole.js";
+import {
+  generalLimiter,
+  mediumLimiter,
+  paginationLimiter,
+  strictLimiter,
+} from "../../../middleware/rateLimiter.js";
+import {
+  deleteProgramAnnualReport,
+  getAvailableAcademicYears,
+  getHteCompanyList,
+  getHteCompanyReport,
+  getProgramAnnualReportById,
+  getProgramAnnualReports,
+  saveProgramAnnualReport,
+} from "../controllers/hteReportControllers.js";
+
+const hteReportRoutes = express.Router();
+
+// Shared helper — throws-free, just returns true/false
+
+hteReportRoutes.get(
+  "/reports/academic-years",
+  verifyUser,
+  verifyRole(["department_head", "admin"]),
+  generalLimiter,
+  cacheRoute(60),
+  getAvailableAcademicYears,
+);
+
+hteReportRoutes.get(
+  "/reports/hte-annual/companies",
+  verifyUser,
+  verifyRole(["department_head", "admin"]),
+  paginationLimiter,
+  getHteCompanyList,
+);
+
+hteReportRoutes.get(
+  "/reports/hte-annual/company",
+  verifyUser,
+  verifyRole(["department_head", "admin"]),
+  generalLimiter,
+  getHteCompanyReport,
+);
+
+hteReportRoutes.post(
+  "/reports/annex-c",
+  verifyUser,
+  verifyRole(["department_head", "admin"]),
+  generalLimiter,
+  saveProgramAnnualReport,
+);
+hteReportRoutes.get(
+  "/reports/annex-c",
+  verifyUser,
+  verifyRole(["department_head", "admin"]),
+  paginationLimiter,
+  getProgramAnnualReports,
+);
+
+hteReportRoutes.get(
+  "/reports/annex-c/:reportId",
+  verifyUser,
+  verifyRole(["department_head", "admin"]),
+  generalLimiter,
+  getProgramAnnualReportById,
+);
+
+hteReportRoutes.delete(
+  "/reports/annex-c/:reportId",
+  verifyUser,
+  verifyRole(["department_head", "admin"]),
+  generalLimiter,
+  deleteProgramAnnualReport,
+);
+export default hteReportRoutes;
