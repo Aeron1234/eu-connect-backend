@@ -26,9 +26,9 @@ function boundedUpload({ field, maxFiles, maxBytes, sizeMessage, countMessage })
   const upload = multer({
     storage: multer.memoryStorage(),
     limits: {
-      // Busboy emits its limit event when the threshold is reached. One extra
-      // byte permits a file exactly at the advertised maximum, then rejects.
-      fileSize: maxBytes + 1,
+      // Multer 2.4 handles Busboy's inclusive threshold internally. Configure
+      // the actual maximum so even one byte over is rejected before handlers.
+      fileSize: maxBytes,
       files: maxFiles,
       fields: MAX_FIELDS,
       fieldSize: MB,

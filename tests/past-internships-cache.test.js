@@ -12,7 +12,7 @@ const files=await import('../features/documents/controllers/fileControllers.js')
 const searched=await import('../features/users/controllers/searchedUserController.js');
 const {supabase}=await import('../config/supabase.js');
 const originalExecute=db.execute,originalConnection=db.getConnection,originalFrom=supabase.storage.from;
-const path='/eu-connect/api/internships/my-past-internships';
+const path='/api/v1/internships/my-past-internships';
 let calls,mode,committed,emitted,activityLogs;
 beforeEach(()=>{
  cache.flushAll();calls=0;mode='success';committed=false;emitted=0;activityLogs=[];
@@ -29,7 +29,7 @@ beforeEach(()=>{
  supabase.storage.from=()=>({async upload(){if(mode==='storage-error')return {error:Error('storage')};return {error:null};},async remove(){if(committed)assert.equal(cache.has('owner'),false);return {error:null};}});
 });
 after(async()=>{db.execute=originalExecute;db.getConnection=originalConnection;supabase.storage.from=originalFrom;cache.close();await db.end();});
-async function client(t){const app=express();app.use('/eu-connect/api',routes);const server=app.listen(0,'127.0.0.1');await once(server,'listening');t.after(()=>new Promise(resolve=>{server.closeAllConnections();server.close(resolve);}));return (suffix='',id='owner',role='student')=>fetch(`http://127.0.0.1:${server.address().port}${path}${suffix}`,{headers:id?{Authorization:`Bearer ${signAccessToken({id,role})}`}:{}});}
+async function client(t){const app=express();app.use('/api/v1',routes);const server=app.listen(0,'127.0.0.1');await once(server,'listening');t.after(()=>new Promise(resolve=>{server.closeAllConnections();server.close(resolve);}));return (suffix='',id='owner',role='student')=>fetch(`http://127.0.0.1:${server.address().port}${path}${suffix}`,{headers:id?{Authorization:`Bearer ${signAccessToken({id,role})}`}:{}});}
 test('past internship lists cache sixty seconds and isolate identity, role and query variants',async t=>{
  const get=await client(t);
  for(const [suffix,id,role] of [['','owner','student'],['?page=2','owner','student'],['','other','student'],['','owner','admin'],['','owner','department_head']]){
@@ -39,7 +39,7 @@ test('past internship lists cache sixty seconds and isolate identity, role and q
  assert.equal((await get('','owner','employer')).status,403);assert.equal((await get('',null)).status,401);
 });
 test('past internship errors bypass cache and empty lists are cached',async t=>{const get=await client(t);const error=console.error;console.error=()=>{};try{mode='read-error';assert.equal((await get()).status,500);assert.equal(cache.keys().length,0);}finally{console.error=error;}mode='empty';assert.deepEqual(await(await get()).json(),[]);const before=calls;await get();assert.equal(calls,before);});
-function seed(){cache.set("overview",{path:"/eu-connect/api/internship-records/overview/i",userId:"staff",body:{}});cache.set('metadata',{path:'/eu-connect/api/searched-user/files/owner',userId:'admin',body:[]});for(const [key,userId]of [['owner','owner'],['owner-page','owner'],['other','other']])cache.set(key,{path,userId,body:[]});cache.set('unrelated',{path:'/eu-connect/api/account/user',userId:'owner',body:{}});}
+function seed(){cache.set("overview",{path:"/api/v1/internship-records/overview/i",userId:"staff",body:{}});cache.set('metadata',{path:'/api/v1/searched-user/files/owner',userId:'admin',body:[]});for(const [key,userId]of [['owner','owner'],['owner-page','owner'],['other','other']])cache.set(key,{path,userId,body:[]});cache.set('unrelated',{path:'/api/v1/account/user',userId:'owner',body:{}});}
 function response(){return {statusCode:200,status(code){this.statusCode=code;return this;},json(body){this.body=body;return this;}};}
 function request(employer=false){return {verifiedUser:{id:employer?'actor':'owner',role:employer?'employer':'student'},params:{searchedUserId:'owner',fileId:'doc'},body:{file_name:'Test',company_name:'Company',requirement_type_id:1},file:{mimetype:'application/pdf',size:4,originalname:'test.pdf',buffer:Buffer.from('test')},app:{get:()=>({to:()=>({emit:(_event,payload)=>{assert.ok(committed);assert.equal(cache.has('metadata'),false);assert.equal(cache.has('overview'),false);if(payload.type!=='certificate_accepted')assert.equal(cache.has('owner'),false);emitted++;}})})}};}
 const writers=[[files.uploadInternshipFile,false],[files.deleteFile,false],[searched.uploadFileToSearchedStudent,true],[searched.deleteSearchedStudentFile,true]];

@@ -5,6 +5,6 @@ import { invalidateRouteCache } from "./cache.js";
 // Omit userId for broadcasts and changes to joined sender/request data.
 export function invalidateNotificationsCache(userId) {
   invalidateDashboardCache(userId);
-  invalidateRouteCache("/eu-connect/api/notifications", userId);
-  invalidateRouteCache("/eu-connect/api/notifications/unread-count", userId);
+  invalidateRouteCache("/api/v1/notifications", userId);
+  invalidateRouteCache("/api/v1/notifications/unread-count", userId);
 }

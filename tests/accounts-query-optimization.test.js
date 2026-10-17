@@ -128,7 +128,7 @@ test("changing a password stores the change date and invalidates the cached prof
       return [{ affectedRows: 1 }];
     },
   });
-  cache.set("account-profile-test", { userId: "user", path: "/eu-connect/api/account/user", body: {} });
+  cache.set("account-profile-test", { userId: "user", path: "/api/v1/account/user", body: {} });
   try {
     const res = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
     await updatePassword({ verifiedUser: { id: "user" }, body: { currentPassword: "current-password", newPassword: "new-password" } }, res);

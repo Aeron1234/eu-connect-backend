@@ -1,3 +1,4 @@
+import { canonicalApiPath } from "./api.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import { db } from "./db.js";
@@ -41,8 +42,8 @@ function errorDetails(args) {
 }
 
 function routePattern(req) {
-  if (typeof req.route?.path === "string") return `${req.baseUrl}${req.route.path}`.slice(0, 255);
-  return String(req.path || "unknown")
+  if (typeof req.route?.path === "string") return canonicalApiPath(`${req.baseUrl}${req.route.path}`).slice(0, 255);
+  return canonicalApiPath(String(req.path || "unknown"))
     .replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/gi, ":id")
     .replace(/\/\d+(?=\/|$)/g, "/:id")
     .slice(0, 255);

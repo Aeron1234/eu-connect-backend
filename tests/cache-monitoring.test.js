@@ -119,7 +119,7 @@ test("cache failures remain fail-open and metrics expose only bounded route temp
 
 test("metrics endpoint is admin-only, uncached, and read-only", async (t) => {
   const app = express();
-  app.use("/eu-connect/api", routes);
+  app.use("/api/v1", routes);
   const server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
   t.after(() => new Promise((resolve) => {
@@ -127,7 +127,7 @@ test("metrics endpoint is admin-only, uncached, and read-only", async (t) => {
     server.close(resolve);
   }));
   const get = (role) => fetch(
-    `http://127.0.0.1:${server.address().port}/eu-connect/api/cache/metrics`,
+    `http://127.0.0.1:${server.address().port}/api/v1/cache/metrics`,
     { headers: role ? { Authorization: `Bearer ${signAccessToken({ id: "viewer", role })}` } : {} },
   );
 

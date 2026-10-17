@@ -8,7 +8,7 @@ import {
   Preview,
   Section,
   Text,
-} from "@react-email/components";
+} from "react-email";
 import { LOGO_BASE64 } from "../config/emailAssets.js";
 
 const MAROON = "#A30000";

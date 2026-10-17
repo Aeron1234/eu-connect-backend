@@ -14,7 +14,7 @@ const { default: routes } = await import("../features/internship-posts/routes/in
 const { default: dashboardRoutes } = await import("../features/dashboard/routes/dashboardRoutes.js");
 const { signAccessToken } = await import("../config/jwt.js");
 const originalGetConnection = db.getConnection;
-const base = "/eu-connect/api/";
+const base = "/api/v1/";
 let calls, connection, mode, existingFavorite, activityLog;
 beforeEach(() => {
   cache.flushAll(); calls = 0; mode = "success"; existingFavorite = false; activityLog = null;

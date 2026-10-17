@@ -1,5 +1,5 @@
 import { Resend } from "resend";
-import { render } from "@react-email/render";
+import { render } from "react-email";
 import { createElement } from "react";
 import TempPasswordEmail from "../emails/TempPasswordEmail.js";
 

@@ -14,7 +14,7 @@ const { default: employerRoutes } = await import("../features/evaluations/routes
 const { default: studentRoutes } = await import("../features/evaluations/routes/studentEvaluationRoutes.js");
 const { signAccessToken } = await import("../config/jwt.js");
 const originalGetConnection = db.getConnection;
-const prefix = "/eu-connect/api/";
+const prefix = "/api/v1/";
 const families = [
   { type: "employer", form: "evaluation-criterias", role: "student" },
   { type: "student", form: "student-evaluation/criteria", role: "employer" },

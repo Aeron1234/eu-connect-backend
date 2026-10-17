@@ -3,12 +3,12 @@ import { invalidateRouteCache } from "./cache.js";
 
 const routesByTable = {
   employer_evaluation_criteria: [
-    "/eu-connect/api/criteria/employer-evaluation",
-    "/eu-connect/api/evaluation-criterias",
+    "/api/v1/criteria/employer-evaluation",
+    "/api/v1/evaluation-criterias",
   ],
   student_evaluation_criteria: [
-    "/eu-connect/api/criteria/student-evaluation",
-    "/eu-connect/api/student-evaluation/criteria",
+    "/api/v1/criteria/student-evaluation",
+    "/api/v1/student-evaluation/criteria",
   ],
 };
 

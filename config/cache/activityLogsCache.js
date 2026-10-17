@@ -5,6 +5,6 @@ import { invalidateRouteCache } from "./cache.js";
 // Clear every page for both views, including reads currently in flight.
 export function invalidateActivityLogsCache() {
   invalidateDashboardCache();
-  invalidateRouteCache("/eu-connect/api/activity-logs");
-  invalidateRouteCache("/eu-connect/api/activity-logs/mine");
+  invalidateRouteCache("/api/v1/activity-logs");
+  invalidateRouteCache("/api/v1/activity-logs/mine");
 }

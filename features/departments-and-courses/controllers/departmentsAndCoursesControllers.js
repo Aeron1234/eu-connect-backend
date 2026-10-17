@@ -7,8 +7,8 @@ import { invalidateRouteCache } from "../../../config/cache/cache.js";
 // list variants and the account form after the database transaction commits.
 function invalidateLookupCache(tableName) {
   invalidateDashboardCache();
-  invalidateRouteCache(`/eu-connect/api/${tableName}`);
-  invalidateRouteCache("/eu-connect/api/create-account-form-data");
+  invalidateRouteCache(`/api/v1/${tableName}`);
+  invalidateRouteCache("/api/v1/create-account-form-data");
 }
 
 export const addDepartment = async (req, res) => {

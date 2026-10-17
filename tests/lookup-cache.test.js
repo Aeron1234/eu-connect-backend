@@ -13,7 +13,7 @@ const { default: routes } = await import("../features/departments-and-courses/ro
 const { signAccessToken } = await import("../config/jwt.js");
 const originalGetConnection = db.getConnection;
 const originalExecute = db.execute;
-const prefix = "/eu-connect/api/";
+const prefix = "/api/v1/";
 let calls, rows, connection, committed, mode;
 
 beforeEach(() => {

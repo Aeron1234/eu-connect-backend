@@ -16,7 +16,7 @@ const { default: routes } = await import("../features/past-internships/routes/al
 const { signAccessToken } = await import("../config/jwt.js");
 const internships = await import("../features/internship-records/controllers/internshipRecordControllers.js");
 const originalGetConnection = db.getConnection;
-const base = "/eu-connect/api/";
+const base = "/api/v1/";
 let calls, connection, mode, status, committed, emitted, activityLog;
 beforeEach(() => {
   cache.flushAll(); calls = 0; mode = "success"; status = "ongoing"; committed = false; emitted = 0; activityLog = null;

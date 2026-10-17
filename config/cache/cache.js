@@ -1,3 +1,4 @@
+import { canonicalApiPath } from "../api.js";
 import NodeCache from "node-cache";
 import { recordCacheMetric } from "./cacheMetrics.js";
 
@@ -34,7 +35,8 @@ export function invalidateUserCache(userId) {
 
 export function invalidateRouteCache(path, userId) {
   // Exact path match across query variants, optionally for one recipient.
-  invalidateMatching((entry) => entry.path === path &&
+  const canonicalPath = canonicalApiPath(path);
+  invalidateMatching((entry) => canonicalApiPath(entry.path) === canonicalPath &&
     (userId === undefined || entry.userId === String(userId)));
 }
 

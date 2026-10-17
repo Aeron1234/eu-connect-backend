@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import cache, { invalidateUserCache, invalidateRouteCache } from "../config/cache/cache.js";
 import { cacheRoute } from "../middleware/cache-middleware.js";
 
-const profile = "/eu-connect/api/account/user";
-const accounts = "/eu-connect/api/accounts";
+const profile = "/api/v1/account/user";
+const accounts = "/api/v1/accounts";
 const middleware = cacheRoute(60);
 
 function request(id = "alice", url = profile, extra = {}) {
@@ -94,6 +94,15 @@ test("a read started before invalidation cannot refill stale data", () => {
   invalidateUserCache("alice");
   res.json({ name: "Old" });
   assert.equal(run(request(), { name: "New" }).calls, 1);
+});
+
+test("legacy reads in flight cannot refill the canonical cache after a write", () => {
+  const res = response();
+  middleware(request("alice", "/eu-connect/api/account/user"), res, () => {});
+  invalidateRouteCache(profile);
+  res.json({ name: "Old" });
+  assert.equal(run(request(), { name: "New" }).calls, 1);
+  assert.equal(run(request("alice", "/eu-connect/api/account/user"), {}).res.body.name, "New");
 });
 
 test("TTL expiry forces a fresh read", () => {

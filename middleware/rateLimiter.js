@@ -1,3 +1,4 @@
+import { canonicalApiPath } from "../config/api.js";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { createHash } from "node:crypto";
 import { verifyRefreshToken } from "../config/jwt.js";
@@ -22,7 +23,7 @@ const readEndpointKey = (req) => {
   if (req.method !== "GET" && req.method !== "HEAD") return identity;
   const routePath = req.route?.path;
   if (typeof routePath !== "string") return identity;
-  return `${identity}:${req.method}:${req.baseUrl}${routePath}`;
+  return `${identity}:${req.method}:${canonicalApiPath(`${req.baseUrl}${routePath}`)}`;
 };
 
 // This one is for general browsing (Announcements, Profiles)

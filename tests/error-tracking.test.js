@@ -2,6 +2,7 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import express from "express";
+import { mountApiRoutes } from "../config/api.js";
 import { db } from "../config/db.js";
 import { errorTrackingContext, reportError } from "../config/errorTracking.js";
 
@@ -46,13 +47,13 @@ after(async () => {
 async function client(t) {
   const app = express();
   app.use(errorTrackingContext);
-  app.use("/eu-connect/api", routes);
+  app.use("/api/v1", routes);
   const mounted = express.Router();
   mounted.get("/mounted/:id", (_req, res) => {
     reportError("Mounted route failed:", new Error("Database unavailable"));
     res.status(500).json({ error: "Unavailable" });
   });
-  app.use("/eu-connect/api", mounted);
+  mountApiRoutes(app, [mounted]);
   app.get("/fail/:id", (req, res) => {
     reportError("Database query failed:", new Error("secret@example.com Bearer abc123"));
     res.status(500).json({ error: "Unavailable" });
@@ -69,17 +70,17 @@ async function client(t) {
 
 test("error API is read-only and restricted to admins", async (t) => {
   const get = await client(t);
-  assert.equal((await get("/eu-connect/api/errors")).status, 401);
-  assert.equal((await get("/eu-connect/api/errors", "student")).status, 403);
-  const response = await get("/eu-connect/api/errors?days=7", "admin");
+  assert.equal((await get("/api/v1/errors")).status, 401);
+  assert.equal((await get("/api/v1/errors", "student")).status, 403);
+  const response = await get("/api/v1/errors?days=7", "admin");
   assert.equal(response.status, 200);
   const data = await response.json();
   assert.equal(data.stats.totalGroups, 1);
   assert.equal(data.data[0].occurrences, 2);
-  assert.equal((await get(`/eu-connect/api/errors/${fingerprint}`, "admin")).status, 200);
-  assert.equal((await get("/eu-connect/api/errors/invalid", "admin")).status, 400);
-  assert.equal((await get("/eu-connect/api/errors", "admin", "POST")).status, 404);
-  assert.equal((await get("/eu-connect/api/unknown")).status, 404);
+  assert.equal((await get(`/api/v1/errors/${fingerprint}`, "admin")).status, 200);
+  assert.equal((await get("/api/v1/errors/invalid", "admin")).status, 400);
+  assert.equal((await get("/api/v1/errors", "admin", "POST")).status, 404);
+  assert.equal((await get("/api/v1/unknown")).status, 404);
 });
 
 test("a 5xx response is recorded even without a controller error log", async (t) => {
@@ -109,7 +110,19 @@ test("caught failures retain a request ID and safe route pattern", async (t) => 
 test("mounted API paths retain their route template", async (t) => {
   const get = await client(t);
   writes.length = 0;
-  assert.equal((await get("/eu-connect/api/mounted/123", "admin")).status, 500);
+  assert.equal((await get("/api/v1/mounted/123", "admin")).status, 500);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(writes[0][4], "/eu-connect/api/mounted/:id");
+  assert.equal(writes[0][4], "/api/v1/mounted/:id");
+});
+
+test("legacy API errors use the canonical route pattern and fingerprint", async (t) => {
+  const get = await client(t);
+  writes.length = 0;
+  for (const prefix of ["/api/v1", "/eu-connect/api"]) {
+    assert.equal((await get(`${prefix}/mounted/123`, "admin")).status, 500);
+  }
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(writes.length, 2);
+  assert.ok(writes.every(write => write[4] === "/api/v1/mounted/:id"));
+  assert.equal(writes[0][0], writes[1][0]);
 });

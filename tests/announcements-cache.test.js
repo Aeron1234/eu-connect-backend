@@ -16,7 +16,7 @@ const { default: routes } = await import("../features/announcements/routes/annou
 const { signAccessToken } = await import("../config/jwt.js");
 const originalExecute = db.execute;
 const originalGetConnection = db.getConnection;
-const base = "/eu-connect/api/announcements/";
+const base = "/api/v1/announcements/";
 const announcementId = "73cd551e-c61f-4fd8-9628-d69709b77d52";
 let calls, connection, mode, pinned, categoryName, committed, emitted, fixtures, activityLog, announcementWrite;
 let existingEventDates;
@@ -90,7 +90,7 @@ beforeEach(() => {
 });
 after(async () => { db.execute = originalExecute; db.getConnection = originalGetConnection; cache.close(); await db.end(); });
 async function client(t) {
-  const app = express(); app.use("/eu-connect/api", routes);
+  const app = express(); app.use("/api/v1", routes);
   const server = app.listen(0, "127.0.0.1"); await once(server, "listening");
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
   return (path = "history", role = "student", department_id = 1, id = "viewer", department_code = null) => fetch(`http://127.0.0.1:${server.address().port}${base}${path}`, {
@@ -99,7 +99,7 @@ async function client(t) {
 }
 function seed() {
   for (const [key, path] of [["feed-a", "history"], ["feed-b", "history"], ["categories", "categories"]]) cache.set(key, { userId: key, path: base + path, body: {} });
-  cache.set("profile", { userId: "other", path: "/eu-connect/api/account/user", body: {} });
+  cache.set("profile", { userId: "other", path: "/api/v1/account/user", body: {} });
 }
 function response() { return { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } }; }
 function request(data = {}) {
@@ -381,10 +381,10 @@ test("profile-name writes invalidate joined author names only after commit", asy
     console.error = () => {};
     for (const failed of [false, true]) {
       cache.flushAll(); seed(); mode = failed ? "commit-failure" : "success"; const res = response();
-      cache.set("hte-profile", {path:"/eu-connect/api/reports/hte-annual/companies",userId:"admin",body:{}});
-      cache.set("staff-profile",{path:"/eu-connect/api/internship-records/department",userId:"head",body:{}});
-      cache.set("evaluation-profile",{path:"/eu-connect/api/evaluations/all",userId:"student",body:[]});
-      cache.set("searched-profile",{path:"/eu-connect/api/searched-user/student",userId:"staff",body:{}});
+      cache.set("hte-profile", {path:"/api/v1/reports/hte-annual/companies",userId:"admin",body:{}});
+      cache.set("staff-profile",{path:"/api/v1/internship-records/department",userId:"head",body:{}});
+      cache.set("evaluation-profile",{path:"/api/v1/evaluations/all",userId:"student",body:[]});
+      cache.set("searched-profile",{path:"/api/v1/searched-user/student",userId:"staff",body:{}});
       await updateUserInfo(request({ first_name: "Renamed" }), res);
       assert.equal(cache.has("searched-profile"),failed);
       assert.equal(cache.has("evaluation-profile"),failed);

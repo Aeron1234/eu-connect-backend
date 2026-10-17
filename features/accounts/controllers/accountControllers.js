@@ -52,7 +52,7 @@ export const updateUserAvatar = async (req, res) => {
 
     invalidateProfileOverviewCache();
     invalidateUserCache(userId);
-    invalidateRouteCache("/eu-connect/api/accounts");
+    invalidateRouteCache("/api/v1/accounts");
 
     res.status(200).json({ success: true, avatar });
   } catch (error) {
@@ -81,7 +81,7 @@ export const deleteUserAvatar = async (req, res) => {
 
     invalidateProfileOverviewCache();
     invalidateUserCache(userId);
-    invalidateRouteCache("/eu-connect/api/accounts");
+    invalidateRouteCache("/api/v1/accounts");
 
     res.status(200).json({ success: true, avatar: null });
   } catch (error) {
@@ -316,7 +316,7 @@ export const updateUserInfo = async (req, res) => {
     invalidateActivityLogsCache();
 
     invalidateUserCache(id);
-    invalidateRouteCache("/eu-connect/api/accounts");
+    invalidateRouteCache("/api/v1/accounts");
     res.status(200).json({ success: true, message: "Profile updated." });
   } catch (error) {
     if (connection) await connection.rollback();
@@ -795,7 +795,7 @@ export const createUser = async (req, res) => {
 
     invalidateActivityLogsCache();
 
-    invalidateRouteCache("/eu-connect/api/accounts");
+    invalidateRouteCache("/api/v1/accounts");
     res.status(201).json({
       success: true,
       message: "Account created successfully!",
@@ -864,7 +864,7 @@ export const deactivateAccount = async (req, res) => {
     invalidateActivityLogsCache();
 
     invalidateUserCache(accountId); // the target user's own /account/user goes stale
-    invalidateRouteCache("/eu-connect/api/accounts"); // every admin's cached copy of the account list goes stale
+    invalidateRouteCache("/api/v1/accounts"); // every admin's cached copy of the account list goes stale
     res.status(200).json({
       message: "Account deactivated successfully!",
       success: true,
@@ -933,7 +933,7 @@ export const reactivateAccount = async (req, res) => {
     invalidateActivityLogsCache();
 
     invalidateUserCache(accountId); // the target user's own /account/user goes stale
-    invalidateRouteCache("/eu-connect/api/accounts"); // every admin's cached copy of the account list goes stale
+    invalidateRouteCache("/api/v1/accounts"); // every admin's cached copy of the account list goes stale
     res.status(200).json({
       message: "Account reactivated successfully!", // 👈 Fixed message
       success: true,

@@ -1,9 +1,9 @@
 import { invalidateRouteCache } from "./cache.js";
 export function invalidateDepartmentInternshipsCache() {
-  invalidateRouteCache("/eu-connect/api/internship-records/department");
+  invalidateRouteCache("/api/v1/internship-records/department");
 }
 export function invalidateStaffInternshipsCache() {
   invalidateDepartmentInternshipsCache();
-  invalidateRouteCache("/eu-connect/api/internships/all");
-  invalidateRouteCache("/eu-connect/api/internships/active/all");
+  invalidateRouteCache("/api/v1/internships/all");
+  invalidateRouteCache("/api/v1/internships/active/all");
 }

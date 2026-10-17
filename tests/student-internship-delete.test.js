@@ -72,7 +72,7 @@ after(async () => {
 
 async function client(t) {
   const app = express();
-  app.use("/eu-connect/api", routes);
+  app.use("/api/v1", routes);
   const server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
   t.after(() => new Promise((resolve) => {
@@ -80,7 +80,7 @@ async function client(t) {
     server.close(resolve);
   }));
   return (path, role = "student", userId = "student-1", method = "DELETE") =>
-    fetch(`http://127.0.0.1:${server.address().port}/eu-connect/api${path}`, {
+    fetch(`http://127.0.0.1:${server.address().port}/api/v1${path}`, {
       method,
       headers: userId ? {
         Authorization: `Bearer ${signAccessToken({ id: userId, role })}`,
@@ -90,15 +90,15 @@ async function client(t) {
 
 function seedCache() {
   for (const path of [
-    "/eu-connect/api/internships/all",
-    "/eu-connect/api/internships/my-past-internships",
-    "/eu-connect/api/internship-records/department",
-    "/eu-connect/api/notifications",
-    "/eu-connect/api/activity-logs",
+    "/api/v1/internships/all",
+    "/api/v1/internships/my-past-internships",
+    "/api/v1/internship-records/department",
+    "/api/v1/notifications",
+    "/api/v1/activity-logs",
   ]) {
     cache.set(path, { path, userId: "student-1", body: [] });
   }
-  const unrelated = "/eu-connect/api/departments";
+  const unrelated = "/api/v1/departments";
   cache.set(unrelated, { path: unrelated, userId: "student-1", body: [] });
 }
 
@@ -115,9 +115,9 @@ test("students can soft-delete their own pending and rejected records after comm
     assert.ok(statements.some((sql) => sql.includes("status IN ('pending', 'rejected')")));
     assert.ok(statements.some((sql) => sql.includes("DELETE FROM notifications")));
     assert.ok(statements.some((sql) => sql.includes("INSERT INTO activity_logs")));
-    assert.ok(cache.has("/eu-connect/api/departments"));
-    assert.equal(cache.has("/eu-connect/api/internships/all"), false);
-    assert.equal(cache.has("/eu-connect/api/notifications"), false);
+    assert.ok(cache.has("/api/v1/departments"));
+    assert.equal(cache.has("/api/v1/internships/all"), false);
+    assert.equal(cache.has("/api/v1/notifications"), false);
   }
   assert.equal(releases, 2);
 });
@@ -141,7 +141,7 @@ test("authentication, ownership, status and existing deletion are enforced", asy
   assert.equal((await request("/internship-records/mine/record-1")).status, 404);
   assert.equal(commits, 0);
   assert.equal(rollbacks, 5);
-  assert.ok(cache.has("/eu-connect/api/internships/all"));
+  assert.ok(cache.has("/api/v1/internships/all"));
 });
 
 test("a failed write rolls back and leaves caches intact", async (t) => {
@@ -158,7 +158,7 @@ test("a failed write rolls back and leaves caches intact", async (t) => {
   assert.equal(commits, 0);
   assert.equal(rollbacks, 1);
   assert.equal(releases, 1);
-  assert.ok(cache.has("/eu-connect/api/internships/all"));
+  assert.ok(cache.has("/api/v1/internships/all"));
   assert.ok(!statements.some((sql) => sql.includes("DELETE FROM notifications")));
 });
 

@@ -280,7 +280,7 @@ export async function saveSummaryReport(req, res) {
     }, true);
     committed = true;
     try {
-      invalidateRouteCache("/eu-connect/api/summary-reports", userId);
+      invalidateRouteCache("/api/v1/summary-reports", userId);
     } catch (cacheError) {
       reportError("Summary report cache invalidation failed:", cacheError);
     }
@@ -346,7 +346,7 @@ export async function deleteSummaryReport(req, res) {
     await connection.commit();
     committed = true;
     try {
-      invalidateRouteCache("/eu-connect/api/summary-reports", userId);
+      invalidateRouteCache("/api/v1/summary-reports", userId);
     } catch (cacheError) {
       reportError("Summary report cache invalidation failed:", cacheError);
     }

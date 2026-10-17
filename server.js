@@ -1,3 +1,4 @@
+import { mountApiRoutes } from "./config/api.js";
 import dns from "node:dns";
 dns.setDefaultResultOrder("ipv4first");
 
@@ -97,32 +98,34 @@ app.get("/", (req, res) => {
 });
 
 // Routes
-app.use("/eu-connect/api", authRoutes);
-app.use("/eu-connect/api", announcementRoutes);
-app.use("/eu-connect/api", accountRoutes);
-app.use("/eu-connect/api", internshipRecordRoutes);
-app.use("/eu-connect/api", dtrRoutes);
-app.use("/eu-connect/api", narrativeRoutes);
-app.use("/eu-connect/api", weeklyNarrativeRoutes);
-app.use("/eu-connect/api", summaryReportRoutes);
-app.use("/eu-connect/api", fileRoutes);
-app.use("/eu-connect/api", notificationRoutes);
-app.use("/eu-connect/api", studentEvaluationRoutes);
-app.use("/eu-connect/api", dashboardRoutes);
-app.use("/eu-connect/api", calendarRoutes);
-app.use("/eu-connect/api", searchHistoryRoutes);
-app.use("/eu-connect/api", searchedUserRoutes);
-app.use("/eu-connect/api", internshipPostingRoutes);
-app.use("/eu-connect/api", supervisorRequestRoutes);
-app.use("/eu-connect/api", employerEvaluationsRoutes);
-app.use("/eu-connect/api", mapRoutes);
-app.use("/eu-connect/api", hteReportRoutes);
-app.use("/eu-connect/api", alumniRoutes);
-app.use("/eu-connect/api", criteriaRoutes);
-app.use("/eu-connect/api", activityLogRoutes);
-app.use("/eu-connect/api", departmentAndCoursesRoutes);
-app.use("/eu-connect/api", cacheMonitoringRoutes);
-app.use("/eu-connect/api", errorTrackingRoutes);
+mountApiRoutes(app, [
+  authRoutes,
+  announcementRoutes,
+  accountRoutes,
+  internshipRecordRoutes,
+  dtrRoutes,
+  narrativeRoutes,
+  weeklyNarrativeRoutes,
+  summaryReportRoutes,
+  fileRoutes,
+  notificationRoutes,
+  studentEvaluationRoutes,
+  dashboardRoutes,
+  calendarRoutes,
+  searchHistoryRoutes,
+  searchedUserRoutes,
+  internshipPostingRoutes,
+  supervisorRequestRoutes,
+  employerEvaluationsRoutes,
+  mapRoutes,
+  hteReportRoutes,
+  alumniRoutes,
+  criteriaRoutes,
+  activityLogRoutes,
+  departmentAndCoursesRoutes,
+  cacheMonitoringRoutes,
+  errorTrackingRoutes,
+]);
 
 // ---------------------------------------------------------------------------
 // Fallback error-handling middleware.

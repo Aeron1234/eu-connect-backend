@@ -7,9 +7,9 @@ import { updateUserAvatar, deleteUserAvatar, deactivateAccount, reactivateAccoun
 import { addDepartment, addCourse, activateCourse, deactivateCourse, activateDepartment, deactivateDepartment } from "../features/departments-and-courses/controllers/departmentsAndCoursesControllers.js";
 
 const originalGetConnection = db.getConnection;
-const profile = "/eu-connect/api/account/user";
-const accounts = "/eu-connect/api/accounts";
-const form = "/eu-connect/api/create-account-form-data";
+const profile = "/api/v1/account/user";
+const accounts = "/api/v1/accounts";
+const form = "/api/v1/create-account-form-data";
 
 function seed() {
   for (const [key, userId, path] of [["target", "alice", profile], ["other", "bob", profile], ["list1", "admin1", accounts], ["list2", "admin2", accounts], ["form", "admin1", form]]) {
@@ -42,7 +42,7 @@ after(async () => { db.getConnection = originalGetConnection; cache.close(); awa
 test("avatar mutations invalidate both the profile and every admin's list", async () => {
   for (const handler of [updateUserAvatar, deleteUserAvatar]) {
     seed(); mockConnection();
-    cache.set("searched-avatar",{path:"/eu-connect/api/searched-user/alice",userId:"staff",body:{}});
+    cache.set("searched-avatar",{path:"/api/v1/searched-user/alice",userId:"staff",body:{}});
     const res = response();
     await handler({ verifiedUser: { id: "alice" }, body: { avatar: AVAILABLE_AVATARS[0] } }, res);
     assert.equal(res.statusCode, 200);
@@ -58,7 +58,7 @@ test("account activation changes invalidate the target and account lists", async
   for (const handler of [deactivateAccount, reactivateAccount]) {
     seed(); mockConnection();
     const res = response();
-    cache.set("document-account",{path:"/eu-connect/api/searched-user/files/alice",userId:"staff",body:[]});
+    cache.set("document-account",{path:"/api/v1/searched-user/files/alice",userId:"staff",body:[]});
     await handler({ verifiedUser: { id: "admin1", role: "admin" }, params: { accountId: "alice" } }, res);
     assert.equal(cache.has("document-account"),false);
     assert.equal(res.statusCode, 200);

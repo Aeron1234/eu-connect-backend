@@ -10,5 +10,5 @@ const routes = [
 // Cross-role aggregates have many dependencies: conservatively clear all
 // summary routes after shared writes. Personal counters can target one user.
 export function invalidateDashboardCache(userId) {
-  for (const route of routes) invalidateRouteCache(`/eu-connect/api${route}`, userId);
+  for (const route of routes) invalidateRouteCache(`/api/v1${route}`, userId);
 }

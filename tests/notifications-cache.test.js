@@ -16,7 +16,7 @@ const { default: routes } = await import("../features/notifications/routes/notif
 const { signAccessToken } = await import("../config/jwt.js");
 const originalGetConnection = db.getConnection;
 const originalExecute = db.execute;
-const url = "/eu-connect/api/notifications";
+const url = "/api/v1/notifications";
 let queries, connection, affectedRows;
 
 beforeEach(() => {
@@ -36,7 +36,7 @@ beforeEach(() => {
 after(async () => { db.getConnection = originalGetConnection; db.execute = originalExecute; cache.close(); await db.end(); });
 
 async function client(t) {
-  const app = express(); app.use("/eu-connect/api", routes);
+  const app = express(); app.use("/api/v1", routes);
   const server = app.listen(0, "127.0.0.1"); await once(server, "listening");
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
   return (path = url, id = "alice", role = "student", method = "GET") => fetch(
@@ -45,7 +45,7 @@ async function client(t) {
   );
 }
 function seed() {
-  for (const [key, userId, path] of [["alice1", "alice", url], ["alice2", "alice", url], ["bob", "bob", url], ["profile", "alice", "/eu-connect/api/account/user"]]) {
+  for (const [key, userId, path] of [["alice1", "alice", url], ["alice2", "alice", url], ["bob", "bob", url], ["profile", "alice", "/api/v1/account/user"]]) {
     cache.set(key, { userId, path, body: {} });
   }
 }
@@ -182,7 +182,7 @@ test("supervisor acceptance/rejection invalidates before socket delivery; rollba
       connection.commit = async () => { assert.ok(cache.has("bob")); if (decision === "failed-commit") throw new Error("commit failed"); committed = true; };
       const io = { to() { return { emit() { assert.ok(committed); assert.equal(cache.has("bob"), false); emitted++; } }; } };
       const res = response();
-      cache.set("searched-supervision",{path:"/eu-connect/api/searched-user/alice",userId:"bob",body:{}});
+      cache.set("searched-supervision",{path:"/api/v1/searched-user/alice",userId:"bob",body:{}});
       await respondToSupervisorRequest({ verifiedUser: { id: "bob" }, params: { requestId: "r" }, body: { decision: decision === "failed-commit" ? "accept" : decision }, app: { get: () => io } }, res);
       assert.equal(res.statusCode, decision === "failed-commit" ? 500 : 200);
       assert.match(activityLog[5], /Accenture/);

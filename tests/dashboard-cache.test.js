@@ -21,7 +21,8 @@ const { default: routes } = await import("../features/dashboard/routes/dashboard
 const { signAccessToken } = await import("../config/jwt.js");
 const { autoCloseStaleShifts } = await import("../config/autoCloseStaleShifts.js");
 const originalGetConnection = db.getConnection;
-const prefix = "/eu-connect/api/";
+const originalExecute = db.execute;
+const prefix = "/api/v1/";
 const targets = [
   ["dashboard-stats", "student"],
   ["employer-dashboard-data", "employer"],
@@ -31,9 +32,17 @@ const targets = [
   ["average-shift-hours", "department_head"],
   ["admin-dashboard-data", "admin"],
 ];
-let connection, calls, failCommit;
+let connection, calls, failCommit, trackedErrors;
 beforeEach(() => {
   cache.flushAll(); calls = 0; failCommit = false;
+  trackedErrors = [];
+  // The forced cron failure reports through the pool rather than through the
+  // mocked transaction. Keep that error-tracking write out of the real DB too.
+  db.execute = async (sql, params) => {
+    assert.match(sql, /INSERT INTO error_events/);
+    trackedErrors.push(params);
+    return [{ affectedRows: 1 }];
+  };
   connection = {
     async beginTransaction() {}, async rollback() {}, release() {},
     async commit() { assert.ok(cache.has("alice")); if (failCommit) throw new Error("failed commit"); },
@@ -50,7 +59,7 @@ beforeEach(() => {
   };
   db.getConnection = async () => connection;
 });
-after(async () => { db.getConnection = originalGetConnection; cache.close(); await db.end(); });
+after(async () => { db.getConnection = originalGetConnection; db.execute = originalExecute; cache.close(); await db.end(); });
 async function client(t) {
   const app = express(); app.use(prefix.slice(0, -1), routes);
   const server = app.listen(0, "127.0.0.1"); await once(server, "listening");
@@ -148,9 +157,9 @@ test("attendance deletion invalidates only after successful commit", async () =>
     console.log = () => {};
     for (const fail of [false, true]) {
       cache.flushAll(); seed(); failCommit = fail; const res = response();
-      cache.set("overview-hours",{path:"/eu-connect/api/internship-records/overview/i",userId:"staff",body:{}});
-      cache.set("attendance-history",{path:"/eu-connect/api/dtr/history",userId:"student",body:{}});
-      cache.set("staff-hours",{path:"/eu-connect/api/internship-records/department",userId:"head",body:{}});
+      cache.set("overview-hours",{path:"/api/v1/internship-records/overview/i",userId:"staff",body:{}});
+      cache.set("attendance-history",{path:"/api/v1/dtr/history",userId:"student",body:{}});
+      cache.set("staff-hours",{path:"/api/v1/internship-records/department",userId:"head",body:{}});
       await deleteDTR({ verifiedUser: { id: "alice" }, params: { dtrId: 1 } }, res);
       assert.equal(cache.has("staff-hours"),fail);assert.equal(cache.has("attendance-history"),fail);assert.equal(cache.has("overview-hours"),fail);
       assert.equal(res.statusCode, fail ? 500 : 200); assert.equal(cache.has("alice"), fail); assert.ok(cache.has("profile"));
@@ -167,10 +176,11 @@ test("stale-shift cron clears summary caches after commit but preserves them on 
       : [{ affectedRows: 1 }];
     for (const fail of [false, true]) {
       cache.flushAll(); seed(); failCommit = fail;
-      cache.set("overview-hours",{path:"/eu-connect/api/internship-records/overview/i",userId:"staff",body:{}});
-      cache.set("attendance-history",{path:"/eu-connect/api/dtr/history",userId:"student",body:{}});
-      cache.set("staff-hours",{path:"/eu-connect/api/internship-records/department",userId:"head",body:{}});
+      cache.set("overview-hours",{path:"/api/v1/internship-records/overview/i",userId:"staff",body:{}});
+      cache.set("attendance-history",{path:"/api/v1/dtr/history",userId:"student",body:{}});
+      cache.set("staff-hours",{path:"/api/v1/internship-records/department",userId:"head",body:{}});
       await autoCloseStaleShifts(); assert.equal(cache.has("staff-hours"),fail);assert.equal(cache.has("attendance-history"),fail);assert.equal(cache.has("overview-hours"),fail); assert.equal(cache.has("alice"), fail); assert.ok(cache.has("profile"));
+      assert.equal(trackedErrors.length, fail ? 1 : 0);
     }
   } finally { console.log = log; console.error = error; }
 });

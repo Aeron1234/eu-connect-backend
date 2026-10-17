@@ -13,7 +13,7 @@ process.env.CACHE_ENABLED = 'true';
 const { default: routes } = await import('../features/sipp-reports/routes/hteReportRoutes.js');
 const { signAccessToken } = await import('../config/jwt.js');
 const original = db.getConnection;
-const base='/eu-connect/api';
+const base='/api/v1';
 let calls, allowed, fail, empty, existing, committed, released;
 beforeEach(() => {
   cache.flushAll(); calls=0; allowed=true; fail=''; empty=false; existing=false; committed=false; released=0;

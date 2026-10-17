@@ -15,7 +15,7 @@ process.env.CACHE_ENABLED = "true";
 const { default: routes } = await import("../features/activity-logs/routes/activityLogsRoutes.js");
 const { signAccessToken } = await import("../config/jwt.js");
 const originalGetConnection = db.getConnection;
-const base = "/eu-connect/api/activity-logs";
+const base = "/api/v1/activity-logs";
 let queries;
 let connection;
 
@@ -45,7 +45,7 @@ after(async () => { db.getConnection = originalGetConnection; cache.close(); awa
 
 async function client(t) {
   const app = express();
-  app.use("/eu-connect/api", routes);
+  app.use("/api/v1", routes);
   const server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
   t.after(() => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); }));
@@ -56,7 +56,7 @@ async function client(t) {
 }
 
 function seed() {
-  for (const [key, path] of [["mine1", base + "/mine"], ["mine2", base + "/mine"], ["admin1", base], ["admin2", base], ["profile", "/eu-connect/api/account/user"]]) {
+  for (const [key, path] of [["mine1", base + "/mine"], ["mine2", base + "/mine"], ["admin1", base], ["admin2", base], ["profile", "/api/v1/account/user"]]) {
     cache.set(key, { userId: key, path, body: {} });
   }
 }

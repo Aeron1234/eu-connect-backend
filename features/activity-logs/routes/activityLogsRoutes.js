@@ -1,16 +1,16 @@
 import { cacheRoute } from "../../../middleware/cache-middleware.js";
 import express from "express";
-import multer from "multer";
 import { verifyUser } from "../../../middleware/verifyUser.js";
 import { verifyRole } from "../../../middleware/verifyRole.js";
 import {
   generalLimiter,
-  mediumLimiter,
   paginationLimiter,
-  strictLimiter,
+  mediumLimiter,
 } from "../../../middleware/rateLimiter.js";
 import {
   deleteActivityLog,
+  deleteActivityLogsByDateRange,
+  previewActivityLogBatchDelete,
   getAllActivityLogs,
   getMyActivityLogs,
 } from "../controllers/activityLogsControllers.js";
@@ -32,6 +32,23 @@ activityLogRoutes.get(
   paginationLimiter,
   cacheRoute(30),
   getAllActivityLogs,
+);
+
+// Register static paths before /:logId. Previews must never use cached counts.
+activityLogRoutes.get(
+  "/activity-logs/batch-delete-preview",
+  verifyUser,
+  verifyRole(["admin"]),
+  generalLimiter,
+  previewActivityLogBatchDelete,
+);
+
+activityLogRoutes.delete(
+  "/activity-logs/batch",
+  verifyUser,
+  verifyRole(["admin"]),
+  mediumLimiter,
+  deleteActivityLogsByDateRange,
 );
 
 activityLogRoutes.delete(

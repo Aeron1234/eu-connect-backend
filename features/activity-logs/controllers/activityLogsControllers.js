@@ -1,6 +1,60 @@
 import { reportError } from "../../../config/errorTracking.js";
 import { invalidateActivityLogsCache } from "../../../config/cache/activityLogsCache.js";
 import { db } from "../../../config/db.js";
+import { activityLogDateRange } from "../activityLogDateRange.js";
+
+export const previewActivityLogBatchDelete = async (req, res) => {
+  if (req.verifiedUser?.role !== "admin") {
+    return res.status(403).json({ error: "Access Denied." });
+  }
+  const range = activityLogDateRange(req.query);
+  if (range.error) return res.status(400).json({ error: range.error });
+  res.set("Cache-Control", "private, no-store");
+  try {
+    const [[{ total }]] = await db.execute(
+      "SELECT COUNT(*) AS total FROM activity_logs WHERE created_at >= ? AND created_at <= ?",
+      range.params,
+    );
+    return res.status(200).json({ success: true, count: Number(total) });
+  } catch (error) {
+    reportError("Preview activity log batch deletion error:", error);
+    return res.status(500).json({ error: "Failed to count activity logs." });
+  }
+};
+
+export const deleteActivityLogsByDateRange = async (req, res) => {
+  if (req.verifiedUser?.role !== "admin") {
+    return res.status(403).json({ error: "Access Denied." });
+  }
+  const range = activityLogDateRange(req.body);
+  if (range.error) return res.status(400).json({ error: range.error });
+  let connection;
+  try {
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+    const [result] = await connection.execute(
+      "DELETE FROM activity_logs WHERE created_at >= ? AND created_at <= ?",
+      range.params,
+    );
+    await connection.commit();
+    invalidateActivityLogsCache();
+    const deletedCount = Number(result.affectedRows);
+    return res.status(200).json({
+      success: true,
+      deletedCount,
+      message: deletedCount === 0 ? "No activity logs matched this date range."
+        : `${deletedCount} activity log${deletedCount === 1 ? "" : "s"} deleted.`,
+    });
+  } catch (error) {
+    if (connection) {
+      try { await connection.rollback(); } catch { /* Report the original failure. */ }
+    }
+    reportError("Batch delete activity logs error:", error);
+    return res.status(500).json({ error: "Failed to delete activity logs." });
+  } finally {
+    connection?.release();
+  }
+};
 
 // GET — for the logged-in user's own activity, 10 per page
 export const getMyActivityLogs = async (req, res) => {

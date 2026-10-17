@@ -1,3 +1,4 @@
+import { canonicalApiPath } from "../config/api.js";
 import cache, { getCacheGeneration } from "../config/cache/cache.js";
 import { cacheMetricRoute, recordCacheMetric } from "../config/cache/cacheMetrics.js";
 
@@ -22,10 +23,11 @@ export function cacheRoute(ttlSeconds = 60) {
     if (process.env.CACHE_ENABLED === "false") { metric("bypass_disabled"); return next(); }
 
     const userId = String(user.id);
-    const path = req.originalUrl.split("?")[0];
+    const originalUrl = canonicalApiPath(req.originalUrl);
+    const path = originalUrl.split("?")[0];
     const key = JSON.stringify([
       userId, user.role, user.username, user.department_id, user.course_id,
-      user.department_code, user.course_name, req.originalUrl,
+      user.department_code, user.course_name, originalUrl,
     ]);
     try {
       const cached = cache.get(key);

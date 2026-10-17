@@ -1,3 +1,4 @@
+import { REFRESH_COOKIE, setAuthCookies, clearAuthCookies } from "../../../config/authCookies.js";
 import { reportError } from "../../../config/errorTracking.js";
 import bcrypt from "bcryptjs";
 import { db } from "../../../config/db.js";
@@ -14,37 +15,6 @@ import {
 } from "../../../config/jwt.js";
 import { sendTempPasswordEmail } from "../../../services/mailer.js";
 import { invalidateUserCache } from "../../../config/cache/cache.js";
-
-const isProd = process.env.NODE_ENV === "production";
-
-const ACCESS_COOKIE = "access_token";
-const REFRESH_COOKIE = "refresh_token";
-
-const accessCookieOptions = {
-  httpOnly: true,
-  secure: isProd,
-  sameSite: "lax",
-  path: "/",
-  maxAge: 15 * 60 * 1000,
-};
-
-const refreshCookieOptions = {
-  httpOnly: true,
-  secure: isProd,
-  sameSite: "lax",
-  path: "/eu-connect/api/auth",
-  maxAge: REFRESH_TOKEN_TTL_MS,
-};
-
-function setAuthCookies(res, { accessToken, refreshToken }) {
-  res.cookie(ACCESS_COOKIE, accessToken, accessCookieOptions);
-  res.cookie(REFRESH_COOKIE, refreshToken, refreshCookieOptions);
-}
-
-function clearAuthCookies(res) {
-  res.clearCookie(ACCESS_COOKIE, { path: "/" });
-  res.clearCookie(REFRESH_COOKIE, { path: "/eu-connect/api/auth" });
-}
 
 // ---- DB helpers ---------------------------------------------------------
 async function findUserByEmail(email) {
