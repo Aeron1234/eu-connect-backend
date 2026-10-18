@@ -4,6 +4,7 @@ import express from "express";
 import multer from "multer";
 import { verifyUser } from "../../../middleware/verifyUser.js";
 import { verifyRole } from "../../../middleware/verifyRole.js";
+import { updateOwnPendingInternshipRecord } from "../controllers/pendingInternshipRecordController.js";
 import {
   approveInternshipRecord,
   createInternshipRecord,
@@ -127,6 +128,15 @@ internshipRecordRoutes.patch(
   verifyRole(["department_head", "admin"]),
   generalLimiter,
   restoreInternshipRecord,
+);
+
+internshipRecordRoutes.patch(
+  "/internship-records/mine/:internshipId",
+  verifyUser,
+  verifyRole(["student"]),
+  mediumLimiter,
+  upload.none(),
+  updateOwnPendingInternshipRecord,
 );
 
 internshipRecordRoutes.delete(

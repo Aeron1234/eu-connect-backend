@@ -68,7 +68,7 @@ async function client(t) {
   });
 }
 
-test("error API is read-only and restricted to admins", async (t) => {
+test("error read endpoints are restricted to admins", async (t) => {
   const get = await client(t);
   assert.equal((await get("/api/v1/errors")).status, 401);
   assert.equal((await get("/api/v1/errors", "student")).status, 403);

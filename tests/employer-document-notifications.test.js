@@ -21,9 +21,11 @@ function response() {
   };
 }
 
-function runDocumentAction(handler, { status = "pending", uploaderRole = "employer", actorRole = "student", failCommit = false } = {}) {
+function runDocumentAction(handler, { status = "pending", uploaderRole = "employer", actorRole = "student", actorId, failCommit = false } = {}) {
   const notifications = [];
   const emitted = [];
+  const deletedIds = [];
+  const removedPaths = [];
   const document = {
     id: 41,
     user_id: "student-id",
@@ -46,12 +48,17 @@ function runDocumentAction(handler, { status = "pending", uploaderRole = "employ
     async execute(sql, params) {
       if (sql.includes("FROM internship_documents WHERE id = ? FOR UPDATE")) return [[document]];
       if (sql.startsWith("INSERT INTO notifications")) notifications.push(params);
+      if (sql.startsWith("DELETE FROM internship_documents")) deletedIds.push(params[0]);
       return [{ affectedRows: 1 }];
     },
   });
-  supabase.storage.from = () => ({ remove: async () => ({ error: null }) });
+  supabase.storage.from = () => ({ remove: async (paths) => {
+    assert.ok(committed, "storage must be deleted only after commit");
+    removedPaths.push(...paths);
+    return { error: null };
+  } });
   const request = {
-    verifiedUser: { id: actorRole === "admin" ? "admin-id" : "student-id", role: actorRole },
+    verifiedUser: { id: actorId ?? (actorRole === "admin" ? "admin-id" : "student-id"), role: actorRole },
     params: { fileId: "41" },
     app: { get: () => ({ to: (room) => ({ emit: (event, payload) => {
       assert.ok(committed, "notification must be emitted after commit");
@@ -59,7 +66,7 @@ function runDocumentAction(handler, { status = "pending", uploaderRole = "employ
     } }) }) },
   };
   const res = response();
-  return handler(request, res).then(() => ({ res, notifications, emitted, committed, rolledBack }));
+  return handler(request, res).then(() => ({ res, notifications, emitted, committed, rolledBack, deletedIds, removedPaths }));
 }
 
 test("accepting an employer upload notifies its uploader after commit", async () => {
@@ -91,6 +98,37 @@ test("student deletion notifies the employer only for their pending upload", asy
   }
 });
 
+test("owners can delete their own and accepted employer files after committing the record deletion", async () => {
+  for (const uploaderRole of ["student", "employer"]) {
+    for (const status of [null, "pending", "accepted"]) {
+      const result = await runDocumentAction(deleteFile, { uploaderRole, status });
+      assert.equal(result.res.statusCode, 200);
+      assert.equal(result.res.body.success, true);
+      assert.ok(result.committed);
+      assert.deepEqual(result.deletedIds, ["41"]);
+      assert.deepEqual(result.removedPaths, ["requirements/student-id/certificate.pdf"]);
+      if (status === "accepted") assert.equal(result.notifications.length, 0);
+    }
+  }
+});
+
+test("other students and the employer uploader cannot accept or delete the owner's document", async () => {
+  for (const handler of [approveInternshipDocument, deleteFile]) {
+    for (const actor of [
+      { actorRole: "student", actorId: "other-student" },
+      { actorRole: "employer", actorId: "employer-id" },
+    ]) {
+      const result = await runDocumentAction(handler, actor);
+      assert.equal(result.res.statusCode, 403);
+      assert.ok(result.rolledBack);
+      assert.equal(result.committed, false);
+      assert.deepEqual(result.deletedIds, []);
+      assert.deepEqual(result.removedPaths, []);
+      assert.deepEqual(result.notifications, []);
+    }
+  }
+});
+
 test("failed transactions do not emit employer document notifications", async () => {
   const originalConsoleError = console.error;
   console.error = () => {};
@@ -100,6 +138,7 @@ test("failed transactions do not emit employer document notifications", async ()
       assert.equal(result.res.statusCode, 500);
       assert.ok(result.rolledBack);
       assert.equal(result.emitted.length, 0);
+      assert.deepEqual(result.removedPaths, []);
     }
   } finally {
     console.error = originalConsoleError;

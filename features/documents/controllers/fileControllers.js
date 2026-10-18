@@ -100,9 +100,9 @@ export const getInternshipFiles = async (req, res) => {
 
     const [rows] = await db.execute(
       `SELECT 
-         doc.id, doc.internship_id, doc.file_name, doc.company_name, 
+         doc.id, doc.user_id, doc.internship_id, doc.file_name, doc.company_name,
          doc.category, doc.requirement_type_id, doc.file_type, doc.created_at,
-         doc.verification_status,
+         doc.verification_status, doc.uploaded_by_id, doc.uploaded_by_role,
          rt.name AS requirement_name, rt.requires_notarization, rt.copies_needed
        FROM internship_documents doc
        LEFT JOIN requirement_types rt ON doc.requirement_type_id = rt.id

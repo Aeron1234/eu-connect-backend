@@ -3,6 +3,34 @@ import { reportError } from "../../../config/errorTracking.js";
 
 const PAGE_SIZE = 15;
 
+export async function deleteErrorGroup(req, res) {
+  res.set("Cache-Control", "private, no-store");
+  if (req.verifiedUser?.role !== "admin") {
+    return res.status(403).json({ error: "Only administrators can delete error groups." });
+  }
+  const { fingerprint } = req.params;
+  if (typeof fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(fingerprint)) {
+    return res.status(400).json({ error: "Invalid error group." });
+  }
+  try {
+    // One atomic statement removes this group's recorded history across all filters.
+    const [result] = await db.execute("DELETE FROM error_events WHERE fingerprint = ?", [fingerprint]);
+    if (!result.affectedRows) return res.status(404).json({ error: "Error group not found." });
+    return res.json({
+      success: true,
+      message: "Error group deleted.",
+      deletedOccurrences: Number(result.affectedRows),
+    });
+  } catch (error) {
+    reportError("Delete error group failed:", error);
+    return res.status(error?.code === "ER_NO_SUCH_TABLE" ? 503 : 500).json({
+      error: error?.code === "ER_NO_SUCH_TABLE"
+        ? "Error tracking is not installed. Run the error-tracking.sql migration."
+        : "Could not delete the error group. Please try again.",
+    });
+  }
+}
+
 function filtersFrom(query) {
   const days = [1, 7, 30].includes(Number(query.days)) ? Number(query.days) : 7;
   const conditions = ["created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)"];
