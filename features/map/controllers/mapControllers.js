@@ -1,5 +1,6 @@
 import { reportError } from "../../../config/errorTracking.js";
 import { db } from "../../../config/db.js";
+import { mapOrigin } from "../mapRouting.js";
 
 export const getStudentMap = async (req, res) => {
   let connection;
@@ -17,7 +18,7 @@ export const getStudentMap = async (req, res) => {
     const rows = connection.connection
       .execute(
         `SELECT 
-         ir.id, ir.company_name, ir.company_address, ir.internship_position,
+         ir.id, ir.company_name, ir.company_address, ir.city_name, ir.province_name, ir.internship_position,
          ir.lat, ir.lon, ir.date_started, ir.date_ended, ir.total_hours,
          ir.accumulated_hours, ir.user_id, ir.region_id,
          up.first_name, up.last_name,
@@ -54,6 +55,8 @@ export const getStudentMap = async (req, res) => {
         groups[key] = {
           company_name: row.company_name,
           company_address: row.company_address,
+          city_name: row.city_name || null,
+          province_name: row.province_name || null,
           lat: row.lat,
           lon: row.lon,
           region_id: row.region_id,
@@ -94,7 +97,7 @@ export const getStudentMap = async (req, res) => {
       name,
     })).sort((a, b) => a.name.localeCompare(b.name));
 
-    res.status(200).json({ companies, availableRegions });
+    res.status(200).json({ companies, availableRegions, origin: mapOrigin() });
   } catch (error) {
     reportError("Get student map error:", error);
     res.status(500).json({ error: "Failed to load student map data." });

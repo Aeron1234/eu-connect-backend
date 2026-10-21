@@ -41,7 +41,7 @@ function request(method = "POST", extras = {}) {
   };
 }
 
-function connection({ ownsRecord = true, existing = null, images = [] } = {}) {
+function connection({ ownsRecord = true, existing = null, images = [], dateStarted = "2000-01-01" } = {}) {
   const calls = [];
   const instance = {
     calls,
@@ -51,7 +51,7 @@ function connection({ ownsRecord = true, existing = null, images = [] } = {}) {
     release() { calls.push("release"); },
     async execute(sql, params) {
       calls.push({ sql, params });
-      if (sql.includes("FROM internship_records")) return [ownsRecord ? [{ id: "internship-1" }] : []];
+      if (sql.includes("FROM internship_records")) return [ownsRecord ? [{ id: "internship-1", date_started: dateStarted }] : []];
       if (sql.includes("FROM summary_report_images")) return [images];
       if (sql.includes("FROM summary_reports")) return [existing ? [existing] : []];
       return [{ affectedRows: 1 }];

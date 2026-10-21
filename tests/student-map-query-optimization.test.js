@@ -16,7 +16,7 @@ test("student map streams joined rows into the same ordered location and region 
   const original = db.getConnection;
   let sql, highWaterMark, releases = 0;
   const rows = [
-    { id: "i1", company_name: "Acme", company_address: "First", internship_position: "Dev",
+    { id: "i1", company_name: "Acme", company_address: "First", city_name: "Lucena City", province_name: "Quezon", internship_position: "Dev",
       lat: "14.123456", lon: "121.000001", date_started: "start1", date_ended: null,
       total_hours: "100", accumulated_hours: "40", user_id: "u1", region_id: 2,
       first_name: "Ana", last_name: "Reyes", course_name: "Information Technology", course_short_name: "BSIT", region_name: "Zulu" },
@@ -47,16 +47,17 @@ test("student map streams joined rows into the same ordered location and region 
     assert.match(sql, /WHERE ir\.status = 'ongoing' AND ir\.deleted_at IS NULL/);
     assert.match(sql, /ORDER BY ir\.company_name ASC/);
     assert.deepEqual(res.body, {
+      origin: { lat: 13.931, lng: 121.423, label: "MSEUF–Candelaria" },
       companies: [
         { company_name: "Acme", company_address: "First", lat: "14.123456", lon: "121.000001",
-          region_id: 2, region_name: "Zulu", intern_count: 2, interns: [
+          city_name: "Lucena City", province_name: "Quezon", region_id: 2, region_name: "Zulu", intern_count: 2, interns: [
             { internship_id: "i1", student_id: "u1", name: "Ana Reyes", position: "Dev", course: "Information Technology", course_short_name: "BSIT",
               percent_complete: 40, date_started: "start1", date_ended: null },
             { internship_id: "i2", student_id: "u2", name: "Bo Cruz", position: "QA", course: "Computer Science", course_short_name: "BSCS",
               percent_complete: 0, date_started: "start2", date_ended: "end2" },
           ] },
         { company_name: "Beta", company_address: "Third", lat: "15", lon: "122",
-          region_id: 1, region_name: "Alpha", intern_count: 1, interns: [
+          city_name: null, province_name: null, region_id: 1, region_name: "Alpha", intern_count: 1, interns: [
             { internship_id: "i3", student_id: "u3", name: "Cy Lim", position: "Ops", course: "Information Technology", course_short_name: "BSIT",
               percent_complete: 50, date_started: "start3", date_ended: null },
           ] },

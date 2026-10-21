@@ -2,7 +2,7 @@ import { reportError } from "../../../config/errorTracking.js";
 import { db } from "../../../config/db.js";
 import { invalidateNotificationsCache } from "../../../config/cache/notificationsCache.js";
 
-const ROLES = new Set(["student", "employer", "department_head", "admin"]);
+const ROLES = new Set(["student", "department_head", "admin"]);
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
 
 function validDate(value) {
@@ -42,7 +42,7 @@ export async function getCalendarMonth(req, res) {
     const departmentId = viewer.role === "employer" ? -1 : viewer.department_id ?? -1;
     const isRegistrar = viewer.role === "department_head" && viewer.department_code === "REG";
 
-    const [announcements] = await db.execute(
+    const [announcements] = viewer.role === "employer" ? [[]] : await db.execute(
       `SELECT a.public_id AS id, a.title, a.content, ${dateSql("a.event_date")} AS event_date,
               ${dateSql("a.event_end_date")} AS event_end_date,
               ac.name AS category

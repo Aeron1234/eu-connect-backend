@@ -12,20 +12,16 @@ export const getStudentDashboardStats = async (req, res) => {
     const { id: userId } = req.verifiedUser;
 
     // Independent scalar counts keep each table's original filter while using
-    // one database statement instead of four queued commands.
+    // one database statement.
     const [[counts]] = await connection.execute(
       `SELECT
          (SELECT COUNT(*) FROM internship_favorites
           WHERE student_id = ? AND favorited_at IS NOT NULL) AS favorite_count,
          (SELECT COUNT(*) FROM notifications
           WHERE user_id = ? AND type = 'announcement' AND is_read = 0) AS announcement_count,
-         (SELECT COUNT(*)
-          FROM student_evaluation_masters AS sem
-          INNER JOIN internship_records AS ir ON sem.internship_record_id = ir.id
-          WHERE ir.user_id = ? AND sem.status = 'pending') AS evaluation_count,
          (SELECT COUNT(*) FROM internship_documents
           WHERE user_id = ?) AS document_count`,
-      [userId, userId, userId, userId],
+      [userId, userId, userId],
     );
 
     // 3. Send back the aggregated metrics
@@ -34,7 +30,6 @@ export const getStudentDashboardStats = async (req, res) => {
       stats: {
         favoriteInternships: counts.favorite_count || 0,
         unreadAnnouncements: counts.announcement_count || 0,
-        pendingEvaluations: counts.evaluation_count || 0,
         documentsStored: counts.document_count || 0,
       },
     });
@@ -211,8 +206,6 @@ async function loadEmployerDashboardStats(connection, employerId) {
       `SELECT
          (SELECT COUNT(*) FROM internship_postings
           WHERE employer_id = ? AND deleted_at IS NULL) AS posting_count,
-         (SELECT COUNT(*) FROM notifications
-          WHERE user_id = ? AND type = 'announcement' AND is_read = 0) AS announcement_count,
          intern_counts.ongoing_count,
          intern_counts.finished_count,
          (SELECT COUNT(*) FROM internship_documents
@@ -223,12 +216,11 @@ async function loadEmployerDashboardStats(connection, employerId) {
          FROM internship_records
          WHERE employer_id = ? AND status IN ('ongoing', 'finished')
        ) AS intern_counts`,
-      [employerId, employerId, employerId, employerId],
+      [employerId, employerId, employerId],
     );
 
     return {
       internshipPosts: counts.posting_count || 0,
-      unreadAnnouncements: counts.announcement_count || 0,
       internsHandled: {
         current: counts.ongoing_count || 0,
         past: counts.finished_count || 0,

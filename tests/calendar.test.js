@@ -45,7 +45,7 @@ test("month feed reads the full date range and scopes announcement and schedule 
   assert.deepEqual(res.body, { announcements: [], schedules: [], internship: null, todos: [] });
 });
 
-test("employers receive only school-wide calendar items without internship or to-do queries", async () => {
+test("employers cannot access the full calendar and no database queries are run", async () => {
   const calls = [];
   db.execute = async (sql, params) => {
     calls.push({ sql, params });
@@ -53,11 +53,8 @@ test("employers receive only school-wide calendar items without internship or to
   };
   const res = response();
   await getCalendarMonth({ verifiedUser: { id: "employer", role: "employer", department_id: 7 }, query: { month: "2026-10" } }, res);
-  assert.equal(res.statusCode, 200);
-  assert.equal(calls.length, 2);
-  assert.deepEqual(calls[0].params, ["2026-11-01", "2026-10-01", "employer", -1]);
-  assert.deepEqual(calls[1].params, ["2026-11-01", "2026-10-01", "employer", -1]);
-  assert.deepEqual(res.body, { announcements: [], schedules: [], internship: null, todos: [] });
+  assert.equal(res.statusCode, 403);
+  assert.equal(calls.length, 0);
 });
 
 test("REG calendar announcement reads stay General-only", async () => {
@@ -90,17 +87,17 @@ test("month feed returns overlapping announcement ranges from a previous month",
   assert.equal(res.body.announcements[0].event_end_date, "2026-10-03");
 });
 
-test("employers can open school-wide schedules but not department schedules", async () => {
+test("employers cannot open school-wide or department schedules", async () => {
   db.execute = async () => [[{ id: 42, department_id: null, title: "Campus event" }]];
   const request = { verifiedUser: { id: "employer", role: "employer", department_id: 7 }, params: { id: "42" } };
   const allowed = response();
   await getCalendarSchedule(request, allowed);
-  assert.equal(allowed.statusCode, 200);
+  assert.equal(allowed.statusCode, 403);
 
   db.execute = async () => [[{ id: 42, department_id: 7, title: "Department deadline" }]];
   const denied = response();
   await getCalendarSchedule(request, denied);
-  assert.equal(denied.statusCode, 404);
+  assert.equal(denied.statusCode, 403);
 });
 
 test("a private to-do requires a real date inside the student's ongoing internship", async () => {

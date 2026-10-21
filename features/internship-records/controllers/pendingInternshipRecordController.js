@@ -1,3 +1,4 @@
+import { readPlacementCity } from "../placementCity.js";
 import { db } from "../../../config/db.js";
 import { reportError } from "../../../config/errorTracking.js";
 import { getActivityLogUserName } from "../../../config/activityLogNames.js";
@@ -41,6 +42,9 @@ function readPlacement(body = {}) {
   if (fields.total_hours <= 0) return { error: "Required hours must be greater than zero." };
   if (fields.lat < -90 || fields.lat > 90 || fields.lon < -180 || fields.lon > 180) return { error: "Select a valid company location on the map." };
   if (!Number.isInteger(fields.region_id) || fields.region_id <= 0) return { error: "Select a valid region." };
+  const city = readPlacementCity(body);
+  if (city.error) return city;
+  Object.assign(fields, city.fields);
   return { fields };
 }
 
@@ -74,6 +78,14 @@ export async function updateOwnPendingInternshipRecord(req, res) {
       await connection.rollback(); transaction = false;
       return res.status(409).json({ error: "Only pending internship records can be edited. Refresh to view the current status." });
     }
+    // Older clients omit these fields. Preserve existing classification only when
+    // the physical location and address have not changed; never carry it to a new site.
+    if (req.body.city_name == null && req.body.province_name == null &&
+        record.company_address === fields.company_address &&
+        Number(record.lat) === fields.lat && Number(record.lon) === fields.lon) {
+      fields.city_name = record.city_name || null;
+      fields.province_name = record.province_name || null;
+    }
     const [regions] = await connection.execute("SELECT id FROM regions WHERE id = ?", [fields.region_id]);
     if (!regions.length) {
       await connection.rollback(); transaction = false;
@@ -82,11 +94,11 @@ export async function updateOwnPendingInternshipRecord(req, res) {
     const [result] = await connection.execute(
       `UPDATE internship_records SET company_name = ?, company_address = ?, internship_position = ?,
        company_website = ?, description = ?, date_started = ?, date_ended = ?, total_hours = ?,
-       region_id = ?, semester = ?, lat = ?, lon = ?, updated_at = NOW()
+       region_id = ?, semester = ?, lat = ?, lon = ?, city_name = ?, province_name = ?, updated_at = NOW()
        WHERE id = ? AND user_id = ? AND status = 'pending' AND deleted_at IS NULL`,
       [fields.company_name, fields.company_address, fields.internship_position, fields.company_website,
         fields.description, fields.date_started, fields.date_ended, fields.total_hours, fields.region_id,
-        fields.semester, fields.lat, fields.lon, internshipId, studentId],
+        fields.semester, fields.lat, fields.lon, fields.city_name, fields.province_name, internshipId, studentId],
     );
     if (result.affectedRows !== 1) {
       await connection.rollback(); transaction = false;

@@ -8,8 +8,16 @@ import {
   strictLimiter,
 } from "../../../middleware/rateLimiter.js";
 import { getStudentMap } from "../controllers/mapControllers.js";
+import { getMapCompanyRoute } from "../controllers/mapRoutingControllers.js";
 
 const mapRoutes = express.Router();
+mapRoutes.get(
+  "/student-map/route/:internshipId",
+  verifyUser,
+  verifyRole(["department_head", "admin"]),
+  generalLimiter,
+  getMapCompanyRoute,
+);
 mapRoutes.get(
   "/student-map",
   verifyUser,

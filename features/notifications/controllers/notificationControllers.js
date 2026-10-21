@@ -2,6 +2,12 @@ import { reportError } from "../../../config/errorTracking.js";
 import { invalidateNotificationsCache } from "../../../config/cache/notificationsCache.js";
 import { db } from "../../../config/db.js";
 
+function notificationVisibility(role, prefix = "") {
+  if (role === "employer") return `${prefix}type NOT IN ('announcement', 'calendar_schedule')`;
+  if (role === "student") return `${prefix}type NOT IN ('evaluation_submitted', 'evaluation_deleted')`;
+  return "1 = 1";
+}
+
 export const getUnreadNotificationCount = async (req, res) => {
   try {
     const userId = req.verifiedUser?.id;
@@ -16,7 +22,8 @@ export const getUnreadNotificationCount = async (req, res) => {
         connection = await db.getConnection();
         [[row]] = await connection.execute(
           `SELECT COUNT(*) AS unread_count
-           FROM notifications WHERE user_id = ? AND is_read = 0`,
+           FROM notifications WHERE user_id = ? AND is_read = 0
+             AND ${notificationVisibility(req.verifiedUser.role)}`,
           [userId],
         );
         break;
@@ -58,6 +65,7 @@ export const getAllNotifications = async (req, res) => {
 
     const conditions = ["n.user_id = ?"];
     const params = [userId];
+    conditions.push(notificationVisibility(req.verifiedUser.role, "n."));
 
     if (scope === "requests") {
       conditions.push("n.type = 'supervisor_request_submitted'");
@@ -95,7 +103,8 @@ export const getAllNotifications = async (req, res) => {
       `SELECT COUNT(*) AS all_total,
               COUNT(CASE WHEN type = 'supervisor_request_submitted' THEN 1 END) AS request_total,
               COUNT(CASE WHEN is_read = 0 THEN 1 END) AS unread_count
-       FROM notifications WHERE user_id = ?`,
+       FROM notifications WHERE user_id = ?
+         AND ${notificationVisibility(req.verifiedUser.role)}`,
       [userId],
     );
 
@@ -144,6 +153,9 @@ export const getAllNotifications = async (req, res) => {
 // Resolve an announcement notification at click time. A cached inbox can still
 // show a notification after its announcement and DB row have been removed.
 export const openAnnouncementNotification = async (req, res) => {
+  if (req.verifiedUser?.role === "employer") {
+    return res.status(403).json({ success: false, state: "unavailable", error: "Announcements are not available to employer accounts." });
+  }
   const notificationId = req.params.notificationId;
   if (!/^[1-9]\d*$/.test(notificationId)) {
     return res.status(400).json({ error: "Invalid notification ID." });

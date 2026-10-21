@@ -144,3 +144,41 @@ test("a changed row is a conflict and a failed update rolls back without clearin
   assert.ok(cache.has("/api/v1/internships/all"));
   assert.ok(!calls.some((call) => call.sql.includes("INSERT INTO activity_logs")));
 });
+
+test("pending edits persist validated city fields in the same transaction", async (t) => {
+  const request = await client(t);
+  const response = await request({ ...valid, city_name: "Lucena City", province_name: "Quezon" });
+  assert.equal(response.status, 200);
+  const body = await response.json(); assert.equal(body.record.city_name, "Lucena City");
+  const update = calls.find(call => call.sql.includes("UPDATE internship_records"));
+  assert.deepEqual(update.params.slice(-4), ["Lucena City", "Quezon", "record-1", "student-1"]);
+  assert.equal(commits, 1);
+});
+
+test("legacy pending edits preserve city only when the saved location is unchanged", async (t) => {
+  const request = await client(t);
+  Object.assign(record, { company_address: valid.company_address, lat: valid.lat, lon: valid.lon, city_name: "Lucena City", province_name: "Quezon" });
+  let response = await request(); assert.equal((await response.json()).record.city_name, "Lucena City");
+  response = await request({ ...valid, lon: "122" }); assert.equal((await response.json()).record.city_name, null);
+});
+
+test("new internship creation saves city and province with the original placement", async () => {
+  const { createInternshipRecord } = await import("../features/internship-records/controllers/internshipRecordControllers.js");
+  const writes = [];
+  db.getConnection = async () => ({
+    async beginTransaction() {}, async commit() { commits++; }, async rollback() {}, release() {},
+    async execute(sql, params) {
+      if (sql.includes("SELECT first_name, last_name FROM user_profiles")) return [[{ first_name: "Test", last_name: "Student" }]];
+      if (sql.includes("SELECT DISTINCT u.id")) return [[]];
+      writes.push({ sql, params }); return [{ affectedRows: 1 }];
+    },
+  });
+  const req = { verifiedUser: { id: "student-1", role: "student", department_id: 1 }, body: { ...valid, city_name: "Lucena City", province_name: "Quezon" }, app: { get: () => ({}) } };
+  const res = { statusCode: 200, status(value) { this.statusCode = value; return this; }, json(value) { this.body = value; return this; } };
+  await createInternshipRecord(req, res);
+  assert.equal(res.statusCode, 201); assert.equal(res.body.success, true);
+  const insert = writes.find(row => row.sql.includes("INSERT INTO internship_records"));
+  assert.match(insert.sql, /semester, city_name, province_name/);
+  assert.deepEqual(insert.params.slice(-3), ["Lucena City", "Quezon", "student-1"]);
+  assert.equal(commits, 1);
+});

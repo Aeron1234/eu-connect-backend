@@ -66,6 +66,30 @@ test("notification GET reuses data, isolates users/page/limit/scope and keeps au
   assert.equal(queries, 10);
 });
 
+test("employer inbox lists, pagination, unread badges and cached reads exclude legacy announcements", async t => {
+  const get = await client(t);
+  const rows = [{ notification_id: 1, type: "announcement", is_read: 0 },
+    { notification_id: 2, type: "supervisor_request_submitted", supervisor_request_status: "pending", is_read: 0 }];
+  const statements = [];
+  connection.execute = async (sql, params) => {
+    statements.push(sql);
+    const visible = rows.filter(row => !sql.includes("type NOT IN ('announcement'") || !["announcement", "calendar_schedule"].includes(row.type));
+    if (sql.includes("AS all_total")) return [[{ all_total: visible.length, request_total: 1, unread_count: visible.length }]];
+    if (sql.includes("AS unread_count")) return [[{ unread_count: visible.length }]];
+    return [visible.slice(params.at(-1), params.at(-1) + params.at(-2))];
+  };
+  for (const [role, total] of [["student", 2], ["employer", 1]]) {
+    const first = await (await get(url, "alice", role)).json();
+    assert.equal(first.totalRecords, total); assert.equal(first.unreadCount, total);
+    assert.equal(first.data.length, total);
+    if (role === "employer") assert(first.data.every(row => row.type !== "announcement"));
+    const before = statements.length;
+    assert.deepEqual(await (await get(url, "alice", role)).json(), first);
+    assert.equal(statements.length, before);
+    assert.deepEqual(await (await get(url + "/unread-count", "alice", role)).json(), { unreadCount: total });
+  }
+});
+
 test("unread-count GET runs only a recipient count and caches it separately", async (t) => {
   const get = await client(t);
   const countUrl = url + "/unread-count";
@@ -201,7 +225,7 @@ test("evaluation deletion emits only after commit/invalidation, never on rollbac
     console.error = () => {};
     for (const failed of [false, true]) {
       cache.flushAll(); seed(); let committed = false; let emitted = 0;
-      connection.execute = async sql => sql.trim().startsWith("SELECT") ? [[{ evaluation_status: "pending", employer_id: "bob", student_id: "alice", internship_id: 1, company: "Company" }]] : [{ affectedRows: 1 }];
+      connection.execute = async sql => sql.trim().startsWith("SELECT") ? [[{ id: "head", evaluation_status: "pending", employer_id: "bob", student_id: "alice", internship_id: 1, company: "Company" }]] : [{ affectedRows: 1 }];
       connection.commit = async () => { if (failed) throw new Error("commit failed"); committed = true; };
       const io = { to() { return { emit() { assert.ok(committed); assert.equal(cache.has("alice1"), false); emitted++; } }; } };
       const res = response();

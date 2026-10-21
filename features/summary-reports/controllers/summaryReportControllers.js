@@ -4,6 +4,7 @@ import { newUUID, verifyRecordAccess } from "../../../config/helpers.js";
 import { invalidateRouteCache } from "../../../config/cache/cache.js";
 import { reportError } from "../../../config/errorTracking.js";
 import { withUploadConnection, uploadValidationError, cleanupUploadPaths } from "../../../config/uploadLifecycle.js";
+import { assertInternshipStarted } from "../../../config/internshipStart.js";
 
 const BUCKET = process.env.SUPABASE_BUCKET;
 const FIELDS = ["organization_experience", "work_schedule", "memorable_moment", "difficulties_solutions"];
@@ -185,7 +186,7 @@ export async function saveSummaryReport(req, res) {
   try {
     async function saveState(connection, lock = false) {
       const [internships] = await connection.execute(
-        `SELECT id FROM internship_records
+        `SELECT id, DATE_FORMAT(date_started, '%Y-%m-%d') AS date_started FROM internship_records
          WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND status IN ('ongoing', 'finished')
          LIMIT 1 ${lock ? "FOR UPDATE" : ""}`,
         [internshipId, userId],
@@ -193,6 +194,7 @@ export async function saveSummaryReport(req, res) {
       if (!internships.length) {
         throw uploadValidationError(404, "Internship record not found.");
       }
+      assertInternshipStarted(internships[0].date_started, "Summary reports");
 
       const [existingRows] = await connection.execute(
         `SELECT id, attachment_path FROM summary_reports WHERE internship_id = ? LIMIT 1 ${lock ? "FOR UPDATE" : ""}`,
@@ -288,7 +290,7 @@ export async function saveSummaryReport(req, res) {
     return res.status(saved.edited ? 200 : 201).json({ success: true, message: saved.edited ? "Summary report updated." : "Summary report submitted." });
   } catch (error) {
     if (!committed && !error.uploadCommitUncertain) await cleanupUploadPaths(newPaths);
-    if (error?.status) return res.status(error.status).json({ error: error.message });
+    if (error?.status) return res.status(error.status).json({ error: error.message, code: error.code });
     if (error?.code === "ER_DUP_ENTRY") {
       return res.status(409).json({ error: "A summary report already exists for this internship." });
     }

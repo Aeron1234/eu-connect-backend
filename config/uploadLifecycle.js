@@ -44,13 +44,19 @@ export async function withUploadConnection(work, transaction = false) {
   }
 }
 
-export async function cleanupUploadPaths(paths) {
+export async function cleanupUploadPaths(paths, timeoutMs = 10000) {
   await Promise.all(paths.map(async (path) => {
+    let timer;
     try {
-      const { error } = await supabase.storage.from(BUCKET).remove([path]);
+      const { error } = await Promise.race([
+        supabase.storage.from(BUCKET).remove([path]),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Upload storage cleanup timed out.")), timeoutMs); }),
+      ]);
       if (error) reportError("Upload storage cleanup failed:", error);
     } catch (error) {
       reportError("Upload storage cleanup failed:", error);
+    } finally {
+      clearTimeout(timer);
     }
   }));
 }

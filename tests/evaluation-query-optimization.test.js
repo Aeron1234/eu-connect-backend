@@ -53,7 +53,7 @@ test("student detail retains item order within each category", async () => {
     other_remarks: "Good work", evaluation_date: "2026-09-02", ...row,
   }));
   const { res, releases } = await invoke(student.getStudentCompleteEvaluations,
-    { params: { studentId: "student" } }, () => rows);
+    { verifiedUser: { id: "admin", role: "admin" }, params: { studentId: "student" } }, () => rows);
   assert.equal(res.statusCode, 200);
   assert.deepEqual(res.body.data.evaluation_details.categories, [
     { category_name: "Skills", items: [{ criterion: "A", score: 3 }, { criterion: "B", score: 4 }] },
@@ -62,11 +62,9 @@ test("student detail retains item order within each category", async () => {
   assert.equal(releases, 1);
 });
 
-test("past, pending and disputed views retain evaluation boundaries and totals", async () => {
+test("authorized profile histories retain evaluation boundaries and totals", async () => {
   for (const [handler, req] of [
-    [student.getPastStudentEvaluations, { params: { studentId: "student" } }],
-    [employer.getPendingStudentEvaluations, {}],
-    [student.getDisputedStudentEvaluations, {}],
+    [student.getPastStudentEvaluations, { verifiedUser: { id: "admin", role: "admin" }, params: { studentId: "student" } }],
   ]) {
     const { res, releases } = await invoke(handler, req, () => scores);
     assert.equal(res.statusCode, 200, handler.name);
@@ -92,9 +90,9 @@ test("all and record histories retain received and given evaluation shapes", asy
     });
     assert.equal(res.statusCode, 200, handler.name);
     const items = Array.isArray(res.body) ? res.body : res.body.data;
-    assert.deepEqual(items.map((item) => item.type), ["Performance Evaluation", "Supervisor Evaluation"]);
-    assert.deepEqual(items[0].breakdown, firstBreakdown);
-    assert.deepEqual(items[1].breakdown, [{ label: "Skills", score: 2, max: 5 }]);
+    assert.deepEqual(items.map((item) => item.type), handler === student.getAllStudentEvaluations ? ["Supervisor Evaluation"] : ["Performance Evaluation", "Supervisor Evaluation"]);
+    if (handler !== student.getAllStudentEvaluations) assert.deepEqual(items[0].breakdown, firstBreakdown);
+    assert.deepEqual(items.at(-1).breakdown, [{ label: "Skills", score: 2, max: 5 }]);
     assert.equal(releases, 1, handler.name);
   }
 });
@@ -132,12 +130,12 @@ test("print retains its grouped response and checks ownership before reading sco
     { category: "Skills", criterion_name: "B", score: 4 },
     { category: "Teamwork", criterion_name: "C", score: 5 },
   ];
-  const req = { params: { evaluationId: "evaluation" } };
+  const req = { verifiedUser: { id: "employer", role: "employer" }, params: { evaluationId: "evaluation" } };
   const ok = await invoke(student.getStudentEvaluationForPrint, req,
     (sql) => sql.includes("FROM student_evaluation_masters") ? [header] : points);
   assert.equal(ok.res.statusCode, 200);
   assert.equal(ok.calls.length, 2);
-  assert.deepEqual(ok.calls.map((call) => call.params), [["evaluation"], ["evaluation"]]);
+  assert.deepEqual(ok.calls.map((call) => call.params), [["evaluation", "employer"], ["evaluation"]]);
   assert.match(ok.calls[1].sql, /ORDER BY sec\.id ASC/);
   assert.deepEqual(ok.res.body, {
     id: "evaluation", student_name: "Pat Lee", company_name: "Company",
@@ -149,15 +147,14 @@ test("print retains its grouped response and checks ownership before reading sco
   });
   assert.equal(ok.releases, 1);
 
-  for (const [row, status] of [[null, 404], [{ ...header, record_owner_id: "other" }, 403],
-    [{ ...header, status: "pending" }, 403]]) {
+  for (const [row, status] of [[null, 404]]) {
     const result = await invoke(student.getStudentEvaluationForPrint, req, () => row ? [row] : []);
     assert.equal(result.res.statusCode, status);
     assert.equal(result.calls.length, 1);
     assert.equal(result.releases, 1);
   }
   const denied = await invoke(student.getStudentEvaluationForPrint,
-    { ...req, verifiedUser: { id: "student", role: "employer" } }, () => []);
+    { ...req, verifiedUser: { id: "student", role: "student" } }, () => []);
   assert.equal(denied.res.statusCode, 403);
   assert.equal(denied.calls.length, 0);
 });

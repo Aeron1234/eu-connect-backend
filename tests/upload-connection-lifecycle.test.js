@@ -36,6 +36,22 @@ const cases = [
     params: { internshipId: "internship" }, body: { ...paragraphs }, files: [png()] })],
 ];
 
+test("summary images are rejected before upload when the internship has not started", async () => {
+  const state = fixture({ dateStarted: "2099-01-01" });
+  const res = response(); await saveSummaryReport(cases[2][2](), res);
+  assert.equal(res.statusCode, 409); assert.deepEqual(state.uploaded, []);
+  assert.equal(state.commits, 0); assert.equal(state.held, 0);
+});
+
+test("summary start-date changes during an image upload block the save and clean staged files", async () => {
+  const state = fixture({ onUpload(current) { current.dateStarted = "2099-01-01"; } });
+  const res = response(); await saveSummaryReport(cases[2][2](), res);
+  assert.equal(res.statusCode, 409); assert.equal(state.uploaded.length, 1);
+  assert.deepEqual(state.removed, state.uploaded);
+  assert.equal(state.commits, 0); assert.equal(state.rollbacks, 1); assert.equal(state.held, 0);
+  assert.equal(state.calls.some(call => /INSERT INTO summary_reports/.test(call.sql)), false);
+});
+
 function response() {
   return { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
 }
@@ -43,7 +59,7 @@ function response() {
 function fixture(options = {}) {
   const state = { held: 0, acquisitions: 0, releases: 0, begins: 0, commits: 0, rollbacks: 0,
     calls: [], uploaded: [], removed: [], emitted: [], eligible: true, supervisor: "employer",
-    existing: options.existing || null, images: options.images || [] };
+    existing: options.existing || null, images: options.images || [], dateStarted: options.dateStarted ?? "2000-01-01" };
   db.getConnection = async () => {
     state.acquisitions++;
     state.held++;
@@ -69,7 +85,7 @@ function fixture(options = {}) {
           if (sql.includes("FOR UPDATE") && params.length > 1 && !sql.includes("user_id = ? AND deleted_at")) {
             assert.ok(params.includes("internship"), "final document checks pin the original internship");
           }
-          return [[{ id: "internship", employer_id: state.supervisor }]];
+          return [[{ id: "internship", employer_id: state.supervisor, date_started: state.dateStarted }]];
         }
         if (sql.includes("FROM requirement_types")) return [[{ id: 1, category: "post" }]];
         if (sql.includes("FROM user_profiles")) return [[{ first_name: "Test", last_name: "Person" }]];
@@ -280,4 +296,10 @@ test("15 slow uploads leave a ten-connection pool available for an unrelated rea
   }
   assert.equal(active, 0);
   assert.equal(state.held, 0);
+});
+
+test("a stalled storage cleanup cannot hide the original upload failure indefinitely", async () => {
+  const { cleanupUploadPaths } = await import("../config/uploadLifecycle.js");
+  supabase.storage.from = () => ({ remove: () => new Promise(() => {}) });
+  await cleanupUploadPaths(["staged/file.pdf"], 5);
 });

@@ -36,21 +36,21 @@ async function invoke(handler, user, countRow) {
   }
 }
 
-test("student dashboard stats keep four independent count filters in one statement", async () => {
+test("student dashboard stats exclude confidential employer evaluation counts", async () => {
   const { calls, releases, res } = await invoke(getStudentDashboardStats, { id: "student-1" }, {
     favorite_count: 4, announcement_count: 2, evaluation_count: 3, document_count: 7,
   });
   assert.equal(res.statusCode, 200);
   assert.deepEqual(res.body, { success: true, stats: {
-    favoriteInternships: 4, unreadAnnouncements: 2, pendingEvaluations: 3, documentsStored: 7,
+    favoriteInternships: 4, unreadAnnouncements: 2, documentsStored: 7,
   } });
   assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0].params, Array(4).fill("student-1"));
+  assert.deepEqual(calls[0].params, Array(3).fill("student-1"));
   for (const fragment of [
     "favorited_at IS NOT NULL", "type = 'announcement' AND is_read = 0",
-    "sem.internship_record_id = ir.id", "ir.user_id = ? AND sem.status = 'pending'",
     "FROM internship_documents", "WHERE user_id = ?",
   ]) assert.ok(calls[0].sql.includes(fragment), fragment);
+  assert.doesNotMatch(calls[0].sql, /student_evaluation_masters/);
   assert.equal(releases, 1);
 });
 
@@ -60,11 +60,12 @@ test("employer dashboard stats count ongoing and finished interns from one scope
   });
   assert.equal(res.statusCode, 200);
   assert.deepEqual(res.body.stats, {
-    internshipPosts: 5, unreadAnnouncements: 1,
+    internshipPosts: 5,
     internsHandled: { current: 3, past: 8 }, documentsUploaded: 2,
   });
   assert.equal(calls.length, 3);
-  assert.deepEqual(calls[0].params, Array(4).fill("employer-1"));
+  assert.deepEqual(calls[0].params, Array(3).fill("employer-1"));
+  assert.doesNotMatch(calls[0].sql, /FROM notifications/);
   assert.equal((calls[0].sql.match(/FROM internship_records/g) ?? []).length, 1);
   assert.match(calls[0].sql, /WHERE employer_id = \? AND status IN \('ongoing', 'finished'\)/);
   assert.match(calls[0].sql, /COUNT\(CASE WHEN status = 'ongoing'/);

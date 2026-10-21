@@ -11,6 +11,7 @@ import { Server } from "socket.io";
 import cron from "node-cron";
 import cookieParser from "cookie-parser";
 import { writeSync } from "node:fs";
+import { registerMapLocationSockets } from "./features/map/mapLocationSockets.js";
 import { registerNotificationSockets } from "./config/socketAuth.js";
 import { autoCloseStaleShifts } from "./config/autoCloseStaleShifts.js";
 import { refreshTokensCleanUp } from "./config/refreshTokensCleanUp.js";
@@ -146,6 +147,7 @@ app.use((err, req, res, next) => {
 });
 
 registerNotificationSockets(io);
+registerMapLocationSockets(io);
 
 // ---------------------------------------------------------------------------
 // Cron Jobs

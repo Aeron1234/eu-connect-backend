@@ -3,6 +3,36 @@ import { invalidateWeeklyNarrativesCache } from "../../../config/cache/weeklyNar
 import { weeklyNarrativesCacheHit } from "../../../middleware/weekly-narratives-cache.js";
 import { db } from "../../../config/db.js";
 import { verifyRecordAccess } from "../../../config/helpers.js";
+import { assertInternshipStarted } from "../../../config/internshipStart.js";
+
+async function withNarrativeWrite(userId, internshipId, write) {
+  const connection = await db.getConnection();
+  let started = false;
+  try {
+    await connection.beginTransaction();
+    started = true;
+    const [records] = await connection.execute(
+      `SELECT id, DATE_FORMAT(date_started, '%Y-%m-%d') AS date_started
+       FROM internship_records
+       WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND status = 'ongoing'
+       LIMIT 1 FOR UPDATE`,
+      [internshipId, userId],
+    );
+    if (!records.length) throw Object.assign(new Error("Ongoing internship record not found."), { status: 404 });
+    assertInternshipStarted(records[0].date_started, "Weekly narratives");
+    await write(connection);
+    await connection.commit();
+    started = false;
+  } catch (error) {
+    if (started) {
+      try { await connection.rollback(); }
+      catch (rollbackError) { reportError("Weekly narrative rollback failed:", rollbackError); }
+    }
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
 
 export const getWeeklyNarrativesForPrint = async (req, res) => {
   const userId = req.verifiedUser?.id;
@@ -156,17 +186,14 @@ export const createWeeklyNarrative = async (req, res) => {
       });
     }
 
-    const [result] = await db.execute(
-      `INSERT INTO weekly_narratives (user_id, internship_id, week_number, title, narrative)
-        VALUES (?, ?, ?, ?, ?)`,
-      [userId, internshipId, Number(week_number), title, narrative.trim()],
-    );
-
-    if (result.affectedRows === 0) {
-      return res.status(400).json({
-        error: "Posting narrative failed.",
-      });
-    }
+    await withNarrativeWrite(userId, internshipId, async connection => {
+      const [result] = await connection.execute(
+        `INSERT INTO weekly_narratives (user_id, internship_id, week_number, title, narrative)
+          VALUES (?, ?, ?, ?, ?)`,
+        [userId, internshipId, Number(week_number), title, narrative.trim()],
+      );
+      if (result.affectedRows === 0) throw Object.assign(new Error("Posting narrative failed."), { status: 400 });
+    });
 
     invalidateWeeklyNarrativesCache();
     res.status(201).json({
@@ -174,6 +201,7 @@ export const createWeeklyNarrative = async (req, res) => {
       success: true,
     });
   } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message, code: error.code });
     console.log("Create weekly narrative error:", error);
     res.status(500).json({ error: "Database query failed", success: false });
   }
@@ -201,31 +229,31 @@ export const editWeeklyNarrative = async (req, res) => {
       });
     }
 
-    const [result] = await db.execute(
-      `
-      UPDATE weekly_narratives
-      SET
-        week_number = COALESCE(?, week_number),
-        title = COALESCE(?, title),
-        narrative = COALESCE(?, narrative),
-        updated_at = NOW()
-      WHERE id = ? AND user_id = ? AND internship_id = ?
-      `,
-      [
-        week_number || null,
-        title.trim() || null,
-        narrative.trim() || null,
-        narrativeId,
-        userId,
-        internshipId,
-      ],
-    );
+    await withNarrativeWrite(userId, internshipId, async connection => {
+      const [result] = await connection.execute(
+        `
+        UPDATE weekly_narratives
+        SET
+          week_number = COALESCE(?, week_number),
+          title = COALESCE(?, title),
+          narrative = COALESCE(?, narrative),
+          updated_at = NOW()
+        WHERE id = ? AND user_id = ? AND internship_id = ?
+        `,
+        [
+          week_number || null,
+          title.trim() || null,
+          narrative.trim() || null,
+          narrativeId,
+          userId,
+          internshipId,
+        ],
+      );
 
-    if (result.affectedRows === 0) {
-      return res.status(404).json({
-        error: "Failed to update narrative or can't find the narrative.",
-      });
-    }
+      if (result.affectedRows === 0) {
+        throw Object.assign(new Error("Failed to update narrative or can't find the narrative."), { status: 404 });
+      }
+    });
 
     invalidateWeeklyNarrativesCache();
     res.status(200).json({
@@ -233,6 +261,7 @@ export const editWeeklyNarrative = async (req, res) => {
       success: true,
     });
   } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message, code: error.code });
     console.log("Edit weekly narrative error:", error);
     res.status(500).json({ error: "Database query failed", success: false });
   }

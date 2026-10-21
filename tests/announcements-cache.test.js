@@ -103,7 +103,7 @@ function seed() {
 }
 function response() { return { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } }; }
 function request(data = {}) {
-  return { verifiedUser: { id: "author", role: "department_head" }, params: { announcementId },
+  return { verifiedUser: { id: "author", role: "department_head", department_code: "REG" }, params: { announcementId },
     body: { category_id: 1, title: "New", content: "Content", is_pinned: pinned, ...data },
     app: { get: () => ({ to: () => ({ emit: () => { assert.ok(committed); assert.equal(cache.has("feed-a"), false); emitted++; } }) }) } };
 }
@@ -118,9 +118,77 @@ test("feed caches for 30 seconds and categories for five minutes", async (t) => 
   }
 });
 
+test("employers cannot read announcement feeds, categories or links even after allowed readers prime caches", async t => {
+  const get = await client(t);
+  for (const path of ["history", "categories", fixtures[0].public_id, "1"]) {
+    assert.equal((await get(path)).status, 200);
+    const before = calls;
+    assert.equal((await get(path, "employer")).status, 403);
+    assert.equal(calls, before);
+  }
+  for (const handler of [announcements.getAllAnnouncements, announcements.getAnnouncementCategories, announcements.getAnnouncementById]) {
+    const before = calls, res = response();
+    await handler({ verifiedUser: { role: "employer" } }, res);
+    assert.equal(res.statusCode, 403); assert.equal(calls, before);
+  }
+});
+
+test("ordinary department heads keep viewing General posts but cannot create or keep General on an edit", async t => {
+  const get = await client(t);
+  const feed = await (await get("history", "department_head", 1, "head", "CCS")).json();
+  assert(feed.pinned.some(item => item.category === "General"));
+  assert.equal((await get(fixtures[0].public_id, "department_head", 1, "head", "CCS")).status, 200);
+  for (const handler of [announcements.createAnnouncement, announcements.updateAnnouncement]) {
+    for (const code of ["CCS", null, undefined]) {
+      cache.flushAll(); seed(); announcementWrite = null; committed = false; emitted = 0;
+      const req = request(); req.verifiedUser.department_code = code;
+      const res = response(); await handler(req, res);
+      assert.equal(res.statusCode, 403); assert.match(res.body.error, /registrar/);
+      assert.equal(announcementWrite, null); assert.equal(committed, false); assert.equal(emitted, 0);
+      assert.equal(cache.has("feed-a"), true);
+    }
+  }
+  const req = request(); req.verifiedUser.department_code = "CCS"; delete req.body.category_id;
+  const res = response(); await announcements.updateAnnouncement(req, res);
+  assert.equal(res.statusCode, 403); // Omitting the category cannot retain a legacy General post.
+});
+
+test("General and department announcement recipient queries exclude employers before notification and socket delivery", async () => {
+  for (const [role, code, category] of [["admin", null, "General"], ["department_head", "REG", "General"], ["department_head", "CCS", "Department"]]) {
+    cache.flushAll(); seed(); committed = false; categoryName = category;
+    const execute = connection.execute, query = connection.query;
+    let recipientSql, notificationRows; const rooms = [];
+    connection.execute = async (sql, params) => {
+      if (sql.includes("FROM users u") && sql.includes("JOIN roles r")) {
+        recipientSql = sql;
+        return [[{ id: "student" }, ...(!sql.includes("r.role != 'employer'") ? [{ id: "employer" }] : [])]];
+      }
+      return execute(sql, params);
+    };
+    connection.query = async (sql, params) => { notificationRows = params[0]; return query(sql, params); };
+    const req = request(); req.verifiedUser = { id: "author", role, department_code: code };
+    req.app.get = () => ({ to: room => ({ emit() { assert(committed); rooms.push(room); } }) });
+    const res = response(); await announcements.createAnnouncement(req, res);
+    connection.execute = execute; connection.query = query;
+    assert.equal(res.statusCode, 201); assert.match(recipientSql, /r.role != 'employer'/);
+    assert.deepEqual(notificationRows.map(row => row[0]), ["student"]);
+    assert.deepEqual(rooms, ["user-student"]);
+  }
+});
+
+test("ordinary department heads can create department posts and convert a legacy General post to Department", async () => {
+  categoryName = "Department";
+  for (const handler of [announcements.createAnnouncement, announcements.updateAnnouncement]) {
+    cache.flushAll(); seed(); committed = false;
+    const req = request({ category_id: 2 }); req.verifiedUser.department_code = "CCS";
+    const res = response(); await handler(req, res);
+    assert(res.statusCode < 300); assert.equal(committed, true);
+  }
+});
+
 test("role, user and department keys preserve announcement visibility on hits", async (t) => {
   const get = await client(t);
-  for (const [role, department, ids] of [["student", 1, [2]], ["student", 2, [3]], ["department_head", 1, [2]], ["employer", 1, []], ["admin", 1, [2, 3]]]) {
+  for (const [role, department, ids] of [["student", 1, [2]], ["student", 2, [3]], ["department_head", 1, [2]], ["admin", 1, [2, 3]]]) {
     const path = "history?category=Department";
     const first = await (await get(path, role, department)).json(); assert.deepEqual(first.regular.map(row => row.id), ids);
     const before = calls; assert.deepEqual(await (await get(path, role, department)).json(), first); assert.equal(calls, before);
@@ -136,7 +204,7 @@ test("UUID and legacy announcement links load only posts visible to the viewer",
   assert.equal((await (await get(uuid, "student", 1)).json()).id, uuid);
   assert.equal((await get("2", "student", 1)).status, 200);
   assert.equal((await get(uuid, "student", 2)).status, 404);
-  assert.equal((await get(uuid, "employer", 1)).status, 404);
+  assert.equal((await get(uuid, "employer", 1)).status, 403);
   assert.equal((await get(uuid, "admin", null)).status, 200);
   assert.equal((await get("not-an-id", "student", 1)).status, 400);
 });

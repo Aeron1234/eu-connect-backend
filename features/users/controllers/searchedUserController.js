@@ -138,6 +138,7 @@ export const getSearchedUser = async (req, res) => {
         ir.company_name AS student_company_name,
         ir.id AS student_internship_id,
         ir.employer_id AS student_internship_employer_id,
+        DATE_FORMAT(ir.date_started, '%Y-%m-%d') AS student_internship_date_started,
 
         -- department_head-only
         dd.name AS dept_head_department_name,
@@ -257,6 +258,7 @@ export const getSearchedUser = async (req, res) => {
       role === "student"
         ? {
             company_name: user.student_company_name,
+            internship_date_started: user.student_internship_date_started,
           }
         : role === "department_head"
           ? {

@@ -28,6 +28,7 @@ function eventRangeError(start, end) {
 }
 
 export const getAnnouncementCategories = async (req, res) => {
+  if (req.verifiedUser?.role === "employer") return res.status(403).json({ error: "Announcements are not available to employer accounts." });
   try {
     const [rows] = await db.execute(`SELECT * FROM announcement_categories`);
 
@@ -40,6 +41,7 @@ export const getAnnouncementCategories = async (req, res) => {
 };
 
 export const getAllAnnouncements = async (req, res) => {
+  if (req.verifiedUser?.role === "employer") return res.status(403).json({ error: "Announcements are not available to employer accounts." });
   try {
     const {
       id: userId,
@@ -178,6 +180,7 @@ export const getAllAnnouncements = async (req, res) => {
 // feed page without fetching every preceding page. Keep the feed's department
 // visibility rule here as well; a UUID is not an access token.
 export const getAnnouncementById = async (req, res) => {
+  if (req.verifiedUser?.role === "employer") return res.status(403).json({ error: "Announcements are not available to employer accounts." });
   const { announcementId } = req.params;
   const isLegacyId = /^[1-9]\d*$/.test(announcementId);
   const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(announcementId);
@@ -265,6 +268,11 @@ export const createAnnouncement = async (req, res) => {
 
     const isDepartmentCategory = categoryRows[0].name === "Department";
 
+    if (role === "department_head" && req.verifiedUser.department_code !== "REG" && categoryRows[0].name === "General") {
+      await connection.rollback();
+      return res.status(403).json({ error: "Only admins and registrar department heads can post General announcements." });
+    }
+
     if (role === "admin" && categoryRows[0].name !== "General") {
       await connection.rollback();
       return res.status(400).json({
@@ -287,28 +295,15 @@ export const createAnnouncement = async (req, res) => {
       return res.status(400).json({ error: "Posting announcement failed." });
     }
 
-    // Recipients depend on who posted AND the category:
-    // - admin posts -> everyone gets notified. (Department-category is
-    //   already blocked above, so admin's post is always effectively
-    //   General here, and reaches everyone including employers.)
-    // - department head posts, General category -> everyone except the
-    //   poster gets notified, regardless of department, INCLUDING
-    //   employers.
-    // - department head posts, Department category -> students and other
-    //   department heads are scoped to the poster's own department;
-    //   admin still sees it regardless; employers are excluded entirely.
+    // Employers never receive announcements. Department posts also scope
+    // students and department heads to the author's department.
     let recipients;
 
-    if (role === "admin") {
+    if (!isDepartmentCategory) {
       [recipients] = await connection.execute(
-        `SELECT id FROM users WHERE id != ?`,
-        [userId],
-      );
-    } else if (!isDepartmentCategory) {
-      // General category from a department head — no scoping at all,
-      // reaches every user except the poster, employers included.
-      [recipients] = await connection.execute(
-        `SELECT id FROM users WHERE id != ?`,
+        `SELECT u.id FROM users u
+         JOIN roles r ON r.id = u.role_id
+         WHERE u.id != ? AND r.role != 'employer'`,
         [userId],
       );
     } else {
@@ -494,6 +489,11 @@ export const updateAnnouncement = async (req, res) => {
     }
 
     const willBeDepartmentCategory = newCategoryName === "Department";
+
+    if (role === "department_head" && req.verifiedUser.department_code !== "REG" && newCategoryName === "General") {
+      await connection.rollback();
+      return res.status(403).json({ error: "Only admins and registrar department heads can post General announcements." });
+    }
 
     // Admin has no department_id — same reasoning as createAnnouncement.
     // Only the author can reach this endpoint at all (WHERE author_id = ?

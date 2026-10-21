@@ -36,7 +36,7 @@ studentEvaluationRoutes.get(
 studentEvaluationRoutes.get(
   "/student-evaluations/:studentId",
   verifyUser,
-  verifyRole(["student", "employer", "department_head", "admin"]),
+  verifyRole(["employer", "department_head", "admin"]),
   generalLimiter,
   getStudentCompleteEvaluations,
 );
@@ -44,9 +44,9 @@ studentEvaluationRoutes.get(
 studentEvaluationRoutes.get(
   "/student-past-evaluations/:studentId",
   verifyUser,
-  verifyRole(["student", "employer", "department_head", "admin"]),
+  verifyRole(["employer", "department_head", "admin"]),
   generalLimiter,
-  cacheRoute(30),
+  // Confidential profile reads recheck current department membership in SQL.
   getPastStudentEvaluations,
 );
 
@@ -87,7 +87,6 @@ studentEvaluationRoutes.get(
   verifyUser,
   verifyRole(["student"]),
   generalLimiter,
-  cacheRoute(30),
   getDisputedStudentEvaluations,
 );
 
@@ -111,7 +110,7 @@ studentEvaluationRoutes.patch(
 studentEvaluationRoutes.get(
   "/evaluations/student/:evaluationId/print",
   verifyUser,
-  verifyRole(["student"]),
+  verifyRole(["employer", "department_head", "admin"]),
   generalLimiter,
   getStudentEvaluationForPrint,
 );

@@ -1,3 +1,4 @@
+import { readPlacementCity } from "../placementCity.js";
 import { reportError } from "../../../config/errorTracking.js";
 import { getActivityLogUserName } from "../../../config/activityLogNames.js";
 import { attendanceHistoryCacheHit } from "../../../middleware/attendance-history-cache.js";
@@ -169,6 +170,9 @@ export const createInternshipRecord = async (req, res) => {
       });
     }
 
+    const city = readPlacementCity(data);
+    if (city.error) return res.status(400).json({ error: city.error });
+
     const requiredFields = [
       "company_name",
       "company_address",
@@ -234,8 +238,8 @@ export const createInternshipRecord = async (req, res) => {
 
     const [result] = await connection.execute(
       `
-      INSERT INTO internship_records (id, user_id, company_name, company_address, internship_position, description, lon, lat, date_started, date_ended, total_hours, region_id, company_website, semester)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      INSERT INTO internship_records (id, user_id, company_name, company_address, internship_position, description, lon, lat, date_started, date_ended, total_hours, region_id, company_website, semester, city_name, province_name)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       FROM DUAL
       WHERE NOT EXISTS (
         SELECT 1 FROM internship_records WHERE user_id = ? AND status = 'ongoing'
@@ -256,6 +260,8 @@ export const createInternshipRecord = async (req, res) => {
         data.region_id,
         data.company_website || null,
         data.semester,
+        city.fields.city_name,
+        city.fields.province_name,
         userId,
       ],
     );
@@ -1568,7 +1574,7 @@ export const getInternshipRecordEvaluations = async (req, res) => {
     function formatStatus(rawStatus) {
       switch (rawStatus) {
         case "completed":
-          return "Confirmed";
+          return "Submitted";
         case "disputed":
           return "Disputed";
         case "pending":

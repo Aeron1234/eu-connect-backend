@@ -59,6 +59,14 @@ test("opens an existing announcement and marks only the owner's notification rea
   assert.deepEqual(calls.at(-1).params, ["12", "recipient"]);
 });
 
+test("employers cannot open previously delivered General or Department announcement notifications", async () => {
+  for (const category of ["General", "Department"]) {
+    const { res, calls, committed } = await invoke({ role: "employer", announcement: { public_id: uuid, category, author_department_id: 1 } });
+    assert.equal(res.statusCode, 403); assert.equal(res.body.state, "unavailable");
+    assert.equal(calls.length, 0); assert.equal(committed, false);
+  }
+});
+
 test("legacy numeric notification links resolve to the public UUID", async () => {
   const { res, calls } = await invoke({
     notification: { link_uuid: null, link: "7", is_read: 1 },

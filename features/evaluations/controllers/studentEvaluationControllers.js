@@ -4,6 +4,8 @@ import { invalidateNotificationsCache } from "../../../config/cache/notification
 import { invalidateActivityLogsCache } from "../../../config/cache/activityLogsCache.js";
 import { db } from "../../../config/db.js";
 import { newUUID } from "../../../config/helpers.js";
+import { assertInternshipStarted } from "../../../config/internshipStart.js";
+import { evaluationReadScope, departmentEvaluationRecipients } from "../evaluationAccess.js";
 
 export const getStudentEvaluationCriteria = async (req, res) => {
   let connection;
@@ -53,6 +55,8 @@ export const getStudentEvaluationCriteria = async (req, res) => {
 };
 
 export const getStudentCompleteEvaluations = async (req, res) => {
+  res.set?.("Cache-Control", "private, no-store");
+  if (!["employer", "department_head", "admin"].includes(req.verifiedUser?.role)) return res.status(403).json({ error: "Employer evaluations are confidential." });
   const { studentId } = req.params; // The searched user ID passed from the frontend
 
   if (!studentId) {
@@ -83,11 +87,11 @@ export const getStudentCompleteEvaluations = async (req, res) => {
       LEFT JOIN student_evaluation_masters AS m ON ir.id = m.internship_record_id
       LEFT JOIN student_evaluation_scores AS s ON m.id = s.evaluation_master_id
       LEFT JOIN student_evaluation_criteria AS c ON s.criterion_id = c.id
-      WHERE ir.user_id = ?
+      WHERE ir.user_id = ? AND ir.deleted_at IS NULL ${evaluationReadScope(req.verifiedUser).sql}
       ORDER BY ir.created_at DESC, c.id ASC
     `;
 
-    const [rows] = await connection.execute(query, [studentId]);
+    const [rows] = await connection.execute(query, [studentId, ...evaluationReadScope(req.verifiedUser).params]);
 
     if (rows.length === 0) {
       return res.status(404).json({
@@ -156,6 +160,8 @@ export const getStudentCompleteEvaluations = async (req, res) => {
 };
 
 export const getPastStudentEvaluations = async (req, res) => {
+  res.set?.("Cache-Control", "private, no-store");
+  if (!["employer", "department_head", "admin"].includes(req.verifiedUser?.role)) return res.status(403).json({ error: "Employer evaluations are confidential." });
   const { studentId } = req.params;
 
   if (!studentId) {
@@ -192,11 +198,11 @@ export const getPastStudentEvaluations = async (req, res) => {
       JOIN student_evaluation_criteria AS c ON s.criterion_id = c.id
       JOIN user_profiles AS up ON m.evaluated_by = up.user_id
       LEFT JOIN user_profiles AS reviewer_up ON m.reviewed_by = reviewer_up.user_id
-      WHERE ir.user_id = ?
+      WHERE ir.user_id = ? AND ir.deleted_at IS NULL ${evaluationReadScope(req.verifiedUser).sql}
       ORDER BY m.created_at DESC, c.id ASC
     `;
 
-    const [rows] = await connection.execute(query, [studentId]);
+    const [rows] = await connection.execute(query, [studentId, ...evaluationReadScope(req.verifiedUser).params]);
 
     if (!rows || rows.length === 0) {
       return res.status(200).json({
@@ -228,7 +234,7 @@ export const getPastStudentEvaluations = async (req, res) => {
         evaluationsGroup[evalId] = {
           id: evalId,
           type: "Performance Evaluation",
-          status:
+          status: row.evaluation_status === "completed" ? "Submitted" :
             row.evaluation_status.charAt(0).toUpperCase() +
             row.evaluation_status.slice(1),
           period: formattedPeriod,
@@ -284,7 +290,8 @@ export const getPastStudentEvaluations = async (req, res) => {
 };
 
 export const createStudentEvaluation = async (req, res) => {
-  const { evaluated_by, other_remarks, scores, student_id } = req.body;
+  const { other_remarks, scores, student_id } = req.body;
+  const evaluated_by = req.verifiedUser?.id;
 
   // 1. STRUCTURAL GUARD CLAUSE
   if (!student_id || !evaluated_by || !Array.isArray(scores)) {
@@ -332,8 +339,8 @@ export const createStudentEvaluation = async (req, res) => {
     // Fetch active ongoing internship record — lock it, since we're about
     // to check who's allowed to evaluate this student
     const [records] = await connection.execute(
-      `SELECT id, company_name, employer_id FROM internship_records 
-       WHERE user_id = ? AND status = 'ongoing' LIMIT 1 FOR UPDATE`,
+      `SELECT id, company_name, employer_id, DATE_FORMAT(date_started, '%Y-%m-%d') AS date_started FROM internship_records
+       WHERE user_id = ? AND status = 'ongoing' AND deleted_at IS NULL LIMIT 1 FOR UPDATE`,
       [student_id],
     );
 
@@ -358,6 +365,8 @@ export const createStudentEvaluation = async (req, res) => {
       });
     }
 
+    assertInternshipStarted(records[0].date_started, "Student evaluations");
+
     const [employerProfile] = await connection.execute(
       `SELECT first_name, last_name FROM user_profiles WHERE user_id = ?`,
       [evaluated_by],
@@ -370,10 +379,10 @@ export const createStudentEvaluation = async (req, res) => {
 
     const masterId = newUUID();
 
-    // 1. Insert Master Entry as 'pending'
+    // Accepted supervisors submit directly; student confirmation is not part of this private workflow.
     const masterQuery = `
       INSERT INTO student_evaluation_masters (id, internship_record_id, evaluated_by, other_remarks, status)
-      VALUES (?, ?, ?, ?, 'pending')
+      VALUES (?, ?, ?, ?, 'completed')
     `;
     await connection.execute(masterQuery, [
       masterId,
@@ -404,15 +413,14 @@ export const createStudentEvaluation = async (req, res) => {
       ]);
     }
 
-    // 3. Dispatch Notification to Student for Verification Link
-    const notifTitle = "Verify Your Evaluation";
-    const notifMessage = `${employerName} from ${companyName} has submitted your internship evaluation. Please confirm this was your actual supervisor to finalize your grade.`;
+    const recipients = await departmentEvaluationRecipients(connection, student_id);
+    const notifTitle = "Student Evaluation Submitted";
+    const notifMessage = `${employerName} submitted a student performance evaluation for ${companyName}.`;
 
-    // in createStudentEvaluation
-    await connection.execute(
+    for (const recipient of recipients) await connection.execute(
       `INSERT INTO notifications (user_id, sender_id, type, title, message, link, link_uuid) VALUES (?, ?, 'evaluation_submitted', ?, ?, ?, ?)`,
       [
-        student_id,
+        recipient.id,
         evaluated_by,
         notifTitle,
         notifMessage,
@@ -423,8 +431,7 @@ export const createStudentEvaluation = async (req, res) => {
 
     // Activity log is supplementary — isolated so a logging failure can
     // never roll back or fail the actual submission. No scores in metadata;
-    // this table already stores those, and this is still pending student
-    // verification, so it isn't final yet.
+    // this table already stores those.
     try {
       await connection.execute(
         `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -434,11 +441,11 @@ export const createStudentEvaluation = async (req, res) => {
           "student_evaluation_submitted",
           "student_evaluation_masters",
           masterId,
-          `${employerName} submitted a pending performance evaluation for a student at ${companyName}.`,
+          `${employerName} submitted a confidential performance evaluation for a student at ${companyName}.`,
           JSON.stringify({
             internship_record_id,
             student_id,
-            status: "pending",
+            status: "completed",
           }),
         ],
       );
@@ -458,24 +465,27 @@ export const createStudentEvaluation = async (req, res) => {
     // 4. Real-time Socket Event
     const io = req.app.get("socketio");
     if (io) {
-      // in the socket emit right after
-      io.to(`user-${student_id}`).emit("new_notification", {
-        title: notifTitle,
-        message: notifMessage,
-        type: "evaluation_submitted", // was "submission"
-        link: internship_record_id,
-        link_uuid: masterId,
-      });
+      for (const recipient of recipients) {
+        try {
+          io.to(`user-${recipient.id}`).emit("new_notification", {
+            title: notifTitle, message: notifMessage, type: "evaluation_submitted",
+            link: internship_record_id, link_uuid: masterId,
+          });
+        } catch (deliveryError) {
+          reportError("Evaluation notification delivery failed:", deliveryError);
+        }
+      }
     }
 
     res.status(201).json({
       success: true,
       message:
-        "Evaluation draft posted successfully! Awaiting student identity verification.",
+        "Evaluation submitted successfully. The student's department head has been notified.",
       evaluationId: masterId,
     });
   } catch (error) {
     if (connection) await connection.rollback();
+    if (error?.status) return res.status(error.status).json({ error: error.message, code: error.code });
     console.log("Post student evaluation error:", error);
     res.status(500).json({
       success: false,
@@ -635,25 +645,19 @@ export const deleteStudentEvaluation = async (req, res) => {
     }
 
     // 5. Build dynamic deletion notification payloads using the integer link
-    const recipientsToNotify = [];
+    const recipientsToNotify = (await departmentEvaluationRecipients(connection, evaluation.student_id)).map(recipient => ({
+      id: recipient.id,
+      msg: `A pending performance evaluation for a student at ${evaluation.company} has been cancelled.`,
+    }));
     const notifTitle = "Evaluation Cancelled";
 
     if (isAdmin) {
       recipientsToNotify.push(
         {
-          id: evaluation.student_id,
-          msg: `Your pending performance evaluation from ${evaluation.company} has been cancelled and removed by the Administrator.`,
-        },
-        {
           id: evaluation.employer_id,
           msg: `The pending performance evaluation you submitted for your intern has been removed by the Administrator.`,
         },
       );
-    } else if (isOwner) {
-      recipientsToNotify.push({
-        id: evaluation.student_id,
-        msg: `Your pending performance evaluation from ${evaluation.company} has been cancelled and removed by your Supervisor.`,
-      });
     }
 
     // 6. Insert alert records safely into the notifications table
@@ -717,7 +721,7 @@ export const deleteStudentEvaluation = async (req, res) => {
           title: notifTitle,
           message: recipient.msg,
           type: "evaluation_deleted",
-          link: Number(evaluation.internship_id),
+          link: evaluation.internship_id,
           link_uuid: evaluationId,
         });
       } catch (socketError) {
@@ -743,220 +747,9 @@ export const deleteStudentEvaluation = async (req, res) => {
   }
 };
 
-export const respondToStudentEvaluation = async (req, res) => {
-  const { id: studentId } = req.verifiedUser; // Security gate: ensure student is verifying their own record
-  const { evaluationId } = req.params;
-  const { decision } = req.body; // "completed" | "disputed"
+export const respondToStudentEvaluation = async (req, res) => res.status(403).json({ error: "Employer evaluations are confidential and do not require student confirmation." });
 
-  if (!evaluationId) {
-    return res.status(400).json({ error: "Evaluation ID is required." });
-  }
-
-  if (!["completed", "disputed"].includes(decision)) {
-    return res
-      .status(400)
-      .json({ error: "decision must be 'completed' or 'disputed'." });
-  }
-
-  let connection;
-  try {
-    connection = await db.getConnection();
-
-    await connection.beginTransaction();
-
-    // 1. Verify the evaluation master belongs to this student and is pending
-    const [evaluationCheck] = await connection.execute(
-      `SELECT m.status, ir.user_id 
-       FROM student_evaluation_masters m
-       INNER JOIN internship_records ir ON m.internship_record_id = ir.id
-       WHERE m.id = ?`,
-      [evaluationId],
-    );
-
-    if (evaluationCheck.length === 0) {
-      await connection.rollback();
-      return res.status(404).json({ error: "Evaluation record not found." });
-    }
-
-    if (evaluationCheck[0].user_id !== studentId) {
-      await connection.rollback();
-      return res.status(403).json({
-        error: "Unauthorized. You can only respond to your own evaluation.",
-      });
-    }
-
-    if (evaluationCheck[0].status !== "pending") {
-      await connection.rollback();
-      return res.status(400).json({
-        error: "This evaluation has already been responded to.",
-      });
-    }
-
-    const newStatus = decision; // decision now maps 1:1 to the enum value
-
-    // 2. Flip evaluation status
-    await connection.execute(
-      `UPDATE student_evaluation_masters SET status = ? WHERE id = ?`,
-      [newStatus, evaluationId],
-    );
-
-    // 3. Mark the verification notification as read either way —
-    // the student has acted on it, whether by confirming or disputing.
-    // evaluationId is the master's UUID, which was inserted into link_uuid
-    // (see createStudentEvaluation), and the type there is 'evaluation_submitted'.
-    await connection.execute(
-      `UPDATE notifications SET is_read = 1 WHERE link_uuid = ? AND type = 'evaluation_submitted'`,
-      [evaluationId],
-    );
-
-    // Activity log is supplementary — isolated so a logging failure can
-    // never roll back or fail the actual response.
-    try {
-      await connection.execute(
-        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [
-          studentId,
-          "student",
-          decision === "completed"
-            ? "student_evaluation_completed"
-            : "student_evaluation_disputed",
-          "student_evaluation_masters",
-          evaluationId,
-          `Student ${decision === "completed" ? "confirmed" : "disputed"} their performance evaluation.`,
-          null,
-        ],
-      );
-    } catch (logError) {
-      reportError(
-        "Activity log insert failed (student evaluation response):",
-        logError,
-      );
-    }
-
-    await connection.commit();
-    invalidateEvaluationHistoryCache();
-    invalidateNotificationsCache();
-
-    invalidateActivityLogsCache();
-
-    const message =
-      decision === "completed"
-        ? "Evaluation verified successfully! Your internship grades are now officially posted."
-        : "Evaluation disputed. This has been flagged for review.";
-
-    res.status(200).json({ success: true, message, status: newStatus });
-  } catch (error) {
-    if (connection) await connection.rollback();
-    reportError("Respond to student evaluation error:", error);
-    res.status(500).json({
-      success: false,
-      error: "Database transaction validation failed.",
-    });
-  } finally {
-    if (connection) connection.release();
-  }
-};
-
-export const restoreDisputedEvaluation = async (req, res) => {
-  const { id: studentId } = req.verifiedUser; // Security gate: student can only restore their own record
-  const { evaluationId } = req.params;
-
-  if (!evaluationId) {
-    return res.status(400).json({ error: "Evaluation ID is required." });
-  }
-
-  let connection;
-  try {
-    connection = await db.getConnection();
-    await connection.beginTransaction();
-
-    // 1. Verify the evaluation master belongs to this student and is currently disputed
-    const [evaluationCheck] = await connection.execute(
-      `SELECT m.status, ir.user_id 
-       FROM student_evaluation_masters m
-       INNER JOIN internship_records ir ON m.internship_record_id = ir.id
-       WHERE m.id = ?`,
-      [evaluationId],
-    );
-
-    if (evaluationCheck.length === 0) {
-      await connection.rollback();
-      return res.status(404).json({ error: "Evaluation record not found." });
-    }
-
-    if (evaluationCheck[0].user_id !== studentId) {
-      await connection.rollback();
-      return res.status(403).json({
-        error: "Unauthorized. You can only restore your own evaluation.",
-      });
-    }
-
-    if (evaluationCheck[0].status !== "disputed") {
-      await connection.rollback();
-      return res.status(400).json({
-        error: "Only a disputed evaluation can be restored.",
-      });
-    }
-
-    // 2. Flip status back to pending — the student can review and
-    // confirm/dispute it again from a clean slate
-    await connection.execute(
-      `UPDATE student_evaluation_masters SET status = 'pending' WHERE id = ?`,
-      [evaluationId],
-    );
-
-    // 3. Re-open the original notification so it shows as unread/pending
-    // again in whatever inbox surfaces it. Same fix as respondToStudentEvaluation:
-    // evaluationId belongs in link_uuid, and the type is 'evaluation_submitted'.
-    await connection.execute(
-      `UPDATE notifications SET is_read = 0 WHERE link_uuid = ? AND type = 'evaluation_submitted'`,
-      [evaluationId],
-    );
-
-    // Activity log is supplementary — isolated so a logging failure can
-    // never roll back or fail the actual restore.
-    try {
-      await connection.execute(
-        `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [
-          studentId,
-          "student",
-          "student_evaluation_restored",
-          "student_evaluation_masters",
-          evaluationId,
-          `Student restored their disputed evaluation back to pending.`,
-          null,
-        ],
-      );
-    } catch (logError) {
-      reportError(
-        "Activity log insert failed (student evaluation restored):",
-        logError,
-      );
-    }
-
-    await connection.commit();
-    invalidateEvaluationHistoryCache();
-    invalidateNotificationsCache();
-
-    invalidateActivityLogsCache();
-
-    res.status(200).json({
-      success: true,
-      message: "Evaluation restored to pending. You can review it again.",
-      status: "pending",
-    });
-  } catch (error) {
-    if (connection) await connection.rollback();
-    reportError("Restore disputed evaluation error:", error);
-    res.status(500).json({
-      success: false,
-      error: "Database transaction validation failed.",
-    });
-  } finally {
-    if (connection) connection.release();
-  }
-};
+export const restoreDisputedEvaluation = async (req, res) => res.status(403).json({ error: "Employer evaluations are confidential and do not require student confirmation." });
 
 export const reviewDisputedEvaluation = async (req, res) => {
   const { id: reviewerId, role } = req.verifiedUser; // Security gate: only staff can review
@@ -1060,118 +853,7 @@ export const reviewDisputedEvaluation = async (req, res) => {
   }
 };
 
-export const getDisputedStudentEvaluations = async (req, res) => {
-  const { id: studentId } = req.verifiedUser; // Security gate: only the student's own disputed records
-
-  const POINTS_PER_CRITERION = 5;
-
-  let connection;
-  try {
-    connection = await db.getConnection();
-
-    const query = `
-      SELECT 
-        m.id AS evaluation_id,
-        m.status AS evaluation_status,
-        m.other_remarks AS comments,
-        m.created_at AS submitted_date,
-        m.evaluated_by AS evaluator_id,
-        ir.company_name AS company,
-        CONCAT(up.first_name, ' ', up.last_name) AS evaluator,
-        c.category AS breakdown_label,
-        s.score AS breakdown_score
-      FROM student_evaluation_masters AS m
-      JOIN internship_records AS ir ON m.internship_record_id = ir.id
-      JOIN student_evaluation_scores AS s ON s.evaluation_master_id = m.id
-      JOIN student_evaluation_criteria AS c ON s.criterion_id = c.id
-      JOIN user_profiles AS up ON m.evaluated_by = up.user_id
-      WHERE ir.user_id = ? AND m.status = 'disputed'
-      ORDER BY m.created_at DESC, c.id ASC
-    `;
-
-    const [rows] = await connection.execute(query, [studentId]);
-
-    // 🛡️ Guard Clause: If nothing is disputed, return an empty list gracefully
-    if (!rows || rows.length === 0) {
-      return res.status(200).json({
-        success: true,
-        data: [],
-      });
-    }
-
-    const evaluationsGroup = {};
-    const categoryGroups = new Map();
-
-    rows.forEach((row) => {
-      const evalId = row.evaluation_id;
-
-      if (!evaluationsGroup[evalId]) {
-        const dateObj = new Date(row.submitted_date);
-
-        const formattedDate = dateObj.toLocaleDateString("en-US", {
-          month: "short",
-          day: "numeric",
-          year: "numeric",
-        });
-
-        const formattedPeriod = dateObj.toLocaleDateString("en-US", {
-          month: "long",
-          year: "numeric",
-        });
-
-        evaluationsGroup[evalId] = {
-          id: evalId,
-          type: "Performance Evaluation",
-          status:
-            row.evaluation_status.charAt(0).toUpperCase() +
-            row.evaluation_status.slice(1),
-          period: formattedPeriod,
-          evaluator: row.evaluator,
-          evaluator_id: row.evaluator_id,
-          company: row.company,
-          submittedDate: formattedDate,
-          comments: row.comments || "",
-          breakdown: [],
-        };
-        categoryGroups.set(evalId, new Map());
-      }
-
-      const categories = categoryGroups.get(evalId);
-      const existingCategory = categories.get(row.breakdown_label);
-
-      const currentScore = Number(row.breakdown_score);
-
-      if (existingCategory) {
-        existingCategory.score += currentScore;
-        existingCategory.max += POINTS_PER_CRITERION;
-      } else {
-        const category = {
-          label: row.breakdown_label,
-          score: currentScore,
-          max: POINTS_PER_CRITERION,
-        };
-        evaluationsGroup[evalId].breakdown.push(category);
-        categories.set(row.breakdown_label, category);
-      }
-    });
-
-    const evaluationsList = Object.values(evaluationsGroup);
-
-    return res.status(200).json({
-      success: true,
-      data: evaluationsList,
-    });
-  } catch (error) {
-    reportError("Get disputed student evaluations error:", error);
-    return res.status(500).json({
-      success: false,
-      error: "Failed to compile disputed evaluation records.",
-      details: error.message,
-    });
-  } finally {
-    if (connection) connection.release();
-  }
-};
+export const getDisputedStudentEvaluations = async (req, res) => res.status(403).json({ error: "Employer evaluations are confidential and do not require student confirmation." });
 
 export const getAllStudentEvaluations = async (req, res) => {
   const { id: studentId } = req.verifiedUser;
@@ -1181,31 +863,6 @@ export const getAllStudentEvaluations = async (req, res) => {
   let connection;
   try {
     connection = await db.getConnection();
-
-    // 1. Evaluations ABOUT the student, from their employer — only once confirmed
-    const receivedQuery = `
-      SELECT 
-        m.id AS evaluation_id,
-        m.other_remarks AS comments,
-        m.created_at AS submitted_date,
-        m.evaluated_by AS actor_id,
-        m.reviewed_by,
-        m.reviewed_at,
-        m.review_notes,
-        ir.company_name AS company,
-        CONCAT(up.first_name, ' ', up.last_name) AS actor_name,
-        CONCAT(reviewer_up.first_name, ' ', reviewer_up.last_name) AS reviewer_name,
-        c.category AS breakdown_label,
-        s.score AS breakdown_score
-      FROM student_evaluation_masters AS m
-      JOIN internship_records AS ir ON m.internship_record_id = ir.id
-      JOIN student_evaluation_scores AS s ON s.evaluation_master_id = m.id
-      JOIN student_evaluation_criteria AS c ON s.criterion_id = c.id
-      JOIN user_profiles AS up ON m.evaluated_by = up.user_id
-      LEFT JOIN user_profiles AS reviewer_up ON m.reviewed_by = reviewer_up.user_id
-      WHERE ir.user_id = ? AND m.status = 'completed'
-      ORDER BY m.created_at DESC, c.id ASC
-    `;
 
     // 2. Evaluations the student submitted ABOUT their supervisor —
     // this direction has no review step, so reviewer fields stay null
@@ -1228,7 +885,6 @@ export const getAllStudentEvaluations = async (req, res) => {
       ORDER BY m.created_at DESC, c.category ASC
     `;
 
-    const [receivedRows] = await connection.execute(receivedQuery, [studentId]);
     const [givenRows] = await connection.execute(givenQuery, [studentId]);
 
     function groupRows(rows, type, actorLabel) {
@@ -1296,14 +952,9 @@ export const getAllStudentEvaluations = async (req, res) => {
       return Object.values(group);
     }
 
-    const received = groupRows(
-      receivedRows,
-      "Performance Evaluation",
-      "employer",
-    );
     const given = groupRows(givenRows, "Supervisor Evaluation", "self");
 
-    const combined = [...received, ...given].sort(
+    const combined = [...given].sort(
       (a, b) => new Date(b.submittedDate) - new Date(a.submittedDate),
     );
 
@@ -1326,10 +977,10 @@ export const getAllStudentEvaluations = async (req, res) => {
 export const getStudentEvaluationForPrint = async (req, res) => {
   let connection;
   try {
-    const { id: studentId, role } = req.verifiedUser;
+    const { role } = req.verifiedUser;
     const { evaluationId } = req.params;
 
-    if (role !== "student") {
+    if (!["employer", "department_head", "admin"].includes(role)) {
       return res.status(403).json({ error: "Not authorized." });
     }
 
@@ -1337,7 +988,7 @@ export const getStudentEvaluationForPrint = async (req, res) => {
 
     const [headerRows] = await connection.execute(
       `SELECT 
-         sem.id, sem.other_remarks, sem.status, sem.created_at,
+         sem.id, sem.evaluated_by, sem.other_remarks, sem.status, sem.created_at,
          ir.company_name, ir.user_id AS record_owner_id,
          up.first_name, up.last_name,
          d.name AS department_name
@@ -1345,10 +996,11 @@ export const getStudentEvaluationForPrint = async (req, res) => {
        INNER JOIN internship_records ir ON ir.id = sem.internship_record_id
        INNER JOIN user_profiles up ON up.user_id = ir.user_id
        INNER JOIN student_academic_info sai ON sai.user_id = ir.user_id
+         AND sai.id = (SELECT MAX(latest.id) FROM student_academic_info latest WHERE latest.user_id = ir.user_id)
        INNER JOIN departments d ON d.id = sai.department_id
-       WHERE sem.id = ?
+       WHERE sem.id = ? AND ir.deleted_at IS NULL ${evaluationReadScope(req.verifiedUser, "sem").sql}
        LIMIT 1`,
-      [evaluationId],
+      [evaluationId, ...evaluationReadScope(req.verifiedUser, "sem").params],
     );
 
     if (headerRows.length === 0) {
@@ -1356,18 +1008,6 @@ export const getStudentEvaluationForPrint = async (req, res) => {
     }
 
     const header = headerRows[0];
-
-    // Only the student this evaluation is about can print it
-    if (header.record_owner_id !== studentId) {
-      return res.status(403).json({ error: "Not authorized." });
-    }
-
-    // Only confirmed (completed) evaluations can be printed
-    if (header.status !== "completed") {
-      return res.status(403).json({
-        error: "This evaluation is not yet confirmed and cannot be printed.",
-      });
-    }
 
     const [scoreRows] = await connection.execute(
       `SELECT sec.category, sec.criterion_name, ses.score

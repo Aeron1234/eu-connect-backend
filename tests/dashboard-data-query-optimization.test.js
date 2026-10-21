@@ -170,7 +170,7 @@ test("employer dashboard bounds interns to the first page and strips the interna
       : sql.includes("FROM internship_records ir") ? interns : jobs);
   assert.equal(res.statusCode, 200);
   assert.deepEqual(res.body, { success: true, stats: {
-    internshipPosts: 2, unreadAnnouncements: 1,
+    internshipPosts: 2,
     internsHandled: { current: 1, past: 1 }, documentsUploaded: 3,
   }, interns, internsPagination: { page: 1, pageSize: 5, total: 7, totalPages: 2 }, postedJobs: {
     jobs: [{ id: "p-1", position: "Developer" }, { id: "p-2", position: "Designer" }],
