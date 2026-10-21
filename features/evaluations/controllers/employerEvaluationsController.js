@@ -1,3 +1,4 @@
+import { assertNoActiveEvaluation, evaluationDeleteHandler } from "../evaluationLifecycle.js";
 import { reportError } from "../../../config/errorTracking.js";
 import { invalidateEvaluationHistoryCache } from "../../../config/cache/evaluationHistoryCache.js";
 import { invalidateActivityLogsCache } from "../../../config/cache/activityLogsCache.js";
@@ -96,7 +97,7 @@ export const createEmployerEvaluation = async (req, res) => {
     await connection.beginTransaction();
 
     const [records] = await connection.execute(
-      `SELECT id, employer_id, company_name FROM internship_records WHERE user_id = ? AND status = 'ongoing' LIMIT 1 FOR UPDATE`,
+      `SELECT id, employer_id, company_name FROM internship_records WHERE user_id = ? AND status = 'ongoing' AND deleted_at IS NULL LIMIT 1 FOR UPDATE`,
       [studentId],
     );
 
@@ -116,6 +117,8 @@ export const createEmployerEvaluation = async (req, res) => {
           "You don't have an accepted supervisor yet, so there's no one to evaluate.",
       });
     }
+
+    await assertNoActiveEvaluation(connection, "employer_evaluation_masters", internship.id);
 
     const evaluationPeriod = new Date().toISOString().slice(0, 7); // 'YYYY-MM', just a display label now
 
@@ -194,6 +197,8 @@ export const createEmployerEvaluation = async (req, res) => {
     });
   } catch (error) {
     if (connection) await connection.rollback();
+    if (error?.status) return res.status(error.status).json({ error: error.message, code: error.code });
+    if (error?.code === "ER_DUP_ENTRY") return res.status(409).json({ error: "An active evaluation already exists for this internship." });
     reportError("Create employer evaluation error:", error);
     res.status(500).json({
       success: false,
@@ -218,7 +223,7 @@ export const getStudentSubmittedEvaluations = async (req, res) => {
        FROM employer_evaluation_masters m
        INNER JOIN internship_records ir ON m.internship_record_id = ir.id
        LEFT JOIN user_profiles up ON m.employer_id = up.user_id
-       WHERE m.student_id = ?
+       WHERE m.student_id = ? AND m.deleted_at IS NULL
        ORDER BY m.created_at DESC`,
       [studentId],
     );
@@ -286,3 +291,5 @@ export const getStudentSubmittedEvaluations = async (req, res) => {
     if (connection) connection.release();
   }
 };
+
+export const deleteEmployerEvaluation = evaluationDeleteHandler({ table: 'employer_evaluation_masters', scoresTable: 'employer_evaluation_scores', ownerColumn: 'student_id', authorRole: 'student' });

@@ -17,14 +17,14 @@ after(async () => {
   }
   await db.end();
 });
-const payload = { code: "Ok", routes: [{ distance: 30000, duration: 1800, geometry: { coordinates: [[121.423, 13.931], [121.6, 13.94]] } }] };
+const payload = { code: "Ok", routes: [{ distance: 30000, duration: 1800, geometry: { coordinates: [[121.4312752, 13.9304557], [121.6, 13.94]] } }] };
 const response = () => ({ statusCode: 200, set() {}, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } });
 
 test("routing uses geographic coordinate order, shares concurrent requests, and caches successful road geometry", async () => {
   let calls = 0;
   const fetcher = async (url, options) => {
     calls++;
-    assert.match(url.pathname, /route\/v1\/driving\/121\.423,13\.931;121\.6,13\.94$/);
+    assert.match(url.pathname, /route\/v1\/driving\/121\.4312752,13\.9304557;121\.6,13\.94$/);
     assert.equal(url.searchParams.get("geometries"), "geojson");
     assert.equal(url.searchParams.get("steps"), "false"); assert(options.signal);
     assert(!url.toString().includes("student"));
@@ -36,7 +36,7 @@ test("routing uses geographic coordinate order, shares concurrent requests, and 
   assert.equal(first.geometry.type, "LineString"); assert.equal(first.distance_meters, 30000);
   assert.equal(first.duration_seconds, 1800);
   await drivingRoute(destination, { fetcher }); assert.equal(calls, 1);
-  const url = new URL(first.google_maps_url); assert.equal(url.searchParams.get("origin"), "13.931,121.423");
+  const url = new URL(first.google_maps_url); assert.equal(url.searchParams.get("origin"), "13.9304557,121.4312752");
   assert.equal(url.searchParams.get("destination"), "13.94,121.6");
 });
 
@@ -118,7 +118,7 @@ test("public browser preparation verifies the current record without contacting 
   globalThis.fetch = async () => { upstream++; throw Error("Node cannot connect"); };
   const res = response(); await getMapCompanyRoute({ verifiedUser: { role: "admin" }, params: { internshipId: "record" }, query: { prepare: "1" } }, res);
   assert.equal(res.statusCode, 200); assert.equal(res.body.client_route, true); assert.equal(reads, 1); assert.equal(upstream, 0);
-  assert.deepEqual(res.body.destination, { lat: 14.5995, lng: 120.9842 }); assert.equal(res.body.origin.lat, 13.931);
+  assert.deepEqual(res.body.destination, { lat: 14.5995, lng: 120.9842 }); assert.equal(res.body.origin.lat, 13.9304557);
 });
 
 test("private providers stay server-side even if browser preparation was requested", async () => {

@@ -268,9 +268,14 @@ export const createAnnouncement = async (req, res) => {
 
     const isDepartmentCategory = categoryRows[0].name === "Department";
 
-    if (role === "department_head" && req.verifiedUser.department_code !== "REG" && categoryRows[0].name === "General") {
-      await connection.rollback();
-      return res.status(403).json({ error: "Only admins and registrar department heads can post General announcements." });
+    if (role === "department_head") {
+      const allowedCategory = req.verifiedUser.department_code === "REG" ? "General" : "Department";
+      if (categoryRows[0].name !== allowedCategory) {
+        await connection.rollback();
+        return res.status(403).json({ error: allowedCategory === "General"
+          ? "Registrar department heads can only post General announcements."
+          : "Department heads can only post Department announcements. General is reserved for admins and registrar department heads." });
+      }
     }
 
     if (role === "admin" && categoryRows[0].name !== "General") {
@@ -490,9 +495,14 @@ export const updateAnnouncement = async (req, res) => {
 
     const willBeDepartmentCategory = newCategoryName === "Department";
 
-    if (role === "department_head" && req.verifiedUser.department_code !== "REG" && newCategoryName === "General") {
-      await connection.rollback();
-      return res.status(403).json({ error: "Only admins and registrar department heads can post General announcements." });
+    if (role === "department_head") {
+      const allowedCategory = req.verifiedUser.department_code === "REG" ? "General" : "Department";
+      if (newCategoryName !== allowedCategory) {
+        await connection.rollback();
+        return res.status(403).json({ error: allowedCategory === "General"
+          ? "Registrar department heads can only post General announcements."
+          : "Department heads can only post Department announcements. General is reserved for admins and registrar department heads." });
+      }
     }
 
     // Admin has no department_id — same reasoning as createAnnouncement.

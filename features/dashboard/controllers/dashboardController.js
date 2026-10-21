@@ -655,7 +655,7 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
              GROUP BY user_id
            ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
          ) AS sai ON ir.user_id = sai.user_id
-         WHERE sai.department_id = ? AND sem.status = 'completed'
+         WHERE sai.department_id = ? AND sem.deleted_at IS NULL
          GROUP BY sec.category
          ORDER BY MIN(sec.id) ASC`,
         [departmentId],
@@ -690,7 +690,7 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
              GROUP BY user_id
            ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
          ) AS sai ON eem.student_id = sai.user_id
-         WHERE sai.department_id = ?
+         WHERE sai.department_id = ? AND eem.deleted_at IS NULL
          GROUP BY eec.category
          ORDER BY eec.category ASC`,
         [departmentId],

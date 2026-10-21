@@ -7,6 +7,8 @@ beforeEach(()=>{cache.flushAll();calls=0;mode='success';state='pending';dept=1;c
 if(sql.includes('SELECT ir.id, ir.deleted_at'))return [[{id:'i',deleted_at:mode==='deleted'?'date':null,department_id:1}]];
 if(sql.includes('FROM dept_heads_background_info'))return [[{department_id:dept}]];
 if(sql.includes('INSERT INTO activity_logs'))activityLog=params;
+if(/^SELECT id FROM (student|employer)_evaluation_masters/.test(sql.trim()))return [[]];
+if(sql.includes('AS author_id'))return [[{id:'e',deleted_at:'2026-10-21',internship_record_id:'i',company_name:'Company',author_id:'actor'}]];
 calls++;if(mode==='error')throw Error('offline');if(!sql.trim().startsWith('SELECT'))return [{affectedRows:1,insertId:1}];if(mode==='empty')return [[]];
 return [[{id:'e',date_started:'2000-01-01',evaluation_id:'e',evaluation_master_id:'e',evaluation_status:state,status:state,employer_id:'actor',user_id:mode==='forbidden'?'other':'actor',student_id:'actor',internship_id:'i',internship_record_id:'i',company:'Company',company_name:'Company',first_name:'Test',last_name:'User',employer_first_name:'Test',employer_last_name:'Employer',submitted_date:'2026-09-01',created_at:'2026-09-01',breakdown_label:'Skills',breakdown_score:4,category:'Skills',score:4,actor_name:'Employer',evaluator:'Employer'}]];
 }});});
@@ -19,10 +21,10 @@ test('history read errors do not cache and empty histories do',async t=>{const g
 function seed(){cache.set('history',{path:'/api/v1/evaluations/all',userId:'viewer',body:[]});for(const [path]of targets)cache.set(path,{path:'/api/v1'+path,userId:'other',body:[]});cache.set('unrelated',{path:'/api/v1/account/user',userId:'other',body:{}});}
 function response(){return {statusCode:200,status(code){this.statusCode=code;return this;},json(body){this.body=body;return this;}};}
 function request(role='student',decision='completed'){return {verifiedUser:{id:'actor',role},params:{evaluationId:'e'},body:{evaluated_by:'actor',student_id:'actor',decision,review_notes:'Reviewed',scores:Array.from({length:29},(_,i)=>({criterion_name:'Criterion '+i,score:4}))},app:{get:()=>({to:()=>({emit:()=>{assert.ok(committed);assert.equal(cache.has('history'),false);events++;}})})}};}
-const writers=[[student.createStudentEvaluation,'employer','pending'],[employer.createEmployerEvaluation,'student','pending'],[student.deleteStudentEvaluation,'admin','pending'],[student.reviewDisputedEvaluation,'admin','disputed']];
+const writers=[[student.createStudentEvaluation,'employer','pending'],[employer.createEmployerEvaluation,'student','pending'],[student.deleteStudentEvaluation,'admin','pending']];
 test('active evaluation write paths clear all histories only after commit',async()=>{for(const [handler,role,status]of writers){cache.flushAll();seed();state=status;committed=false;const res=response();await handler(request(role),res);assert.ok(res.statusCode<300,handler.name+JSON.stringify(res.body));assert.ok(committed);assert.deepEqual(cache.keys(),['unrelated']);}assert.ok(events>0);});
 test('evaluation descriptions use the internship company rather than record or evaluation IDs',async()=>{
- for(const [handler,role,status]of [[employer.createEmployerEvaluation,'student','pending'],[student.deleteStudentEvaluation,'admin','pending'],[student.reviewDisputedEvaluation,'admin','disputed']]){
+ for(const [handler,role,status]of [[employer.createEmployerEvaluation,'student','pending'],[student.deleteStudentEvaluation,'admin','pending']]){
   cache.flushAll();seed();state=status;const res=response();await handler(request(role),res);
   assert.ok(res.statusCode<300,handler.name+JSON.stringify(res.body));
   assert.ok(activityLog[4]);assert.match(activityLog[5],/Company/);

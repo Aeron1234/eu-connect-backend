@@ -93,7 +93,7 @@ test("submission is completed immediately, notifies only matching department hea
     const res = response(), log = console.log; console.log = () => {};
     try { await student.createStudentEvaluation(req, res); } finally { console.log = log; }
     assert.equal(res.statusCode, failCommit ? 500 : 201);
-    assert(writes.some(sql => sql.includes("VALUES (?, ?, ?, ?, 'completed')")));
+    assert(writes.some(sql => sql.includes("INSERT INTO student_evaluation_masters") && !sql.includes("status")));
     assert.deepEqual(notifications.map(row => row[0]), ["head-a", "head-b"]);
     assert(notifications.every(row => row[4] === "record-uuid" && row[5] === notifications[0][5]));
     assert.deepEqual(rooms, failCommit ? [] : ["user-head-a", "user-head-b"]);

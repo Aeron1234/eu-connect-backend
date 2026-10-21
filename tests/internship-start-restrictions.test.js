@@ -25,6 +25,7 @@ function fixture({ dateStarted = "2000-01-01", status = "ongoing", owner = "stud
     async beginTransaction() {}, async commit() { state.commits++; },
     async rollback() { state.rollbacks++; }, release() { state.releases++; },
     async execute(sql, params) {
+      if (/^SELECT id FROM student_evaluation_masters/.test(sql.trim())) return [[]];
       if (sql.includes("FROM internship_records")) {
         state.reads.push({ sql, params });
         assert.deepEqual(params, ["internship", "student"]);

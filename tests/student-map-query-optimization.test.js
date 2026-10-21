@@ -47,7 +47,7 @@ test("student map streams joined rows into the same ordered location and region 
     assert.match(sql, /WHERE ir\.status = 'ongoing' AND ir\.deleted_at IS NULL/);
     assert.match(sql, /ORDER BY ir\.company_name ASC/);
     assert.deepEqual(res.body, {
-      origin: { lat: 13.931, lng: 121.423, label: "MSEUF–Candelaria" },
+      origin: { lat: 13.9304557, lng: 121.4312752, label: "MSEUF–Candelaria" },
       companies: [
         { company_name: "Acme", company_address: "First", lat: "14.123456", lon: "121.000001",
           city_name: "Lucena City", province_name: "Quezon", region_id: 2, region_name: "Zulu", intern_count: 2, interns: [

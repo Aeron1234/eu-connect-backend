@@ -1,3 +1,4 @@
+import { evaluationEligibilityHandler } from "../evaluationLifecycle.js";
 import { cacheRoute } from "../../../middleware/cache-middleware.js";
 import express from "express";
 import multer from "multer";
@@ -11,6 +12,7 @@ import {
 } from "../../../middleware/rateLimiter.js";
 import {
   createEmployerEvaluation,
+  deleteEmployerEvaluation,
   getEvaluationCriterias,
   getPendingStudentEvaluations,
   getStudentSubmittedEvaluations,
@@ -50,5 +52,8 @@ employerEvaluationsRoutes.get(
   generalLimiter,
   getPendingStudentEvaluations,
 );
+
+employerEvaluationsRoutes.delete('/evaluations/employer/:evaluationId', verifyUser, verifyRole(['student', 'department_head', 'admin']), mediumLimiter, deleteEmployerEvaluation);
+employerEvaluationsRoutes.get('/evaluations/eligibility', verifyUser, verifyRole(['student']), generalLimiter, evaluationEligibilityHandler('supervisor'));
 
 export default employerEvaluationsRoutes;

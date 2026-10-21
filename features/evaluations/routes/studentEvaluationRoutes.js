@@ -1,3 +1,4 @@
+import { evaluationEligibilityHandler } from "../evaluationLifecycle.js";
 import { cacheRoute } from "../../../middleware/cache-middleware.js";
 import express from "express";
 import { verifyUser } from "../../../middleware/verifyUser.js";
@@ -61,7 +62,7 @@ studentEvaluationRoutes.post(
 studentEvaluationRoutes.delete(
   "/student-evaluation/:evaluationId",
   verifyUser,
-  verifyRole(["employer", "admin"]),
+  verifyRole(["employer", "department_head", "admin"]),
   mediumLimiter,
   deleteStudentEvaluation,
 );
@@ -114,5 +115,7 @@ studentEvaluationRoutes.get(
   generalLimiter,
   getStudentEvaluationForPrint,
 );
+
+studentEvaluationRoutes.get('/student-evaluation/eligibility/:studentId', verifyUser, verifyRole(['employer']), generalLimiter, evaluationEligibilityHandler('performance'));
 
 export default studentEvaluationRoutes;

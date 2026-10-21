@@ -2,7 +2,7 @@
 // Department membership comes from current database rows, not token claims.
 export function evaluationReadScope(viewer, alias = "m") {
   if (viewer?.role === "admin") return { sql: "", params: [] };
-  if (viewer?.role === "employer") return { sql: `AND ${alias}.evaluated_by = ?`, params: [viewer.id] };
+  if (viewer?.role === "employer") return { sql: `AND ${alias}.evaluated_by = ? AND ${alias}.deleted_at IS NULL`, params: [viewer.id] };
   if (viewer?.role === "department_head") return {
     sql: `AND EXISTS (
       SELECT 1 FROM dept_heads_background_info evaluation_head

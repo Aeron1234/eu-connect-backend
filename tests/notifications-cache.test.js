@@ -219,19 +219,19 @@ test("supervisor acceptance/rejection invalidates before socket delivery; rollba
   } finally { console.error = log; }
 });
 
-test("evaluation deletion emits only after commit/invalidation, never on rollback", async () => {
+test("evaluation purge invalidates notifications only after commit and does not broadcast private scores", async () => {
   const log = console.error;
   try {
     console.error = () => {};
     for (const failed of [false, true]) {
       cache.flushAll(); seed(); let committed = false; let emitted = 0;
-      connection.execute = async sql => sql.trim().startsWith("SELECT") ? [[{ id: "head", evaluation_status: "pending", employer_id: "bob", student_id: "alice", internship_id: 1, company: "Company" }]] : [{ affectedRows: 1 }];
+      connection.execute = async sql => sql.trim().startsWith("SELECT") ? [[{ id: "head", deleted_at: "2026-10-21", author_id: "bob", employer_id: "bob", student_id: "alice", internship_id: 1, company: "Company" }]] : [{ affectedRows: 1 }];
       connection.commit = async () => { if (failed) throw new Error("commit failed"); committed = true; };
       const io = { to() { return { emit() { assert.ok(committed); assert.equal(cache.has("alice1"), false); emitted++; } }; } };
       const res = response();
       await deleteStudentEvaluation({ verifiedUser: { id: "admin", role: "admin" }, params: { evaluationId: "evaluation" }, app: { get: () => io } }, res);
       assert.equal(res.statusCode, failed ? 500 : 200);
-      assert.equal(emitted, failed ? 0 : 2);
+      assert.equal(emitted, 0);
       assert.equal(cache.has("alice1"), failed);
     }
   } finally { console.error = log; }

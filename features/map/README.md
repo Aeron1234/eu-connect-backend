@@ -9,12 +9,12 @@ The default provider is the FOSSGIS public OSRM car service. This is a shared, b
 Optional backend environment settings:
 
 ```text
-MAP_ORIGIN_LAT=13.931
-MAP_ORIGIN_LNG=121.423
+MAP_ORIGIN_LAT=13.9304557
+MAP_ORIGIN_LNG=121.4312752
 MAP_ROUTING_BASE_URL=https://routing.openstreetmap.de/routed-car/
 ```
 
-The default starting coordinates reuse this project's existing Candelaria campus pin. Confirm the desired entrance before relying on precise arrival estimates. Both origin settings must be valid coordinates; otherwise the existing default is used. The routing base URL must be HTTPS and expose an OSRM-compatible `route/v1/driving/` API. It is controlled by the backend environment, never by request input. A dedicated provider is appropriate if usage grows or multiple API workers are deployed: the default public provider's rate limit applies across all workers sharing an outbound IP.
+The default starting coordinates are the MSEUF-CI campus location supplied by the project owner: latitude 13.9304557, longitude 121.4312752. Both origin settings must be valid coordinates; otherwise the existing default is used. The routing base URL must be HTTPS and expose an OSRM-compatible `route/v1/driving/` API. It is controlled by the backend environment, never by request input. A dedicated provider is appropriate if usage grows or multiple API workers are deployed: the default public provider's rate limit applies across all workers sharing an outbound IP.
 
 Display the route attribution and the OpenStreetMap report-a-map-issue link. Estimated travel time is not live traffic, a transport timetable or a guarantee that all island destinations have a connected driving route.
 

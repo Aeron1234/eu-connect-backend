@@ -1,6 +1,6 @@
 import { createRouteProviderRequester } from "./routeProviderRequest.js";
 
-const DEFAULT_ORIGIN = { lat: 13.931, lng: 121.423, label: "MSEUF–Candelaria" };
+const DEFAULT_ORIGIN = { lat: 13.9304557, lng: 121.4312752, label: "MSEUF–Candelaria" };
 const TTL = 24 * 60 * 60_000;
 const MAX_CACHE = 200;
 const cache = new Map();

@@ -337,7 +337,8 @@ test("announcement edits and deletes log the persisted title while keeping the t
 
 test("general-to-department edit evicts previously visible content before socket refresh", async () => {
   seed(); categoryName = "Department"; const res = response();
-  await announcements.updateAnnouncement(request({ category_id: 2 }), res);
+  const req = request({ category_id: 2 }); req.verifiedUser.department_code = "CCS";
+  await announcements.updateAnnouncement(req, res);
   assert.equal(res.statusCode, 200); assert.equal(cache.has("feed-a"), false); assert.equal(emitted, 1);
 });
 
@@ -478,4 +479,31 @@ test("failed reads are not cached; null categories and empty feeds are cached", 
   assert.equal(await (await get("categories")).json(), null);
   assert.deepEqual((await (await get("history")).json()).regular, []);
   const before = calls; await get("history"); await get("categories"); assert.equal(calls, before);
+});
+
+test("registrar heads can only create or edit General; regular heads can only use Department", async () => {
+  for (const handler of [announcements.createAnnouncement, announcements.updateAnnouncement]) {
+    for (const departmentCode of ["REG", "CCS"]) {
+      for (const name of ["General", "Department", "Other"]) {
+        cache.flushAll(); seed(); categoryName = name; announcementWrite = null; committed = false; emitted = 0;
+        const req = request({ category_id: 2 }); req.verifiedUser.department_code = departmentCode;
+        const res = response(); await handler(req, res);
+        const allowed = name === (departmentCode === "REG" ? "General" : "Department");
+        if (allowed) { assert.ok(res.statusCode < 300); assert.ok(announcementWrite); assert.equal(committed, true); }
+        else { assert.equal(res.statusCode, 403); assert.equal(announcementWrite, null); assert.equal(committed, false); assert.equal(emitted, 0); assert.equal(cache.has("feed-a"), true); }
+      }
+    }
+  }
+});
+
+test("a registrar cannot retain a legacy Department announcement by omitting category_id", async () => {
+  cache.flushAll(); seed(); announcementWrite = null;
+  const original = connection.execute;
+  connection.execute = async (sql, params) => {
+    if (sql.includes("FROM announcements a") && sql.includes("FOR UPDATE")) return [[{ category_id: 2, category_name: "Department", title: "Old", ...existingEventDates }]];
+    return original(sql, params);
+  };
+  const req = request(); delete req.body.category_id;
+  const res = response(); await announcements.updateAnnouncement(req, res);
+  assert.equal(res.statusCode, 403); assert.equal(announcementWrite, null); assert.equal(committed, false);
 });

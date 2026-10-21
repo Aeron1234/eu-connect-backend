@@ -1517,12 +1517,10 @@ export const getInternshipRecordEvaluations = async (req, res) => {
 
     const POINTS_PER_CRITERION = 5;
 
-    // 1. Evaluations ABOUT the student, from their employer — now fetched
-    // regardless of status (pending, completed, or disputed)
+    // Staff retain the complete evaluation history, including deleted entries.
     const receivedQuery = `
       SELECT 
-        m.id AS evaluation_id,
-        m.status AS status,
+        m.id AS evaluation_id, m.deleted_at, m.internship_record_id,
         m.other_remarks AS comments,
         m.created_at AS submitted_date,
         m.evaluated_by AS actor_id,
@@ -1551,7 +1549,7 @@ export const getInternshipRecordEvaluations = async (req, res) => {
         m.id AS evaluation_id,
         m.other_remarks AS comments,
         m.created_at AS submitted_date,
-        m.employer_id AS actor_id,
+        m.student_id AS actor_id,
         ir.company_name AS company,
         CONCAT(student_up.first_name, ' ', student_up.last_name) AS actor_name,
         c.category AS breakdown_label,
@@ -1570,20 +1568,9 @@ export const getInternshipRecordEvaluations = async (req, res) => {
     ]);
     const [givenRows] = await connection.execute(givenQuery, [internshipId]);
 
-    // Maps the raw enum value to a display-friendly label
-    function formatStatus(rawStatus) {
-      switch (rawStatus) {
-        case "completed":
-          return "Submitted";
-        case "disputed":
-          return "Disputed";
-        case "pending":
-        default:
-          return "Pending";
-      }
-    }
 
-    function groupRows(rows, type, actorLabel, { useRowStatus = false } = {}) {
+
+    function groupRows(rows, type, actorLabel) {
       const group = {};
       const categoryGroups = new Map();
 
@@ -1607,7 +1594,9 @@ export const getInternshipRecordEvaluations = async (req, res) => {
           group[evalId] = {
             id: evalId,
             type,
-            status: useRowStatus ? formatStatus(row.status) : "Confirmed",
+            status: row.deleted_at ? "Deleted" : "Submitted",
+            deleted_at: row.deleted_at || null,
+            internship_record_id: row.internship_record_id,
             period: formattedPeriod,
             evaluator:
               actorLabel === "self"
@@ -1652,7 +1641,7 @@ export const getInternshipRecordEvaluations = async (req, res) => {
       receivedRows,
       "Performance Evaluation",
       "employer",
-      { useRowStatus: true },
+
     );
     const given = groupRows(givenRows, "Supervisor Evaluation", "self");
 
