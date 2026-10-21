@@ -4,6 +4,7 @@ import { weeklyNarrativesCacheHit } from "../../../middleware/weekly-narratives-
 import { db } from "../../../config/db.js";
 import { verifyRecordAccess } from "../../../config/helpers.js";
 import { assertInternshipStarted } from "../../../config/internshipStart.js";
+import { parseNarrativeDateRange } from "../narrativeDates.js";
 
 async function withNarrativeWrite(userId, internshipId, write) {
   const connection = await db.getConnection();
@@ -55,7 +56,9 @@ export const getWeeklyNarrativesForPrint = async (req, res) => {
     if (!records.length) return res.status(404).json({ error: "Internship record not found." });
 
     const [narratives] = await db.execute(
-      `SELECT week_number, title, narrative, created_at
+      `SELECT week_number, title, narrative, created_at,
+              DATE_FORMAT(date_from, '%Y-%m-%d') AS date_from,
+              DATE_FORMAT(date_to, '%Y-%m-%d') AS date_to
        FROM weekly_narratives
        WHERE internship_id = ? AND user_id = ?
        ORDER BY week_number ASC, created_at ASC, id ASC`,
@@ -108,6 +111,8 @@ export const getAllWeeklyNarratives = async (req, res) => {
     const narrativesQuery = `
       SELECT wn.id, wn.user_id, wn.internship_id, wn.week_number, wn.title,
              wn.narrative, wn.created_at, wn.updated_at,
+             DATE_FORMAT(wn.date_from, '%Y-%m-%d') AS date_from,
+             DATE_FORMAT(wn.date_to, '%Y-%m-%d') AS date_to,
              stats.total_entries, stats.latest_week, stats.total_words,
              stats.entries_this_week
       FROM weekly_narratives wn
@@ -186,11 +191,12 @@ export const createWeeklyNarrative = async (req, res) => {
       });
     }
 
+    const dates = parseNarrativeDateRange(req.body);
     await withNarrativeWrite(userId, internshipId, async connection => {
       const [result] = await connection.execute(
-        `INSERT INTO weekly_narratives (user_id, internship_id, week_number, title, narrative)
-          VALUES (?, ?, ?, ?, ?)`,
-        [userId, internshipId, Number(week_number), title, narrative.trim()],
+        `INSERT INTO weekly_narratives (user_id, internship_id, week_number, title, narrative, date_from, date_to)
+          VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [userId, internshipId, Number(week_number), title, narrative.trim(), dates.from, dates.to],
       );
       if (result.affectedRows === 0) throw Object.assign(new Error("Posting narrative failed."), { status: 400 });
     });
@@ -229,6 +235,7 @@ export const editWeeklyNarrative = async (req, res) => {
       });
     }
 
+    const dates = parseNarrativeDateRange(req.body);
     await withNarrativeWrite(userId, internshipId, async connection => {
       const [result] = await connection.execute(
         `
@@ -237,6 +244,8 @@ export const editWeeklyNarrative = async (req, res) => {
           week_number = COALESCE(?, week_number),
           title = COALESCE(?, title),
           narrative = COALESCE(?, narrative),
+          date_from = ?,
+          date_to = ?,
           updated_at = NOW()
         WHERE id = ? AND user_id = ? AND internship_id = ?
         `,
@@ -244,6 +253,8 @@ export const editWeeklyNarrative = async (req, res) => {
           week_number || null,
           title.trim() || null,
           narrative.trim() || null,
+          dates.from,
+          dates.to,
           narrativeId,
           userId,
           internshipId,
@@ -333,6 +344,8 @@ export const getSearchedStudentWeeklyNarratives = async (req, res) => {
         wn.week_number,
         wn.title,
         wn.narrative,
+        DATE_FORMAT(wn.date_from, '%Y-%m-%d') AS date_from,
+        DATE_FORMAT(wn.date_to, '%Y-%m-%d') AS date_to,
         wn.created_at,
         wn.updated_at,
         (
@@ -404,7 +417,9 @@ export const getInternshipRecordWeeklyNarratives = async (req, res) => {
     if (weeklyNarrativesCacheHit(req, res)) return;
 
     const [rows] = await connection.execute(
-      `SELECT id, week_number, title, narrative, created_at, updated_at
+      `SELECT id, week_number, title, narrative, created_at, updated_at,
+              DATE_FORMAT(date_from, '%Y-%m-%d') AS date_from,
+              DATE_FORMAT(date_to, '%Y-%m-%d') AS date_to
        FROM weekly_narratives
        WHERE internship_id = ?
        ORDER BY week_number ASC

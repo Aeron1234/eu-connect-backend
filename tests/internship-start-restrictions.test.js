@@ -17,7 +17,7 @@ after(async () => {
 });
 const response = () => ({ statusCode: 200, status(code) { this.statusCode = code; return this; }, set() { return this; }, json(body) { this.body = body; return this; } });
 const paragraphs = { organization_experience: "Organization", work_schedule: "Schedule", memorable_moment: "Moment", difficulties_solutions: "Solutions" };
-const request = (method = "POST") => ({ method, verifiedUser: { id: "student", role: "student" }, params: { internshipId: "internship", narrativeId: "narrative" }, query: { internshipId: "internship" }, body: { ...paragraphs, week_number: 1, title: "Week", narrative: "Activities" } });
+const request = (method = "POST") => ({ method, verifiedUser: { id: "student", role: "student" }, params: { internshipId: "internship", narrativeId: "narrative" }, query: { internshipId: "internship" }, body: { ...paragraphs, week_number: 1, title: "Week", narrative: "Activities", date_from: "2026-10-19", date_to: "2026-10-23" } });
 
 function fixture({ dateStarted = "2000-01-01", status = "ongoing", owner = "student", deleted = false, existing = null } = {}) {
   const state = { writes: [], reads: [], commits: 0, rollbacks: 0, releases: 0 };
