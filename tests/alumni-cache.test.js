@@ -34,6 +34,7 @@ beforeEach(() => {
       if (mode === "read-error") throw new Error("offline");
       if (!sql.trim().startsWith("SELECT")) return [{ affectedRows: 1, insertId: 1 }];
       if (mode === "empty") return sql.includes("COUNT(DISTINCT") ? [[{ total: 0 }]] : [[]];
+      if (sql.includes("SELECT DISTINCT d.id")) return [[{ id: 1, name: "Computing", code: "CCS" }, { id: 2, name: "Business", code: "CBA" }]];
       if (sql.includes("SELECT DISTINCT academic_year")) return [[{ academic_year: "2025-2026" }]];
       if (sql.includes("COUNT(DISTINCT")) return [[{ total: 1 }]];
       if (sql.includes("AS normalized_name")) return mode === "out-of-range" ? [[]] : [[{ normalized_name: "company", company_name: "Company", total: 1 }]];
@@ -89,12 +90,12 @@ test("alumni grouping and merged directory cache for sixty seconds", async (t) =
 
 test("year/search/page/limit and user/context keys remain separate with role checks", async (t) => {
   const get = await client(t);
-  for (const query of ["", "?academicYear=2025-2026", "?search=Company", "?page=2", "?limit=20"]) {
-    const before = calls; assert.equal((await get("alumni-internships" + query)).status, 200); assert.equal(calls, before + 3);
-    await get("alumni-internships" + query); assert.equal(calls, before + 3);
+  for (const query of ["", "?academicYear=2025-2026", "?search=Company", "?page=2", "?limit=20", "?departmentId=1", "?departmentId=2"]) {
+    const before = calls; assert.equal((await get("alumni-internships" + query)).status, 200); assert.equal(calls, before + 4);
+    await get("alumni-internships" + query); assert.equal(calls, before + 4);
   }
-  let before = calls; await get("alumni-internships", "student", "other"); assert.equal(calls, before + 3);
-  before = calls; await get("alumni-internships", "student", "viewer", 2); assert.equal(calls, before + 3);
+  let before = calls; await get("alumni-internships", "student", "other"); assert.equal(calls, before + 4);
+  before = calls; await get("alumni-internships", "student", "viewer", 2); assert.equal(calls, before + 4);
   for (const path of ["alumni-internships", "company-directory"]) {
     assert.equal((await get(path, "employer")).status, 403); assert.equal((await get(path, "student", null)).status, 401);
   }
@@ -108,18 +109,18 @@ test("group page carries its total and empty out-of-range pages count without lo
   const first = await (await get("alumni-internships?search=Company&limit=5")).json();
   assert.equal(first.pagination.total, 1);
   assert.equal(first.pagination.totalPages, 1);
-  assert.equal(queries.length, 3);
-  assert.match(queries[1].sql, /COUNT\(\*\) OVER\(\) AS total/);
+  assert.equal(queries.length, 4);
+  assert.match(queries[2].sql, /COUNT\(\*\) OVER\(\) AS total/);
   assert.ok(!queries.some(({ sql }) => sql.includes("COUNT(DISTINCT")));
-  assert.deepEqual(queries[1].params.slice(-2), [5, 0]);
+  assert.deepEqual(queries[2].params.slice(-2), [5, 0]);
 
   queries.length = 0;
   mode = "out-of-range";
   const beyond = await (await get("alumni-internships?page=3&limit=5")).json();
   assert.deepEqual(beyond.data, []);
   assert.deepEqual(beyond.pagination, { page: 3, limit: 5, total: 1, totalPages: 1 });
-  assert.equal(queries.length, 3);
-  assert.ok(queries[2].sql.includes("COUNT(DISTINCT"));
+  assert.equal(queries.length, 4);
+  assert.ok(queries[3].sql.includes("COUNT(DISTINCT"));
   assert.ok(!queries.some(({ sql }) => sql.includes("SELECT air.id, air.alumni_name")));
 });
 
@@ -259,4 +260,62 @@ test("finished internship notifications persist and emit the record UUID after c
     assert.equal(payload.link_uuid, internshipId);
     assert.equal("link" in payload, false);
   }
+});
+
+test("department, year and search filters scope company pages and every nested alumnus", async (t) => {
+  const get = await client(t);
+  const queries = [];
+  const execute = connection.execute;
+  connection.execute = async (sql, params) => {
+    queries.push({ sql, params });
+    if (sql.includes("SELECT air.id, air.alumni_name")) return [[{
+      id: "business-alumnus", company_name: "Company", company_address: "City", industry: "IT",
+      alumni_name: "Graduate", course_id: 2, course_name: "Business", academic_year: "2025-2026", department_id: 2,
+    }]];
+    return execute(sql, params);
+  };
+  const res = await get("alumni-internships?departmentId=2&academicYear=2025-2026&search=Graduate&limit=5");
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.pagination.total, 1);
+  assert.equal(body.data[0].alumni_count, 1);
+  assert.equal(body.data[0].alumni[0].department_id, 2);
+  assert.deepEqual(body.departments.map(department => department.id), [1, 2]);
+  const grouped = queries.find(({ sql }) => sql.includes("AS normalized_name"));
+  const details = queries.find(({ sql }) => sql.includes("SELECT air.id, air.alumni_name"));
+  for (const query of [grouped, details]) {
+    assert.match(query.sql, /air\.academic_year = \?/);
+    assert.match(query.sql, /air\.department_id = \?/);
+    assert.match(query.sql, /air\.company_name LIKE \? OR air\.alumni_name LIKE \?/);
+  }
+  assert.deepEqual(grouped.params, ["2025-2026", "2", "%Graduate%", "%Graduate%", 5, 0]);
+  assert.deepEqual(details.params, ["company", "2025-2026", "2", "%Graduate%", "%Graduate%"]);
+});
+
+test("empty department results keep all department choices and use the same filtered total", async (t) => {
+  const get = await client(t);
+  const execute = connection.execute;
+  let totalParams;
+  connection.execute = async (sql, params) => {
+    if (sql.includes("AS normalized_name")) return [[]];
+    if (sql.includes("COUNT(DISTINCT")) { totalParams = params; assert.match(sql, /air\.department_id = \?/); return [[{ total: 0 }]]; }
+    return execute(sql, params);
+  };
+  const body = await (await get("alumni-internships?departmentId=2")).json();
+  assert.deepEqual(body.data, []);
+  assert.equal(body.pagination.total, 0);
+  assert.equal(body.pagination.totalPages, 0);
+  assert.deepEqual(body.departments.map(department => department.id), [1, 2]);
+  assert.deepEqual(totalParams, ["2"]);
+});
+
+test("invalid department filters fail before database reads and never enter the cache", async (t) => {
+  const get = await client(t);
+  for (const value of ["0", "-1", "1.5", "1 OR 1=1", "9007199254740992"]) {
+    const res = await get("alumni-internships?departmentId=" + encodeURIComponent(value));
+    assert.equal(res.status, 400);
+    assert.equal((await res.json()).error, "Invalid department filter.");
+  }
+  assert.equal(calls, 0);
+  assert.equal(cache.keys().length, 0);
 });

@@ -370,7 +370,11 @@ export const deleteAlumniInternshipRecord = async (req, res) => {
 export const getAlumniInternships = async (req, res) => {
   let connection;
   try {
-    const { academicYear, search, page = 1, limit = 10 } = req.query;
+    const { academicYear, departmentId, search, page = 1, limit = 10 } = req.query;
+    if (departmentId && departmentId !== "all" &&
+        (typeof departmentId !== "string" || !/^[1-9]\d*$/.test(departmentId) || !Number.isSafeInteger(Number(departmentId)))) {
+      return res.status(400).json({ error: "Invalid department filter." });
+    }
 
     const pageNum = Math.max(1, parseInt(page) || 1);
     const pageSize = Math.max(1, Math.min(50, parseInt(limit) || 10));
@@ -382,6 +386,11 @@ export const getAlumniInternships = async (req, res) => {
     if (academicYear && academicYear !== "all") {
       conditions.push("air.academic_year = ?");
       params.push(academicYear);
+    }
+
+    if (departmentId && departmentId !== "all") {
+      conditions.push("air.department_id = ?");
+      params.push(departmentId);
     }
 
     if (search) {
@@ -402,6 +411,14 @@ export const getAlumniInternships = async (req, res) => {
        ORDER BY academic_year DESC`,
     );
     const academicYears = yearRows.map((r) => r.academic_year);
+    // Keep choices available even when the current filters match no companies,
+    // including departments that have historical records but are now inactive.
+    const [departments] = await connection.execute(
+      `SELECT DISTINCT d.id, d.name, d.code
+       FROM alumni_internship_records air
+       INNER JOIN departments d ON air.department_id = d.id
+       ORDER BY d.name ASC`,
+    );
 
     const [companyPage] = await connection.execute(
       `SELECT LOWER(TRIM(air.company_name)) AS normalized_name,
@@ -427,6 +444,7 @@ export const getAlumniInternships = async (req, res) => {
       return res.status(200).json({
         data: [],
         academicYears,
+        departments,
         pagination: {
           page: pageNum,
           limit: pageSize,
@@ -453,9 +471,9 @@ export const getAlumniInternships = async (req, res) => {
        FROM alumni_internship_records air
        LEFT JOIN courses c ON air.course_id = c.id
        LEFT JOIN departments d ON air.department_id = d.id
-       WHERE LOWER(TRIM(air.company_name)) IN (${placeholders})
+       WHERE LOWER(TRIM(air.company_name)) IN (${placeholders})${conditions.length ? " AND " + conditions.join(" AND ") : ""}
        ORDER BY air.company_name ASC, air.alumni_name ASC`,
-      normalizedNames,
+      [...normalizedNames, ...params],
     );
 
     const groups = {};
@@ -492,6 +510,7 @@ export const getAlumniInternships = async (req, res) => {
     return res.status(200).json({
       data: companies,
       academicYears,
+      departments,
       pagination: {
         page: pageNum,
         limit: pageSize,
