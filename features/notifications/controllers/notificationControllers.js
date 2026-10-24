@@ -4,7 +4,7 @@ import { db } from "../../../config/db.js";
 
 function notificationVisibility(role, prefix = "") {
   if (role === "employer") return `${prefix}type NOT IN ('announcement', 'calendar_schedule')`;
-  if (role === "student") return `${prefix}type NOT IN ('evaluation_submitted', 'evaluation_deleted')`;
+  if (role === "student") return `${prefix}type NOT IN ('evaluation_submitted', 'evaluation_deleted') AND ${prefix}type NOT IN ('feedback_mentioned', 'feedback_reply', 'feedback_status')`;
   return "1 = 1";
 }
 

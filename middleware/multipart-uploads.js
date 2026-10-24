@@ -75,3 +75,4 @@ function boundedUpload({ field, maxFiles, maxBytes, sizeMessage, countMessage })
 export const acceptDocumentUpload = boundedUpload(policies.document);
 export const acceptCertificateUpload = boundedUpload(policies.certificate);
 export const acceptSummaryImages = boundedUpload(policies.summary);
+export const acceptFeedbackAttachments = boundedUpload({ field: "attachments", maxFiles: 3, maxBytes: 5 * MB, sizeMessage: "Each attachment must be 5 MB or smaller.", countMessage: "Choose up to three PDF, PNG, JPG, or WebP attachments." });

@@ -17,6 +17,8 @@ import { autoCloseStaleShifts } from "./config/autoCloseStaleShifts.js";
 import { refreshTokensCleanUp } from "./config/refreshTokensCleanUp.js";
 import { errorTrackingContext, purgeOldErrorEvents, reportBackgroundError, reportError } from "./config/errorTracking.js";
 
+import { cleanupFeedbackFiles } from "./features/feedback/feedbackController.js";
+import feedbackRoutes from "./features/feedback/routes/feedbackRoutes.js";
 import announcementRoutes from "./features/announcements/routes/announcementRoutes.js";
 import accountRoutes from "./features/accounts/routes/accountRoutes.js";
 import internshipRecordRoutes from "./features/internship-records/routes/internshipRecordRoutes.js";
@@ -100,6 +102,7 @@ app.get("/", (req, res) => {
 
 // Routes
 mountApiRoutes(app, [
+  feedbackRoutes,
   authRoutes,
   announcementRoutes,
   accountRoutes,
@@ -179,6 +182,11 @@ cron.schedule("15 3 * * *", async () => {
   } catch (error) {
     console.error("Error tracking retention job failed:", error);
   }
+});
+
+cron.schedule("*/5 * * * *", async () => {
+  try { await cleanupFeedbackFiles(); }
+  catch (error) { reportBackgroundError("feedbackFileCleanup", error); }
 });
 
 // Port Configuration
