@@ -20,8 +20,25 @@ export const getStudentDashboardStats = async (req, res) => {
          (SELECT COUNT(*) FROM notifications
           WHERE user_id = ? AND type = 'announcement' AND is_read = 0) AS announcement_count,
          (SELECT COUNT(*) FROM internship_documents
-          WHERE user_id = ?) AS document_count`,
-      [userId, userId, userId],
+          WHERE user_id = ?) AS document_count,
+         ongoing.id AS ongoing_internship_id,
+         CASE WHEN ongoing.id IS NULL THEN NULL ELSE (
+           SELECT COUNT(*) FROM requirement_types rt
+           WHERE rt.category IN ('before', 'after')
+             AND NOT EXISTS (
+               SELECT 1 FROM internship_documents doc
+               WHERE doc.user_id = ? AND doc.internship_id = ongoing.id
+                 AND doc.requirement_type_id = rt.id
+                 AND (doc.verification_status IS NULL OR doc.verification_status = 'accepted')
+             )
+         ) END AS missing_count
+       FROM (SELECT 1 AS anchor) scope
+       LEFT JOIN (
+         SELECT id FROM internship_records
+         WHERE user_id = ? AND status = 'ongoing' AND deleted_at IS NULL
+         ORDER BY created_at DESC, id DESC LIMIT 1
+       ) ongoing ON 1 = 1`,
+      [userId, userId, userId, userId, userId],
     );
 
     // 3. Send back the aggregated metrics
@@ -31,6 +48,8 @@ export const getStudentDashboardStats = async (req, res) => {
         favoriteInternships: counts.favorite_count || 0,
         unreadAnnouncements: counts.announcement_count || 0,
         documentsStored: counts.document_count || 0,
+        hasOngoingInternship: Boolean(counts.ongoing_internship_id),
+        missingRequirements: counts.ongoing_internship_id ? Number(counts.missing_count || 0) : null,
       },
     });
   } catch (error) {

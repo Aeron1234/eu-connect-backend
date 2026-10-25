@@ -38,14 +38,14 @@ async function invoke(handler, user, countRow) {
 
 test("student dashboard stats exclude confidential employer evaluation counts", async () => {
   const { calls, releases, res } = await invoke(getStudentDashboardStats, { id: "student-1" }, {
-    favorite_count: 4, announcement_count: 2, evaluation_count: 3, document_count: 7,
+    favorite_count: 4, announcement_count: 2, evaluation_count: 3, document_count: 7, ongoing_internship_id: "record-1", missing_count: 2,
   });
   assert.equal(res.statusCode, 200);
   assert.deepEqual(res.body, { success: true, stats: {
-    favoriteInternships: 4, unreadAnnouncements: 2, documentsStored: 7,
+    favoriteInternships: 4, unreadAnnouncements: 2, documentsStored: 7, hasOngoingInternship: true, missingRequirements: 2,
   } });
   assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0].params, Array(3).fill("student-1"));
+  assert.deepEqual(calls[0].params, Array(5).fill("student-1"));
   for (const fragment of [
     "favorited_at IS NOT NULL", "type = 'announcement' AND is_read = 0",
     "FROM internship_documents", "WHERE user_id = ?",
