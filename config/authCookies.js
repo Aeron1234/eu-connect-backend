@@ -8,11 +8,13 @@ function cookieOptions() {
   return { httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax" };
 }
 
+// Express maxAge values are milliseconds; the Next.js cookie helpers use seconds.
 export function setAuthCookies(res, { accessToken, refreshToken }) {
   res.cookie(ACCESS_COOKIE, accessToken, {
     ...cookieOptions(), path: "/", maxAge: 15 * 60 * 1000,
   });
-  // Keep direct clients on either prefix working throughout the migration.
+  // Issue auth-path refresh cookies for both canonical and legacy API clients.
+  // Next.js separately owns the browser cookies for its server-to-server flow.
   for (const prefix of API_PREFIXES) {
     res.cookie(REFRESH_COOKIE, refreshToken, {
       ...cookieOptions(), path: prefix + "/auth", maxAge: REFRESH_TOKEN_TTL_MS,
@@ -20,6 +22,7 @@ export function setAuthCookies(res, { accessToken, refreshToken }) {
   }
 }
 
+// Clear each cookie with the same security attributes and paths used to set it.
 export function clearAuthCookies(res) {
   res.clearCookie(ACCESS_COOKIE, { ...cookieOptions(), path: "/" });
   for (const prefix of API_PREFIXES) {

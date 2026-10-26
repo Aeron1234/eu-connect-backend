@@ -10,6 +10,9 @@ import { invalidateAlumniCache } from "../../../config/cache/alumniCache.js";
 import { invalidateNotificationsCache } from "../../../config/cache/notificationsCache.js";
 import { invalidateActivityLogsCache } from "../../../config/cache/activityLogsCache.js";
 
+// Validate a whitelist of editable placement fields, including real date-only
+// values, date order, coordinates and the city/province pair. Status, owner,
+// supervisor and accumulated hours are never taken from the submitted body.
 function readPlacement(body = {}) {
   const fields = {};
   for (const name of ["company_name", "company_address", "internship_position", "description", "date_started", "date_ended", "semester"]) {
@@ -62,6 +65,8 @@ export async function updateOwnPendingInternshipRecord(req, res) {
     connection = await db.getConnection();
     await connection.beginTransaction();
     transaction = true;
+    // Lock the record before checking ownership and pending state, serializing
+    // this edit with staff approval/rejection and student withdrawal.
     const [rows] = await connection.execute(
       "SELECT * FROM internship_records WHERE id = ? FOR UPDATE", [internshipId],
     );
@@ -78,8 +83,8 @@ export async function updateOwnPendingInternshipRecord(req, res) {
       await connection.rollback(); transaction = false;
       return res.status(409).json({ error: "Only pending internship records can be edited. Refresh to view the current status." });
     }
-    // Older clients omit these fields. Preserve existing classification only when
-    // the physical location and address have not changed; never carry it to a new site.
+    // For clients omitting both city fields, retain saved grouping only if address
+    // and coordinates are unchanged. A changed site must not inherit the old city.
     if (req.body.city_name == null && req.body.province_name == null &&
         record.company_address === fields.company_address &&
         Number(record.lat) === fields.lat && Number(record.lon) === fields.lon) {
@@ -91,6 +96,8 @@ export async function updateOwnPendingInternshipRecord(req, res) {
       await connection.rollback(); transaction = false;
       return res.status(400).json({ error: "Select a valid region." });
     }
+    // Retain ownership/status/deletion predicates on the UPDATE itself.
+    // A conflict returns 409 so the client refreshes instead of claiming success.
     const [result] = await connection.execute(
       `UPDATE internship_records SET company_name = ?, company_address = ?, internship_position = ?,
        company_website = ?, description = ?, date_started = ?, date_ended = ?, total_hours = ?,
@@ -112,6 +119,8 @@ export async function updateOwnPendingInternshipRecord(req, res) {
         `${name} updated a pending internship record for ${fields.company_name}.`,
         JSON.stringify({ previous_company_name: record.company_name, company_name: fields.company_name, status: "pending" })],
     );
+    // Commit the placement update and its activity log before invalidating cached
+    // record, visit-planning/report and notification data that depends on the placement.
     await connection.commit();
     transaction = false;
     invalidateProfileOverviewCache();

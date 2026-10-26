@@ -8,12 +8,13 @@ import { newUUID } from "../../../config/helpers.js";
 import { assertInternshipStarted } from "../../../config/internshipStart.js";
 import { evaluationReadScope, departmentEvaluationRecipients } from "../evaluationAccess.js";
 
+// In this API, student evaluation means the employer evaluating a student.
 export const getStudentEvaluationCriteria = async (req, res) => {
   let connection;
   try {
     connection = await db.getConnection();
 
-    // Pull the clean schema rows directly from your database table
+    // Offer active criteria only; historical score reads still join retained inactive criteria.
     const query = `
         SELECT id, category, criterion_name 
         FROM student_evaluation_criteria
@@ -23,7 +24,7 @@ export const getStudentEvaluationCriteria = async (req, res) => {
 
     const [rows] = await connection.execute(query);
 
-    // Group the flat database rows into your required frontend array structure
+    // Group questions by category; criterion_name is the form key and db_id is the stored row ID.
     const structuredData = [];
 
     rows.forEach((row) => {
@@ -40,8 +41,8 @@ export const getStudentEvaluationCriteria = async (req, res) => {
       }
 
       categoryGroup.items.push({
-        id: row.criterion_name, // Matches your frontend state key (e.g., "grooming")
-        db_id: row.id, // The actual auto-increment integer ID from your database
+        id: row.criterion_name, // Form score key, submitted as criterion_name.
+        db_id: row.id, // Stored criterion ID; distinct from the form key.
         name: row.criterion_name, // Display string
       });
     });
@@ -102,7 +103,7 @@ export const getStudentCompleteEvaluations = async (req, res) => {
       });
     }
 
-    // 1. Map the structural core internship information
+    // Build a summary for the first internship/master in the query's descending order.
     const payload = {
       student_id: studentId,
       internship_record_id: rows[0].internship_record_id,
@@ -113,7 +114,7 @@ export const getStudentCompleteEvaluations = async (req, res) => {
       evaluation_details: null,
     };
 
-    // 2. If an evaluation master entry exists, populate the score groupings
+    // Only the selected master's scores belong in this summary; history may contain replacements.
     if (payload.is_evaluated) {
       const categoriesByName = new Map();
       payload.evaluation_details = {
@@ -126,7 +127,7 @@ export const getStudentCompleteEvaluations = async (req, res) => {
       };
 
       rows.forEach((row) => {
-        if (!row.category || row.evaluation_master_id !== rows[0].evaluation_master_id) return; // Guard against broken entries
+        if (!row.category || row.evaluation_master_id !== rows[0].evaluation_master_id) return; // Skip missing categories and other historical masters.
 
         let categoryGroup = categoriesByName.get(row.category);
 
@@ -296,16 +297,15 @@ export const createStudentEvaluation = async (req, res) => {
   const { other_remarks, scores, student_id } = req.body;
   const evaluated_by = req.verifiedUser?.id;
 
-  // 1. STRUCTURAL GUARD CLAUSE
+  // Require a target student, authenticated evaluator and score array.
   if (!student_id || !evaluated_by || !Array.isArray(scores)) {
     return res.status(400).json({
       error: "Incomplete submission. Missing required evaluation meta-data.",
     });
   }
 
-  // 2. COUNTER GUARD CLAUSE
-  // This could change in the future.
-  // I kept this as the required number of scores per criteria that the server needs to receive so an unanswer criterion/criteria wouldn't be saved.
+  // This handler requires at least 29 submitted score entries. This count check
+  // does not derive completeness from the current active-criteria table.
   const TOTAL_REQUIRED_CRITERIA = 29;
 
   if (scores.length < TOTAL_REQUIRED_CRITERIA) {
@@ -314,7 +314,7 @@ export const createStudentEvaluation = async (req, res) => {
     });
   }
 
-  // 3. VALUE GUARD CLAUSE
+  // Reject blank or out-of-range submitted values; zero is a valid score.
   const hasInvalidScore = scores.some((item) => {
     if (
       item.score === null ||
@@ -339,8 +339,8 @@ export const createStudentEvaluation = async (req, res) => {
     connection = await db.getConnection();
     await connection.beginTransaction();
 
-    // Fetch active ongoing internship record — lock it, since we're about
-    // to check who's allowed to evaluate this student
+    // Lock the student's live ongoing internship before checking the accepted
+    // supervisor, Philippine start date and this direction's active evaluation slot.
     const [records] = await connection.execute(
       `SELECT id, company_name, employer_id, DATE_FORMAT(date_started, '%Y-%m-%d') AS date_started FROM internship_records
        WHERE user_id = ? AND status = 'ongoing' AND deleted_at IS NULL LIMIT 1 FOR UPDATE`,
@@ -358,8 +358,8 @@ export const createStudentEvaluation = async (req, res) => {
     const internship_record_id = records[0].id;
     const companyName = records[0].company_name;
 
-    // Only this internship's accepted supervisor can submit an evaluation —
-    // same restriction as certificate uploads and DTR location
+    // Use the authenticated evaluator and current assignment; never authorize
+    // an employer from a submitted evaluated_by value.
     if (records[0].employer_id !== evaluated_by) {
       await connection.rollback();
       return res.status(403).json({
@@ -395,7 +395,8 @@ export const createStudentEvaluation = async (req, res) => {
       other_remarks || null,
     ]);
 
-    // 2. Prepare and run Score Statement
+    // Resolve submitted names to stored criterion IDs and parse scores as integers.
+    // Blank criterion names are skipped; master and score writes share the transaction.
     const scoreQuery = `
       INSERT INTO student_evaluation_scores (evaluation_master_id, criterion_id, score)
       VALUES (?, (SELECT id FROM student_evaluation_criteria WHERE criterion_name = ? LIMIT 1), ?)
@@ -417,6 +418,8 @@ export const createStudentEvaluation = async (req, res) => {
       ]);
     }
 
+    // The notification link targets the internship record; link_uuid identifies
+    // the evaluation for cleanup. Notify department heads without exposing scores.
     const recipients = await departmentEvaluationRecipients(connection, student_id);
     const notifTitle = "Student Evaluation Submitted";
     const notifMessage = `${employerName} submitted a student performance evaluation for ${companyName}.`;
@@ -433,9 +436,8 @@ export const createStudentEvaluation = async (req, res) => {
       ],
     );
 
-    // Activity log is supplementary — isolated so a logging failure can
-    // never roll back or fail the actual submission. No scores in metadata;
-    // this table already stores those.
+    // A caught log-insert error does not by itself abort this submission.
+    // Keep scores out of audit metadata; the evaluation tables store them.
     try {
       await connection.execute(
         `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -466,7 +468,8 @@ export const createStudentEvaluation = async (req, res) => {
 
     invalidateActivityLogsCache();
 
-    // 4. Real-time Socket Event
+    // Deliver department-head notifications only after commit and cache invalidation.
+    // Socket delivery failures are logged without undoing the committed evaluation.
     const io = req.app.get("socketio");
     if (io) {
       for (const recipient of recipients) {
@@ -503,6 +506,7 @@ export const createStudentEvaluation = async (req, res) => {
 
 export const deleteStudentEvaluation = evaluationDeleteHandler({ table: 'student_evaluation_masters', scoresTable: 'student_evaluation_scores', ownerColumn: 'evaluated_by', authorRole: 'employer' });
 
+// Retired confirmation/dispute routes reject requests rather than mutate private evaluations.
 export const respondToStudentEvaluation = async (req, res) => res.status(403).json({ error: "Employer evaluations are confidential and do not require student confirmation." });
 
 export const restoreDisputedEvaluation = async (req, res) => res.status(403).json({ error: "Employer evaluations are confidential and do not require student confirmation." });
@@ -520,8 +524,8 @@ export const getAllStudentEvaluations = async (req, res) => {
   try {
     connection = await db.getConnection();
 
-    // 2. Evaluations the student submitted ABOUT their supervisor —
-    // this direction has no review step, so reviewer fields stay null
+    // The student's history contains their own undeleted Supervisor Evaluations only.
+    // It excludes confidential employer Performance Evaluations; legacy reviewer fields stay null.
     const givenQuery = `
       SELECT 
         m.id AS evaluation_id,
@@ -642,6 +646,8 @@ export const getStudentEvaluationForPrint = async (req, res) => {
 
     connection = await db.getConnection();
 
+    // Authorize the PDF header read with the same current role/department scope
+    // as history. Employers cannot print deleted entries; authorized staff can.
     const [headerRows] = await connection.execute(
       `SELECT 
          sem.id, sem.evaluated_by, sem.other_remarks, sem.deleted_at, sem.created_at,

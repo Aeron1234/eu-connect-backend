@@ -18,8 +18,8 @@ export const getSupervisorStatus = async (req, res) => {
 
     connection = await db.getConnection();
 
-    // 1. Check the student's ongoing internship — is this employer
-    // already the accepted supervisor?
+    // Derive accepted status from the student's current ongoing assignment,
+    // rather than an older accepted request row.
     const [internships] = await connection.execute(
       `SELECT id, employer_id FROM internship_records
        WHERE user_id = ? AND status = 'ongoing' AND deleted_at IS NULL LIMIT 1`,
@@ -52,8 +52,7 @@ export const getSupervisorStatus = async (req, res) => {
       });
     }
 
-    // 2. Not yet the accepted supervisor — is there a pending request
-    // to this employer specifically?
+    // With no assigned supervisor, check for a pending request to this employer.
     const [requests] = await connection.execute(
       `SELECT id FROM supervisor_requests 
        WHERE internship_id = ? AND employer_id = ? AND status = 'pending'
@@ -99,6 +98,8 @@ export const requestSupervisor = async (req, res) => {
     connection = await db.getConnection();
     await connection.beginTransaction();
 
+    // Serialize request creation on the student's ongoing internship before
+    // superseding older requests or checking whether a supervisor is assigned.
     const [internships] = await connection.execute(
       `SELECT id, employer_id, company_name FROM internship_records
        WHERE user_id = ? AND status = 'ongoing' AND deleted_at IS NULL LIMIT 1 FOR UPDATE`,
@@ -137,15 +138,17 @@ export const requestSupervisor = async (req, res) => {
 
     const senderName = `${senderRows[0].first_name} ${senderRows[0].last_name}`;
 
-    // A new request supersedes any still-pending one for this internship —
-    // only one active request at a time. Superseding is silent (no notification),
-    // same as a student-initiated cancel.
+    // Supersede earlier pending requests under the internship lock before inserting
+    // the new request. Old rows remain for history and their alerts become dismissible.
+    // Superseding creates no separate notification; the new request notifies its recipient.
     await connection.execute(
       `UPDATE supervisor_requests SET status = 'superseded' 
        WHERE internship_id = ? AND status = 'pending'`,
       [internship.id],
     );
 
+    // The notification stores this request UUID, not the internship UUID,
+    // so responses and deletion protection resolve the same request.
     const requestId = newUUID();
     await connection.execute(
       `INSERT INTO supervisor_requests (id, internship_id, student_id, employer_id)
@@ -166,8 +169,8 @@ export const requestSupervisor = async (req, res) => {
       ],
     );
 
-    // Activity log is supplementary — isolated so a logging failure can
-    // never roll back or fail the actual request.
+    // A caught activity-log insert error does not by itself abort this request.
+    // The request and its inbox notification remain in the surrounding transaction.
     try {
       await connection.execute(
         `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -286,6 +289,8 @@ export const removeSupervisor = async (req, res) => {
 
     try {
       const io = req.app.get("socketio");
+      // After commit, remove the former employer from the student's live-location room
+      // and notify both users to refresh their supervision state.
       io?.in?.(`user-${employerId}`)?.socketsLeave?.(`dtr-location:${studentId}:${internship.id}`);
       io?.to(`user-${studentId}`).emit("supervisor_status_changed", { internshipId: internship.id });
       io?.to(`user-${employerId}`).emit("supervisor_status_changed", { internshipId: internship.id });
@@ -313,7 +318,7 @@ export const cancelSupervisorRequest = async (req, res) => {
     await connection.beginTransaction();
 
     const [rows] = await connection.execute(
-      `SELECT id, student_id, status FROM supervisor_requests WHERE id = ? FOR UPDATE`,
+      `SELECT id, student_id, employer_id, internship_id, status FROM supervisor_requests WHERE id = ? FOR UPDATE`,
       [requestId],
     );
 
@@ -336,6 +341,8 @@ export const cancelSupervisorRequest = async (req, res) => {
         .json({ error: "Only a pending request can be cancelled." });
     }
 
+    // Cancellation retains the request as superseded instead of deleting its history.
+    // The employer's existing alert becomes dismissible without a new inbox notification.
     await connection.execute(
       `UPDATE supervisor_requests SET status = 'superseded' WHERE id = ?`,
       [requestId],
@@ -366,6 +373,9 @@ export const cancelSupervisorRequest = async (req, res) => {
     invalidateNotificationsCache();
 
     invalidateActivityLogsCache();
+    const io = req.app?.get?.("socketio");
+    // Refresh the employer's existing alert after the cancellation commits.
+    io?.to(`user-${request.employer_id}`).emit("supervisor_status_changed", { internshipId: request.internship_id });
 
     return res
       .status(200)
@@ -411,7 +421,8 @@ export const respondToSupervisorRequest = async (req, res) => {
       [requestRefs[0].internship_id],
     );
 
-    // Added student_id — needed as the notification recipient below
+    // Lock and reread the request before checking recipient and pending state.
+    // student_id identifies the recipient of the eventual decision notification.
     const [rows] = await connection.execute(
       `SELECT id, internship_id, student_id, employer_id, status 
        FROM supervisor_requests WHERE id = ? FOR UPDATE`,
@@ -439,8 +450,8 @@ export const respondToSupervisorRequest = async (req, res) => {
         .json({ error: "This request has already been responded to." });
     }
 
-    // Re-check the internship is still ongoing — it could have changed
-    // between when the request was sent and now
+    // Validate the locked internship's current state; the original request may predate
+    // completion or deletion. Acceptance must also preserve an existing assignment.
     if (internships.length === 0 || internships[0].status !== "ongoing" || internships[0].deleted_at) {
       await connection.rollback();
       return res.status(400).json({
@@ -518,6 +529,7 @@ export const respondToSupervisorRequest = async (req, res) => {
       invalidateActivityLogsCache();
 
       const io = req.app.get("socketio");
+      io?.to(`user-${employerId}`).emit("supervisor_status_changed", { internshipId: request.internship_id });
       io.to(`user-${request.student_id}`).emit("new_notification", {
         title: "Supervisor Request Declined",
         message: `${senderName} declined your supervisor request`,
@@ -530,7 +542,8 @@ export const respondToSupervisorRequest = async (req, res) => {
         .json({ message: "Request rejected.", success: true });
     }
 
-    // decision === "accept"
+    // Accept the request, assign the supervisor and create the student's notification
+    // in the same transaction. Cache invalidation and socket events follow commit.
     await connection.execute(
       `UPDATE supervisor_requests SET status = 'accepted', responded_at = CURRENT_TIMESTAMP WHERE id = ?`,
       [requestId],
@@ -584,6 +597,7 @@ export const respondToSupervisorRequest = async (req, res) => {
     invalidateActivityLogsCache();
 
     const io = req.app.get("socketio");
+    io?.to(`user-${employerId}`).emit("supervisor_status_changed", { internshipId: request.internship_id });
     io.to(`user-${request.student_id}`).emit("new_notification", {
       title: "Supervisor Request Accepted",
       message: `${senderName} accepted your supervisor request`,

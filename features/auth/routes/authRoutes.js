@@ -14,7 +14,7 @@ import { createSocketTicket } from "../controllers/socketAuthController.js";
 const authRoutes = express.Router();
 
 authRoutes.post("/auth/login", authLimiter, login);
-// authRoutes.post("/auth/refresh", refresh);
+// Logout uses the refresh cookie and clears cookies even without a valid access JWT.
 authRoutes.post("/auth/logout", logout);
 authRoutes.get("/auth/me", verifyUser, me);
 authRoutes.post("/auth/forgot-password", passwordRecoveryLimiter, forgotPassword);

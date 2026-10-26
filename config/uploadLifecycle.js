@@ -8,8 +8,9 @@ export function uploadValidationError(status, message) {
   return Object.assign(new Error(message), { status });
 }
 
-// Callbacks do database work only. Storage uploads and cleanup run after this
-// scope returns, so they never reserve a pooled connection or hold row locks.
+// Keep callbacks limited to database work; perform storage I/O outside this scope.
+// Preflight reads release their connection before upload, and final saves acquire
+// a fresh connection/transaction to recheck eligibility.
 export async function withUploadConnection(work, transaction = false) {
   const connection = await db.getConnection();
   let started = false;
@@ -44,6 +45,8 @@ export async function withUploadConnection(work, transaction = false) {
   }
 }
 
+// Best-effort cleanup bounds the wait per path and logs failures without replacing
+// the original upload error. This wait alone does not cancel a removal still in flight.
 export async function cleanupUploadPaths(paths, timeoutMs = 10000) {
   await Promise.all(paths.map(async (path) => {
     let timer;
@@ -61,6 +64,8 @@ export async function cleanupUploadPaths(paths, timeoutMs = 10000) {
   }));
 }
 
+// Run synchronous post-commit cache/socket work without turning a committed
+// upload into a reported failure. This wrapper does not await asynchronous work.
 export function afterUploadCommit(work) {
   try { work(); }
   catch (error) { reportError("Upload post-commit update failed:", error); }

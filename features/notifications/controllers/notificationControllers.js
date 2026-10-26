@@ -1,3 +1,4 @@
+import { pendingSupervisorRequestSql } from "../../../config/supervisorRequestEligibility.js";
 import { reportError } from "../../../config/errorTracking.js";
 import { invalidateNotificationsCache } from "../../../config/cache/notificationsCache.js";
 import { db } from "../../../config/db.js";
@@ -56,9 +57,9 @@ export const getAllNotifications = async (req, res) => {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.max(1, parseInt(req.query.limit, 10) || 10);
     const offset = (page - 1) * limit;
-    // "all" (default) or "requests" — Requests only shows pending supervisor
-    // requests, so both the list and its own pagination are scoped to that
-    // type at the query level, not filtered client-side from the All feed.
+    // Requests includes all supervisor-request notifications, including answered ones.
+    // Filter and paginate that type in SQL; derive actionable separately from the
+    // current request and internship, rather than from unread state.
     const scope = req.query.scope === "requests" ? "requests" : "all";
 
     connection = await db.getConnection();
@@ -73,6 +74,8 @@ export const getAllNotifications = async (req, res) => {
 
     const whereClause = conditions.join(" AND ");
 
+    // Match the request UUID (or legacy link) only for its intended recipient.
+    // Recheck the linked internship so stale pending rows do not expose response controls.
     const [results] = await connection.execute(
       `SELECT 
          n.id AS notification_id,
@@ -86,19 +89,23 @@ export const getAllNotifications = async (req, res) => {
          n.created_at,
          up.first_name AS sender_first_name,
          up.last_name AS sender_last_name,
-         sr.status AS supervisor_request_status
+         sr.status AS supervisor_request_status,
+         CASE WHEN ${pendingSupervisorRequestSql()} THEN 1 ELSE 0 END AS supervisor_request_actionable
        FROM notifications n
        LEFT JOIN user_profiles up ON n.sender_id = up.user_id
        LEFT JOIN supervisor_requests sr 
-         ON n.type = 'supervisor_request_submitted' AND n.link_uuid = sr.id
+         ON n.type = 'supervisor_request_submitted'
+           AND COALESCE(NULLIF(n.link_uuid, ''), n.link) = sr.id
+           AND sr.employer_id = n.user_id
+       LEFT JOIN internship_records request_internship ON request_internship.id = sr.internship_id
        WHERE ${whereClause}
        ORDER BY n.created_at DESC
        LIMIT ? OFFSET ?`,
       [...params, limit, offset],
     );
 
-    // Unread count is always global (not scoped to the current tab) — it
-    // drives the header badge, which should reflect the whole inbox.
+    // Unread count spans this recipient's role-visible inbox, regardless of tab.
+    // Only totalRecords and pagination follow the selected scope.
     const [[counts]] = await connection.execute(
       `SELECT COUNT(*) AS all_total,
               COUNT(CASE WHEN type = 'supervisor_request_submitted' THEN 1 END) AS request_total,
@@ -130,7 +137,9 @@ export const getAllNotifications = async (req, res) => {
         : null,
       actionable:
         n.type === "supervisor_request_submitted" &&
-        n.supervisor_request_status === "pending",
+        Boolean(n.supervisor_request_actionable),
+      request_status: n.supervisor_request_status || null,
+      can_delete: !(n.type === "supervisor_request_submitted" && Boolean(n.supervisor_request_actionable)),
       ui_key: `${n.type}-${n.notification_id}`,
     }));
 
@@ -150,8 +159,8 @@ export const getAllNotifications = async (req, res) => {
   }
 };
 
-// Resolve an announcement notification at click time. A cached inbox can still
-// show a notification after its announcement and DB row have been removed.
+// Resolve target existence and category access at click time. Cached inbox rows
+// may outlive the announcement; legacy numeric links and UUID links are supported.
 export const openAnnouncementNotification = async (req, res) => {
   if (req.verifiedUser?.role === "employer") {
     return res.status(403).json({ success: false, state: "unavailable", error: "Announcements are not available to employer accounts." });
@@ -319,14 +328,34 @@ export const deleteNotification = async (req, res) => {
 
     connection = await db.getConnection();
 
-    // Ownership check happens right in the WHERE clause — a user can only
-    // ever delete their own notifications, no separate SELECT needed first.
+    // Check ownership and live request eligibility in the DELETE itself so a stale
+    // client cannot dismiss an unanswered active request. Marking read is not a response.
+    // Answered, superseded or otherwise ineligible requests can be dismissed.
     const [result] = await connection.execute(
-      `DELETE FROM notifications WHERE id = ? AND user_id = ?`,
+      `DELETE FROM notifications WHERE id = ? AND user_id = ?
+       AND NOT EXISTS (
+         SELECT 1 FROM supervisor_requests sr
+         JOIN internship_records request_internship ON request_internship.id = sr.internship_id
+         WHERE notifications.type = 'supervisor_request_submitted'
+           AND sr.id = COALESCE(NULLIF(notifications.link_uuid, ''), notifications.link)
+           AND sr.employer_id = notifications.user_id
+           AND ${pendingSupervisorRequestSql()}
+       )`,
       [notificationId, userId],
     );
 
     if (result.affectedRows === 0) {
+      // Distinguish an owned, protected request (409) from an absent or unowned row (404).
+      const [owned] = await connection.execute(
+        "SELECT id FROM notifications WHERE id = ? AND user_id = ?",
+        [notificationId, userId],
+      );
+      if (owned.length) {
+        return res.status(409).json({
+          success: false,
+          error: "Accept or decline this supervisor request before deleting its notification.",
+        });
+      }
       return res.status(404).json({
         error: "Notification not found or you don't have access to it.",
       });

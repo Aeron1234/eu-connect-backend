@@ -1,3 +1,4 @@
+import { requireStudentDepartmentAccess } from "../../../config/studentProfileAccess.js";
 import { evaluationEligibilityHandler } from "../evaluationLifecycle.js";
 import { cacheRoute } from "../../../middleware/cache-middleware.js";
 import express from "express";
@@ -39,6 +40,7 @@ studentEvaluationRoutes.get(
   verifyUser,
   verifyRole(["employer", "department_head", "admin"]),
   generalLimiter,
+  requireStudentDepartmentAccess,
   getStudentCompleteEvaluations,
 );
 
@@ -48,6 +50,7 @@ studentEvaluationRoutes.get(
   verifyRole(["employer", "department_head", "admin"]),
   generalLimiter,
   // Confidential profile reads recheck current department membership in SQL.
+  requireStudentDepartmentAccess,
   getPastStudentEvaluations,
 );
 

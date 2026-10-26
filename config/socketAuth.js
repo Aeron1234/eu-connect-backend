@@ -2,8 +2,8 @@ import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 import { createLiveDtrLocationService } from "./liveDtrLocation.js";
 
-// Derive a separate signing key so a browser-visible socket ticket can never
-// be used as an API access token, even though both use the same deployment secret.
+// Derive a ticket-specific signing key from the deployment secret. Socket
+// tickets use this key plus purpose/audience checks, separate from API JWTs.
 const socketSecret = crypto
   .createHmac("sha256", process.env.ACCESS_TOKEN_SECRET)
   .update("eu-connect/notification-socket/v1")
@@ -12,6 +12,8 @@ const socketSecret = crypto
 const audience = "eu-connect-notifications";
 const issuer = "eu-connect-api";
 
+// The ticket is valid for a 30-second handshake window. accessExp separately
+// limits how long the resulting connection may remain authorized.
 export function signSocketTicket(userId, accessExpiresAt) {
   if (!userId || !Number.isInteger(accessExpiresAt)) {
     throw new Error("A verified user and access expiry are required");
@@ -35,6 +37,8 @@ export function verifySocketTicket(ticket) {
     issuer,
   });
 
+  // A signed ticket must also carry the expected purpose and a still-live
+  // access-session expiry; the ticket's own expiry is checked by jwt.verify.
   if (
     payload.purpose !== "notification_socket" ||
     !payload.sub ||
@@ -65,11 +69,12 @@ export function registerNotificationSockets(io) {
   const attachLiveDtrLocation = createLiveDtrLocationService();
   io.use(authenticateNotificationSocket);
   io.on("connection", (socket) => {
+    // Room identity comes only from the verified ticket, not a client-provided user ID.
     socket.join(`user-${socket.data.userId}`);
     attachLiveDtrLocation(io, socket);
 
-    // An already-connected socket must not outlive the access session that
-    // authorized its ticket. The client obtains a fresh ticket on reconnect.
+    // An established connection ends at the authorizing access token's expiry,
+    // not after the ticket's 30-second handshake window. Reconnect needs a new ticket.
     const timeout = setTimeout(
       () => socket.disconnect(true),
       Math.max(0, socket.data.accessExpiresAtMs - Date.now()),

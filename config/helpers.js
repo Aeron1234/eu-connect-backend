@@ -64,9 +64,10 @@ export const ALLOWED_TYPES = [
   "image/webp",
 ];
 
-// Verifies the requester can access this internship record, and returns
-// the record's basic info + department_id. Throws a { status, message }
-// object on any failure, so callers can catch and respond consistently.
+// Authorize staff record reads against the student's latest academic department
+// and the head's current database assignment. Admin is allowed across departments;
+// missing/deleted records are unavailable. Return id/deleted_at/department_id,
+// or throw a { status, message } object for the caller's response handling.
 export async function verifyRecordAccess(
   connection,
   internshipId,

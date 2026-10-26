@@ -21,12 +21,10 @@ if (!TEMP_PASSWORD_SECRET) {
 
 const TEMP_PASSWORD_TTL = "10m";
 
-// sessionUser is the shape produced by toSessionUser() in authController.js.
-// Carries BOTH the numeric ids (course_id/department_id — used by backend
-// controllers for scoping) and the string code/name (course_name/
-// department_code — used by the Next.js frontend for display and
-// page-level checks like department_code === "REG"). Same underlying row,
-// both consumers, no reason to pick only one.
+// toSessionUser() in features/auth/controllers/authControllers.js supplies
+// identity and role context. Include IDs for backend scoping and labels/codes
+// for frontend display. Claims are issuance-time snapshots; sensitive reads
+// that require current membership must query it separately.
 export function signAccessToken(sessionUser) {
   return jwt.sign(
     {
@@ -61,11 +59,9 @@ export function newJti() {
   return crypto.randomUUID();
 }
 
-// The token IS the temp password — there's no separate plaintext to
-// generate or hash. Whatever the user pastes into the login form gets
-// checked here: if it verifies against this secret, has the right
-// purpose, and its jti matches what's on the user's row (checked in the
-// controller), it's a valid one-time credential.
+// The signed token itself is the temporary login credential; no separate
+// temporary plaintext password is stored. Login verifies it with this secret
+// and matches its subject/JTI to the account's stored temporary identifier.
 export function signTempPassword(userId, jti) {
   return jwt.sign(
     { sub: userId, jti, purpose: "temp_password" },
@@ -80,17 +76,15 @@ export function verifyTempPassword(token) {
   return jwt.verify(token, TEMP_PASSWORD_SECRET);
 }
 
-// Refresh tokens are high-entropy already, so a fast hash (not bcrypt) is
-// fine here — this is purely so a stolen DB dump doesn't hand out live
-// tokens.
+// Persist a SHA-256 digest for refresh-token equality checks, rather than the
+// reusable token value. Normal account passwords use bcrypt in the controller.
 export function hashToken(token) {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
-// Cheap structural check before attempting a real verify — a normal
-// password is never going to contain two dots, so this lets login()
-// branch to JWT verification only when it's actually worth trying,
-// without the cost/noise of always attempting jwt.verify() first.
+// Three dot-separated parts select the temporary-credential login branch.
+// This is only a shape test, not JWT verification; an ordinary password with
+// that shape is routed through the same temporary-token check.
 export function looksLikeJwt(value) {
   return typeof value === "string" && value.split(".").length === 3;
 }

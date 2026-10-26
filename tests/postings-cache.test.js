@@ -142,6 +142,7 @@ test("posting edits and moderation deletes log the position, with IDs in structu
     assert.match(activityLog[5], /posting "Intern" at Company/);
     assert.ok(!activityLog[5].includes("posting p"));
     assert.ok(!activityLog[5].includes("employer owner"));
+    assert.doesNotMatch(activityLog[5], /company_name|course_ids|duration_hours|changed_fields/);
     if (role === "admin") assert.equal(JSON.parse(activityLog[6]).employer_id, "owner");
     cache.flushAll();
   }

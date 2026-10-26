@@ -529,8 +529,8 @@ export const updateInternshipPosting = async (req, res) => {
           "internship_posting_updated",
           "internship_postings",
           postingId,
-          `Employer updated posting "${updatedPosting.position}" at ${updatedPosting.company_name} (${changedFields.join(", ") || "no fields"}).`,
-          JSON.stringify({ changed_fields: changedFields }),
+          `Employer updated internship posting "${updatedPosting.position}" at ${updatedPosting.company_name}.`,
+          JSON.stringify({ changed_fields: changedFields, position: updatedPosting.position, company_name: updatedPosting.company_name }),
         ],
       );
     } catch (logError) {

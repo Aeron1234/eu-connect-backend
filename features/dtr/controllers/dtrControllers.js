@@ -7,6 +7,8 @@ import { db } from "../../../config/db.js";
 import { isWithinRadius } from "../../../config/helpers.js";
 import { getMaxShiftHours } from "../../../config/shiftLimits.js";
 
+// Reject absent, blank, non-numeric or out-of-range coordinates, preserving zero.
+// This validates submitted values; it does not establish when the device acquired them.
 function parseDtrCoordinates(lat, lon) {
   if (lat == null || lon == null || String(lat).trim() === "" || String(lon).trim() === "") {
     return null;
@@ -120,14 +122,14 @@ export const getLatestDtrStatus = async (req, res) => {
       [userId, internshipId],
     );
 
-    // If no records found, they have never clocked in before
+    // No saved rows for this user/internship means there is no shift to resume.
     if (records.length === 0) {
       return res.status(200).json({ status: "CLOCKED_OUT", record: null });
     }
 
     const lastRecord = records[0];
 
-    // Check if the last session is still open
+    // Only a row with clock-in and no clock-out is active; an on-break row remains open.
     if (lastRecord.clock_in != null && lastRecord.clock_out === null) {
       return res.status(200).json({
         status: lastRecord.status === "on-break" ? "ON_BREAK" : "CLOCKED_IN",
@@ -161,7 +163,8 @@ export const clockIn = async (req, res) => {
     connection = await db.getConnection();
     await connection.beginTransaction();
 
-    // Check for open time records
+    // Check and lock an existing open shift across this student's internships
+    // before allowing another clock-in.
     const [openRecords] = await connection.execute(
       `SELECT id FROM daily_time_records 
        WHERE user_id = ? AND clock_out IS NULL 
@@ -177,7 +180,8 @@ export const clockIn = async (req, res) => {
       });
     }
 
-    // 1. Fetch ongoing internship along with custom dtr_location if available
+    // Resolve the owned, non-deleted ongoing internship and optional geofence override.
+    // has_started uses the database calendar day (configured for Philippine time).
     const [internships] = await connection.execute(
       `SELECT 
          ir.id AS internship_id, 
@@ -212,7 +216,8 @@ export const clockIn = async (req, res) => {
       return res.status(409).json({ error: "DTR becomes available on your internship start date." });
     }
 
-    // 2. Fallback Logic: Use dtr_locations if present; otherwise use internship_records (defaulting radius to 150m)
+    // Prefer non-null override coordinates; otherwise use company coordinates.
+    // Use the override radius when provided, with 150 m as the default.
     const targetLat = record.dtr_lat ?? record.company_lat;
     const targetLon = record.dtr_lon ?? record.company_lon;
     const allowedRadius = record.radius_meters ?? 150;
@@ -225,7 +230,7 @@ export const clockIn = async (req, res) => {
       });
     }
 
-    // 3. Geofence check via isWithinRadius
+    // Compare the submitted position to the configured target using rounded distance in meters.
     const { isWithin, distanceMeters } = isWithinRadius(
       location.latitude,
       location.longitude,
@@ -234,7 +239,7 @@ export const clockIn = async (req, res) => {
       allowedRadius,
     );
 
-    // 4. THE REJECTION GUARD: If outside allowed radius, stop execution
+    // Reject an out-of-radius position before writing attendance.
     if (!isWithin) {
       await connection.rollback();
       return res.status(422).json({
@@ -243,7 +248,7 @@ export const clockIn = async (req, res) => {
       });
     }
 
-    // 5. Insert daily time record
+    // Store the DB clock-in time and submitted coordinates; invalidate caches after commit.
     const [result] = await connection.execute(
       `INSERT INTO daily_time_records 
        (internship_id, user_id, clock_in, lat_in, lon_in, status) 
@@ -278,6 +283,8 @@ export const clockIn = async (req, res) => {
   }
 };
 
+// Lock the authenticated user's latest open shift, then enforce present-to-break
+// or break-to-present ordering. Repeated/out-of-order transitions return a conflict.
 async function changeBreakState(req, res, starting) {
   let connection;
   try {
@@ -307,6 +314,8 @@ async function changeBreakState(req, res, starting) {
       });
     }
 
+    // Starting records the DB break start without closing the shift. Resuming adds
+    // elapsed break seconds once, clears the start and returns the row to present.
     const valid = starting
       ? record.status === "present" && record.break_started_at == null
       : record.status === "on-break" && record.break_started_at != null;
@@ -379,7 +388,8 @@ export const clockOut = async (req, res) => {
     connection = await db.getConnection();
     await connection.beginTransaction();
 
-    // 1. Find active clock-in, company coordinates, AND optional dtr_locations coordinates
+    // Lock the user's open shift with its company/override location and accumulated breaks.
+    // Manual clock-out must resume any active break before proceeding.
     const [activeRecords] = await connection.execute(
       `SELECT 
          dtr.id AS dtr_id, 
@@ -427,7 +437,7 @@ export const clockOut = async (req, res) => {
       });
     }
 
-    // 2. Fallback Logic: Prefer dtr_locations, fallback to internship_records (radius default: 150m)
+    // Use the same non-null coordinate fallback and 150 m default as clock-in.
     const targetLat = record.dtr_lat ?? record.company_lat;
     const targetLon = record.dtr_lon ?? record.company_lon;
     const allowedRadius = record.radius_meters ?? 150;
@@ -441,7 +451,7 @@ export const clockOut = async (req, res) => {
       });
     }
 
-    // 3. Geofence Check for Clock Out using isWithinRadius
+    // Manual clock-out also requires the submitted position to be within the target radius.
     const { isWithin, distanceMeters } = isWithinRadius(
       location.latitude,
       location.longitude,
@@ -458,7 +468,8 @@ export const clockOut = async (req, res) => {
       });
     }
 
-    // 4. Calculate Shift Hours
+    // Calculate elapsed duty in DB time, subtract completed break seconds and clamp at zero.
+    // An active break has already been rejected, so no unfinished break is credited.
     const [timeResult] = await connection.execute(
       `SELECT GREATEST(0, TIMESTAMPDIFF(SECOND, ?, NOW()) - ?) / 3600 AS hours`,
       [record.clock_in, Number(record.break_total_seconds) || 0],
@@ -466,7 +477,8 @@ export const clockOut = async (req, res) => {
 
     const rawHours = Number(timeResult[0]?.hours) || 0;
 
-    // 5. Sanity check: cap and flag abnormally long shifts
+    // Cap credited duty and flag only when raw hours strictly exceed the duty limit.
+    // Unlike automatic closure, manual clock-out retains the current DB clock-out time.
     let finalHours = rawHours;
     let flagged = false;
     let flagReason = null;
@@ -477,7 +489,7 @@ export const clockOut = async (req, res) => {
       finalHours = maxShiftHours;
     }
 
-    // 6. Update Daily Time Record
+    // Save the clock-out position, credited hours and flag on the locked shift.
     const [updateDtr] = await connection.execute(
       `UPDATE daily_time_records 
        SET clock_out = NOW(), 
@@ -490,7 +502,8 @@ export const clockOut = async (req, res) => {
       [location.latitude, location.longitude, finalHours, flagged, flagReason, record.dtr_id],
     );
 
-    // 7. Update Internship Accumulated Hours (use capped hours, not raw)
+    // Add exactly the credited (possibly capped) hours to the internship in the
+    // same transaction as shift closure, then invalidate caches after commit.
     const [updateInternship] = await connection.execute(
       `UPDATE internship_records 
        SET accumulated_hours = accumulated_hours + ? 
@@ -543,8 +556,8 @@ export const deleteDTR = async (req, res) => {
 
     await connection.beginTransaction();
 
-    // 1. Subtract hours from the internship record first
-    // COALESCE ensures we subtract 0 if they haven't clocked out yet
+    // Subtract this owned DTR's credited total from its internship before deletion.
+    // An unfinished row has no credited total, so COALESCE subtracts zero.
     await connection.execute(
       `
       UPDATE internship_records ir
@@ -555,7 +568,7 @@ export const deleteDTR = async (req, res) => {
       [dtrId, id],
     );
 
-    // 2. Delete the record
+    // Delete only the authenticated user's row; rollback also reverses the subtraction.
     const [result] = await connection.execute(
       `DELETE FROM daily_time_records WHERE id = ? AND user_id = ?`,
       [dtrId, id],
@@ -636,7 +649,7 @@ export const getMySettedDtrLocation = async (req, res) => {
       location: {
         lat: isCustom ? record.dtr_lat : record.company_lat,
         lon: isCustom ? record.dtr_lon : record.company_lon,
-        radius_meters: isCustom ? record.radius_meters : 150, // keep in sync with your default elsewhere
+        radius_meters: isCustom ? record.radius_meters : 150, // Default company geofence radius in meters.
         label: isCustom ? record.label : "Company address (default)",
         address: isCustom ? record.address : null,
         set_by: isCustom ? record.set_by : null,

@@ -1,5 +1,6 @@
-// Bound Supabase Storage I/O, including reading the response body. Other
-// Supabase services retain their existing behavior. Caller cancellation is preserved.
+// Attach a deadline signal to Supabase Storage requests, including body consumption.
+// Use a shorter deadline for DELETE and preserve caller cancellation. Requests
+// outside /storage/v1/ keep their original options.
 export function createStorageFetch(fetcher = fetch, { timeoutMs = 45000, deleteTimeoutMs = 10000 } = {}) {
   return (input, options = {}) => {
     const url = typeof input === 'string' || input instanceof URL ? String(input) : input.url;

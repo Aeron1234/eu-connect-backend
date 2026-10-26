@@ -1,3 +1,4 @@
+import { formatActivityLogUserName } from "../../../config/activityLogNames.js";
 import { reportError } from "../../../config/errorTracking.js";
 import { invalidateActivityLogsCache } from "../../../config/cache/activityLogsCache.js";
 import { db } from "../../../config/db.js";
@@ -194,7 +195,7 @@ export const getAllActivityLogs = async (req, res) => {
     const data = rows.map((r) => ({
       id: r.id,
       actor_id: r.actor_id,
-      actor_name: r.first_name ? `${r.first_name} ${r.last_name}` : "Unknown",
+      actor_name: formatActivityLogUserName(r, "Unknown user"),
       actor_role: r.actor_role,
       action: r.action,
       target_type: r.target_type,

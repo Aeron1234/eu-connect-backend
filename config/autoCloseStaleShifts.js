@@ -6,6 +6,8 @@ import { db } from "./db.js";
 import { reportBackgroundError } from "./errorTracking.js";
 import { getMaxShiftHours } from "./shiftLimits.js";
 
+// Subtract completed breaks and, while on break, freeze elapsed duty at break_started_at.
+// Clamp negative totals to zero; wall-clock age is checked separately.
 const workedSecondsSql = `GREATEST(0, TIMESTAMPDIFF(SECOND, clock_in,
   CASE WHEN status = 'on-break' AND break_started_at IS NOT NULL
     THEN break_started_at ELSE NOW() END) - break_total_seconds)`;
@@ -14,6 +16,8 @@ export const autoCloseStaleShifts = async () => {
   let connection;
   try {
     const maxShiftHours = getMaxShiftHours();
+    // The wall limit catches forgotten breaks even when duty time is paused.
+    // It defaults to duty cap plus two hours and must exceed the duty cap.
     const maxWallHours = Number(process.env.MAX_SHIFT_WALL_HOURS || maxShiftHours + 2);
     if (!Number.isSafeInteger(maxWallHours) || maxWallHours <= maxShiftHours) {
       throw new Error("MAX_SHIFT_WALL_HOURS must exceed MAX_SHIFT_HOURS.");
@@ -24,7 +28,8 @@ export const autoCloseStaleShifts = async () => {
     }
     connection = await db.getConnection();
 
-    // Cap how many we look at per run as a safety net against runaway backlogs
+    // Scan at most 5,000 candidates, then process configured-size transaction batches.
+    // Release the scan connection before acquiring each batch's connection.
     const [staleRecords] = await connection.execute(
       `SELECT id, internship_id FROM daily_time_records
        WHERE clock_out IS NULL
@@ -83,6 +88,8 @@ async function closeBatch(batch, maxShiftHours, maxWallHours) {
     const hoursByInternship = new Map();
     for (const record of openRecords) {
       const workedSeconds = Math.max(0, Number(record.worked_seconds) || 0);
+      // Credit at most the duty cap. If reached, place clock-out at clock-in plus
+      // completed breaks plus capped duty; wall-only closures use the current DB time.
       const reachedDutyCap = workedSeconds >= maxShiftHours * 3600;
       const creditedHours = Math.min(workedSeconds, maxShiftHours * 3600) / 3600;
       const closeOffsetSeconds = (Number(record.break_total_seconds) || 0) + maxShiftHours * 3600;
@@ -107,6 +114,8 @@ async function closeBatch(batch, maxShiftHours, maxWallHours) {
       if (updated.affectedRows !== 1) {
         throw new Error("Auto-close update did not affect the locked shift.");
       }
+      // Aggregate only successfully closed rows for the internship credit updates
+      // in this transaction; a later failure rolls back the whole batch.
       hoursByInternship.set(
         record.internship_id,
         (hoursByInternship.get(record.internship_id) || 0) + creditedHours,
@@ -125,6 +134,7 @@ async function closeBatch(batch, maxShiftHours, maxWallHours) {
       }
     }
 
+    // Publish cache invalidations after both shift closure and accumulated credits commit.
     await connection.commit();
     invalidateAttendanceHistoryCache();
     invalidateProfileOverviewCache();

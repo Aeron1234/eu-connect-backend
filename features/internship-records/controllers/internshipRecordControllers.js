@@ -35,6 +35,8 @@ export const getRegions = async (req, res) => {
   }
 };
 
+// Active means a non-deleted ongoing or pending record. Prefer ongoing, then
+// the most recently created record; this endpoint does not return finished history.
 export const getActiveInternship = async (req, res) => {
   try {
     const { id } = req.verifiedUser;
@@ -236,6 +238,8 @@ export const createInternshipRecord = async (req, res) => {
       [DEPARTMENT_HEAD, department_id, ADMIN],
     );
 
+    // The INSERT predicate blocks creation when this student has an ongoing record.
+    // A skipped insert is reported through affectedRows, not a successful submission.
     const [result] = await connection.execute(
       `
       INSERT INTO internship_records (id, user_id, company_name, company_address, internship_position, description, lon, lat, date_started, date_ended, total_hours, region_id, company_website, semester, city_name, province_name)
@@ -273,6 +277,8 @@ export const createInternshipRecord = async (req, res) => {
       });
     }
 
+    // Create the placement, staff inbox rows and activity log in the same transaction.
+    // Cache invalidation and socket delivery follow the successful commit.
     const requestMessage = `New request from ${studentName}`;
 
     const values = recipients.map((recipient) => [
@@ -384,7 +390,8 @@ export const approveInternshipRecord = async (req, res) => {
 
     const personInChargeName = `${personInCharge[0].first_name} ${personInCharge[0].last_name}`;
 
-    // Combine the recipient + status + department lookups into one locked read
+    // Lock the live record with the student's latest academic department before
+    // checking authorization and pending state, serializing staff decisions with edits.
     const [recordRows] = await connection.execute(
       `SELECT ir.user_id, ir.company_name, ir.status, sai.department_id
        FROM internship_records ir
@@ -413,7 +420,8 @@ export const approveInternshipRecord = async (req, res) => {
       department_id: recordDeptId,
     } = recordRows[0];
 
-    // Department heads can only act on records within their own department
+    // Resolve the head's current department from the database before comparing it
+    // with the student's latest department; admin has no department restriction here.
     if (role === "department_head") {
       const [deptHeadRows] = await connection.execute(
         `SELECT department_id FROM dept_heads_background_info WHERE user_id = ? LIMIT 1`,
@@ -450,8 +458,8 @@ export const approveInternshipRecord = async (req, res) => {
       });
     }
 
-    // The original request notification was inserted with link_uuid
-    // (see createInternshipRecord) — matching that here.
+    // Request alerts store the record UUID in link_uuid. Mark only this staff
+    // member's matching alert as read; other recipients retain their own read state.
     await connection.execute(
       `UPDATE notifications 
       SET is_read = 1 
@@ -470,10 +478,9 @@ export const approveInternshipRecord = async (req, res) => {
       ? "Internship Record Approved"
       : "Internship Record Rejected";
 
-    // internshipId is a char(36) UUID (internship_records.id) — belongs in
-    // link_uuid, matching the request notification above and the same
-    // convention link_uuid=UUID-based refs / link=int-based refs (e.g.
-    // announcements' auto-increment id) used elsewhere in this app.
+    // This decision notification stores the internship record UUID in link_uuid.
+    // Consumers must use this notification type's link contract; other types may
+    // retain legacy link values.
     await connection.execute(
       `INSERT INTO notifications (user_id, sender_id, type, message, title, link_uuid) VALUES (?, ?, ?, ?, ?, ?)`,
       [studentId, userId, notifType, notifMessage, notifTitle, internshipId],
@@ -534,6 +541,9 @@ export const approveInternshipRecord = async (req, res) => {
   }
 };
 
+// Staff completion checks ongoing status and department access under a lock.
+// It does not require accumulated_hours to reach total_hours. Keep a saved end
+// date, or fill a missing one with the database's current date.
 export const markInternshipFinished = async (req, res) => {
   let connection;
   try {
@@ -642,9 +652,8 @@ export const markInternshipFinished = async (req, res) => {
         ? `${studentProfile[0].first_name} ${studentProfile[0].last_name}`
         : null;
 
-    // batch_year isn't a tracked field anywhere in the schema — derived from the
-    // internship's start year as a stand-in. Confirm this matches what "batch year"
-    // is meant to represent before relying on it downstream.
+    // The alumni snapshot derives batch_year from the internship's start year.
+    // academic_year is copied separately from internship_records_with_ay.
     const batchYear = dateStarted
       ? new Date(dateStarted).getFullYear().toString()
       : null;
@@ -745,6 +754,9 @@ export const markInternshipFinished = async (req, res) => {
   }
 };
 
+// Student completion changes only the owner's ongoing record when accumulated
+// hours meet the requirement. The conditional UPDATE obtains the write lock
+// and sets the end date to the database's current date.
 export const finishInternshipRecord = async (req, res) => {
   let connection;
   try {
@@ -841,7 +853,8 @@ export const finishInternshipRecord = async (req, res) => {
     const departmentId =
       studentSai.length > 0 ? studentSai[0].department_id : null;
 
-    // Same batch_year caveat as markInternshipFinished — derived, not tracked.
+    // As in staff completion, derive the alumni snapshot's batch_year from the
+    // start year and copy academic_year separately from the internship view.
     const batchYear = dateStarted
       ? new Date(dateStarted).getFullYear().toString()
       : null;
@@ -1033,8 +1046,8 @@ export const getDepartmentInternshipRecords = async (req, res) => {
       INNER JOIN courses c ON sai.course_id = c.id
     `;
 
-    // The total applies status/search while the status cards remain scoped
-    // only to non-deleted records in the requester's department.
+    // The paginated total applies status/search. Status cards ignore those filters
+    // but keep the non-deleted and department scope; admin sees all departments.
     const totalExpression = filterConditions.length
       ? `COUNT(CASE WHEN ${filterConditions.join(" AND ")} THEN 1 END)`
       : "COUNT(*)";
@@ -1064,8 +1077,7 @@ export const getDepartmentInternshipRecords = async (req, res) => {
       [...pageParams, pageSize, offset],
     );
 
-    // Stats — scoped by department, independent of the current status/search
-    // filter, so the count cards always reflect department-wide totals
+    // Status cards reflect the authorized scope independently of search/status.
     const total = summary.total;
     const stats = {
       pending: summary.pending,
@@ -1107,6 +1119,9 @@ export const getDepartmentInternshipRecords = async (req, res) => {
   }
 };
 
+// Restore is rejected-to-pending, not an undo of soft deletion.
+// Check the locked, non-deleted record and current department access; it must
+// pass approval again before becoming ongoing.
 export const restoreInternshipRecord = async (req, res) => {
   let connection;
   try {
@@ -1202,6 +1217,9 @@ export const restoreInternshipRecord = async (req, res) => {
   }
 };
 
+// Students may soft-delete only their own pending or rejected records.
+// Lock before checking eligibility and remove matching staff request alerts
+// in the same transaction; retain the record and its associated history.
 export const deleteOwnInternshipRecord = async (req, res) => {
   let connection;
   try {
@@ -1302,9 +1320,9 @@ export const deleteInternshipRecord = async (req, res) => {
       return res.status(400).json({ error: "internshipId is required." });
     }
 
-    // Restricted to admin only — unlike approve/reject/restore, a delete is
-    // destructive and irreversible from the department head's own view, so
-    // it's kept out of their hands even within their own department
+    // This staff deletion endpoint is admin-only and sets deleted_at; it does not
+    // physically remove the record. Department heads cannot use it. The restore
+    // endpoint handles rejected, non-deleted records rather than undoing deletion.
     if (role !== "admin") {
       return res
         .status(403)
@@ -1373,6 +1391,7 @@ export const getInternshipRecordOverview = async (req, res) => {
       role,
     );
 
+    // Authorize against the current record and department before serving cached detail.
     if (internshipOverviewCacheHit(req, res)) return;
 
     const [rows] = await connection.execute(
@@ -1542,8 +1561,8 @@ export const getInternshipRecordEvaluations = async (req, res) => {
       ORDER BY m.created_at DESC, c.category ASC
     `;
 
-    // 2. Evaluations the student submitted ABOUT their supervisor —
-    // this direction has no review step, so reviewer fields stay null
+    // The student-to-supervisor direction retains null legacy reviewer fields.
+    // It is separate from the confidential employer-to-student performance direction.
     const givenQuery = `
       SELECT 
         m.id AS evaluation_id,

@@ -140,6 +140,7 @@ test("alumni edits and deletes log the alumni and company while retaining record
     assert.equal(activityLog[4], "record");
     assert.match(activityLog[5], /Graduate at Company/);
     assert.ok(!activityLog[5].includes("record record"));
+    assert.doesNotMatch(activityLog[5], /changed_fields|company_name|course_id|department_head/);
     cache.flushAll();
   }
 });

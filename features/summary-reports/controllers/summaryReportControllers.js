@@ -236,6 +236,8 @@ export async function saveSummaryReport(req, res) {
     }
 
     const saved = await withUploadConnection(async (connection) => {
+      // After uploads, lock and recheck ownership, start date, report identity, removal
+      // ownership and the combined retained/new image limit before writing metadata.
       const { existing, existingImages, removedImages } = await saveState(connection, true);
       if (initial?.existing && initial.existing.id !== existing?.id) {
         throw uploadValidationError(409, "This report changed during the upload. Refresh and try again.");
@@ -286,9 +288,13 @@ export async function saveSummaryReport(req, res) {
     } catch (cacheError) {
       reportError("Summary report cache invalidation failed:", cacheError);
     }
+    // Only after the final transaction commits and releases its connection may
+    // old image/legacy-attachment objects be removed.
     await Promise.all(removedPaths.map(removeStoredFile));
     return res.status(saved.edited ? 200 : 201).json({ success: true, message: saved.edited ? "Summary report updated." : "Summary report submitted." });
   } catch (error) {
+    // Clean newly staged paths on definite save failure; retain them if commit
+    // acknowledgement is uncertain to avoid breaking a potentially saved report.
     if (!committed && !error.uploadCommitUncertain) await cleanupUploadPaths(newPaths);
     if (error?.status) return res.status(error.status).json({ error: error.message, code: error.code });
     if (error?.code === "ER_DUP_ENTRY") {

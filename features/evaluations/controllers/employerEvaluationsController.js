@@ -5,12 +5,13 @@ import { invalidateActivityLogsCache } from "../../../config/cache/activityLogsC
 import { db } from "../../../config/db.js";
 import { newUUID } from "../../../config/helpers.js";
 
+// In this API, employer evaluation means the student evaluating their supervisor.
 export const getEvaluationCriterias = async (req, res) => {
   let connection;
   try {
     connection = await db.getConnection();
 
-    // Pull the clean schema rows directly from your database table
+    // Offer active questions only; inactive rows remain available to historical score joins.
     const query = `
       SELECT id, category, criterion_name 
       FROM employer_evaluation_criteria
@@ -20,7 +21,7 @@ export const getEvaluationCriterias = async (req, res) => {
 
     const [rows] = await connection.execute(query);
 
-    // Group the flat database rows into your required frontend array structure
+    // Group by category; the form submits criterion_name while scores reference numeric IDs.
     const structuredData = [];
 
     rows.forEach((row) => {
@@ -37,8 +38,8 @@ export const getEvaluationCriterias = async (req, res) => {
       }
 
       categoryGroup.items.push({
-        id: row.criterion_name, // Matches your frontend state key
-        db_id: row.id, // The actual auto-increment integer ID from your database
+        id: row.criterion_name, // Form key submitted as criterion_name.
+        db_id: row.id, // Stored criterion ID.
         name: row.criterion_name, // Display string
       });
     });
@@ -52,6 +53,7 @@ export const getEvaluationCriterias = async (req, res) => {
   }
 };
 
+// Retired confirmation read: students cannot access confidential employer scores.
 export const getPendingStudentEvaluations = async (req, res) => {
   return res.status(403).json({ error: "Employer evaluations are confidential." });
 };
@@ -60,17 +62,13 @@ export const createEmployerEvaluation = async (req, res) => {
   const { id: studentId, role } = req.verifiedUser;
   const { other_remarks, scores } = req.body;
 
-  // const TOTAL_REQUIRED_CRITERIA = 17;
+  // Supervisor Evaluation is the student-to-employer direction.
 
   if (!Array.isArray(scores)) {
     return res.status(400).json({ error: "Missing required evaluation data." });
   }
 
-  // if (scores.length < TOTAL_REQUIRED_CRITERIA) {
-  //   return res.status(400).json({
-  //     error: `Incomplete evaluation form. You answered ${scores.length} out of ${TOTAL_REQUIRED_CRITERIA} required criteria items.`,
-  //   });
-  // }
+  // Validate submitted values without a fixed minimum criterion-count check.
 
   const hasInvalidScore = scores.some((item) => {
     if (
@@ -96,6 +94,8 @@ export const createEmployerEvaluation = async (req, res) => {
     connection = await db.getConnection();
     await connection.beginTransaction();
 
+    // Lock the student's live ongoing record so assignment changes and duplicate
+    // submissions are serialized before resolving the supervisor and active slot.
     const [records] = await connection.execute(
       `SELECT id, employer_id, company_name FROM internship_records WHERE user_id = ? AND status = 'ongoing' AND deleted_at IS NULL LIMIT 1 FOR UPDATE`,
       [studentId],
@@ -120,7 +120,7 @@ export const createEmployerEvaluation = async (req, res) => {
 
     await assertNoActiveEvaluation(connection, "employer_evaluation_masters", internship.id);
 
-    const evaluationPeriod = new Date().toISOString().slice(0, 7); // 'YYYY-MM', just a display label now
+    const evaluationPeriod = new Date().toISOString().slice(0, 7); // UTC YYYY-MM label; uniqueness is per internship, not month.
 
     const masterId = newUUID();
 
@@ -158,8 +158,8 @@ export const createEmployerEvaluation = async (req, res) => {
       ]);
     }
 
-    // Activity log is supplementary — isolated so a logging failure can
-    // never roll back or fail the actual evaluation submission.
+    // A caught log-insert error does not by itself abort the submission.
+    // The evaluation master and scores remain in the surrounding transaction.
     try {
       await connection.execute(
         `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -185,6 +185,8 @@ export const createEmployerEvaluation = async (req, res) => {
       );
     }
 
+    // Post immediately, with no confirmation status. Invalidate history and activity
+    // data only after the master and scores commit.
     await connection.commit();
     invalidateEvaluationHistoryCache();
 

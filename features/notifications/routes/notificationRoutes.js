@@ -60,7 +60,7 @@ notificationRoutes.patch(
 notificationRoutes.delete(
   "/notifications/:notificationId",
   verifyUser,
-  generalLimiter, // guessing the limiter tier — adjust to match your other notification routes
+  generalLimiter, // The controller enforces recipient ownership and live request protection.
   deleteNotification,
 );
 

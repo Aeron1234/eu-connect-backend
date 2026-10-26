@@ -1,4 +1,5 @@
-// Optional for older API clients. New forms supply both fields.
+// Accept both city/province fields together or neither for older clients.
+// Normalize whitespace and bound text; this does not geocode or verify the address.
 export function readPlacementCity(body = {}) {
   const values = {};
   for (const key of ['city_name', 'province_name']) {

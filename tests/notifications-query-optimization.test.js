@@ -32,7 +32,7 @@ test('inbox total follows scope while unread badge remains global', async () => 
   const totals = { all_total: 9, request_total: 3, unread_count: 4 };
   const row = { notification_id: 'n', type: 'supervisor_request_submitted',
     sender_id: 'sender', sender_first_name: 'Ana', sender_last_name: 'Reyes',
-    supervisor_request_status: 'pending', is_read: 0 };
+    supervisor_request_status: 'pending', supervisor_request_actionable: 1, is_read: 0 };
   for (const [scope, expectedTotal] of [['all', 9], ['requests', 3]]) {
     const { res, calls, releases } = await invoke({ scope, page: '2', limit: '2' }, [row], totals);
     assert.equal(calls.length, 2);

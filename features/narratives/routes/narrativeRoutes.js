@@ -1,3 +1,4 @@
+import { requireStudentDepartmentAccess } from "../../../config/studentProfileAccess.js";
 import express from "express";
 import multer from "multer";
 import { verifyUser } from "../../../middleware/verifyUser.js";
@@ -59,6 +60,7 @@ narrativeRoutes.get(
   verifyUser,
   verifyRole(["employer", "department_head", "admin"]),
   paginationLimiter,
+  requireStudentDepartmentAccess,
   getSearchedStudentNarratives,
 );
 

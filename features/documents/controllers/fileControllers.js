@@ -1,3 +1,4 @@
+import { activityLogDocumentPhase } from "../../../config/activityLogMessages.js";
 import { reportError } from "../../../config/errorTracking.js";
 import { invalidateDocumentMetadataCache } from "../../../config/cache/documentMetadataCache.js";
 import { invalidatePastInternshipsCache } from "../../../config/cache/pastInternshipsCache.js";
@@ -10,6 +11,8 @@ import { withUploadConnection, uploadValidationError, cleanupUploadPaths, afterU
 
 const BUCKET = process.env.SUPABASE_BUCKET;
 
+// Create the employer's acceptance/rejection alert inside the document transaction.
+// link_uuid targets the student's profile, not the document ID.
 async function addEmployerDocumentNotification(connection, doc, studentId, decision) {
   if (doc.uploaded_by_role !== "employer" || !doc.uploaded_by_id) return null;
 
@@ -32,6 +35,8 @@ async function addEmployerDocumentNotification(connection, doc, studentId, decis
   return notification;
 }
 
+// Publish only after commit; scoped cache/socket failures are logged without
+// undoing acceptance or deletion.
 function publishEmployerDocumentNotification(req, notification) {
   if (!notification) return;
   try {
@@ -79,7 +84,8 @@ export const getFileRequirementTypes = async (req, res) => {
   }
 };
 
-// Existing function — one line added, nothing else changed
+// List the authenticated user's files, optionally narrowed by internship/category.
+// Pending employer uploads remain visible here for the student's review.
 export const getInternshipFiles = async (req, res) => {
   try {
     const { id: userId } = req.verifiedUser;
@@ -118,6 +124,8 @@ export const getInternshipFiles = async (req, res) => {
   }
 };
 
+// Lock before checking ownership, employer origin and pending state. The mounted
+// accept route is student-only; this controller also retains an admin fallback.
 export const approveInternshipDocument = async (req, res) => {
   let connection;
   try {
@@ -204,8 +212,8 @@ export const approveInternshipDocument = async (req, res) => {
   }
 };
 
-// New — student's own current (ongoing) internship, so Storage knows
-// which internshipId's documents to show in the top section
+// Stage a private requirement upload between a released preflight read and
+// a final transaction that rechecks the same ongoing internship and requirement.
 
 export const uploadInternshipFile = async (req, res) => {
   let uploadedStoragePath;
@@ -265,9 +273,11 @@ export const uploadInternshipFile = async (req, res) => {
     if (uploadError) throw uploadError;
 
     await withUploadConnection(async (connection) => {
+      // The internship may have finished or been deleted during storage I/O.
+      // Recheck under its row lock before creating the document metadata.
       const { category: catLower } = await eligibility(connection, internshipId);
-      // Save to Database — no public url stored; downloads go through
-      // a signed URL generated on-demand in downloadInternshipFile
+      // Store the private object path, not a public URL. Authorized download handlers
+      // mint short-lived signed URLs from this saved path.
       const [result] = await connection.execute(
         `INSERT INTO internship_documents 
           (user_id, internship_id, file_name, company_name, category, requirement_type_id, file_type, path)
@@ -288,8 +298,8 @@ export const uploadInternshipFile = async (req, res) => {
         throw uploadValidationError(400, "Uploading file failed.");
       }
 
-      // Activity log is supplementary — a failure here must never roll back
-      // or fail the actual upload, so it's isolated in its own try/catch.
+      // A caught activity-log insert error does not by itself abort the upload.
+      // The document metadata and log attempt use the final transaction.
       try {
         await connection.execute(
           `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -299,7 +309,7 @@ export const uploadInternshipFile = async (req, res) => {
             "internship_document_uploaded",
             "internship_documents",
             String(result.insertId),
-            `Uploaded ${file_name} (${catLower}) for internship at ${company_name}.`,
+            `Uploaded document "${file_name}" for the internship at ${company_name} (${activityLogDocumentPhase(catLower)}).`,
             JSON.stringify({
               internship_id: internshipId,
               file_name,
@@ -327,6 +337,8 @@ export const uploadInternshipFile = async (req, res) => {
       success: true,
     });
   } catch (error) {
+    // Clean staged objects on definite pre-commit failure. Retain them when COMMIT
+    // was attempted but its acknowledgement was lost, since metadata may already exist.
     if (!committed && uploadedStoragePath && !error.uploadCommitUncertain) {
       await cleanupUploadPaths([uploadedStoragePath]);
     }
@@ -385,8 +397,8 @@ export const deleteFile = async (req, res) => {
       ? await addEmployerDocumentNotification(connection, doc, userId, "rejected")
       : null;
 
-    // Same isolation as upload — logging failure shouldn't affect the
-    // already-decided deletion.
+    // A caught log-insert error does not by itself abort deletion; the surrounding
+    // transaction still determines whether the metadata change commits.
     try {
       await connection.execute(
         `INSERT INTO activity_logs (actor_id, actor_role, action, target_type, target_id, description, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -414,8 +426,8 @@ export const deleteFile = async (req, res) => {
     invalidateActivityLogsCache();
     publishEmployerDocumentNotification(req, employerNotification);
 
-    // Delete from storage AFTER commit succeeds — DB is source of truth,
-    // an orphaned storage object is recoverable, an orphaned DB row isn't
+    // Remove the stored object only after metadata deletion commits. A reported
+    // storage cleanup error is logged; it cannot restore the deleted metadata row.
     const { error: storageError } = await supabase.storage
       .from(BUCKET)
       .remove([doc.path]);
@@ -462,8 +474,8 @@ export const downloadInternshipFile = async (req, res) => {
         .json({ error: "You don't have access to this file." });
     }
 
-    // Bumped from 60s to 120s to give some buffer for the
-    // Server Action round trip before the client actually uses the URL
+    // Issue a 120-second URL after this handler's owner/staff check.
+    // Record/profile download endpoints apply their own additional target checks.
     const { data, error } = await supabase.storage
       .from(BUCKET)
       .createSignedUrl(doc.path, 120);

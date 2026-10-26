@@ -5,6 +5,9 @@ const labelFormatter = new Intl.DateTimeFormat("en-US", {
   timeZone: "Asia/Manila", month: "long", day: "numeric", year: "numeric",
 });
 
+// Keep validated date-only input as a calendar day. Convert Date objects and
+// timestamps with an explicit timezone to the Philippine day; reject ambiguous
+// timezone-less timestamps and dates that normalize to a different day.
 export function manilaCalendarDay(value) {
   if (!value) return null;
   if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
@@ -18,6 +21,9 @@ export function manilaCalendarDay(value) {
   return ["year", "month", "day"].map(type => parts.find(part => part.type === type).value).join("-");
 }
 
+// Compare normalized YYYY-MM-DD days and unlock at midnight in Asia/Manila.
+// Missing or invalid dates fail closed. This checks timing only; callers still
+// enforce ownership, internship status and feature-specific permissions.
 export function getInternshipStartAccess(dateStarted, feature, now = new Date()) {
   const startDay = manilaCalendarDay(dateStarted);
   const today = manilaCalendarDay(now);
@@ -35,6 +41,7 @@ export function getInternshipStartAccess(dateStarted, feature, now = new Date())
   };
 }
 
+// Apply the same date gate on backend writes; client controls cannot authorize a write.
 export function assertInternshipStarted(dateStarted, feature, now = new Date()) {
   const access = getInternshipStartAccess(dateStarted, feature, now);
   if (!access.allowed) throw Object.assign(new Error(access.message), { status: 409, code: "INTERNSHIP_NOT_STARTED" });

@@ -1,3 +1,5 @@
+import { formatActivityLogUserName } from "../../../config/activityLogNames.js";
+import { activityLogRoleName } from "../../../config/activityLogMessages.js";
 import { reportError } from "../../../config/errorTracking.js";
 import { getActivityLogUserName } from "../../../config/activityLogNames.js";
 import { invalidateProfileOverviewCache } from "../../../config/cache/profileOverviewCache.js";
@@ -770,7 +772,7 @@ export const createUser = async (req, res) => {
           "account_created",
           "users",
           newId,
-          `Admin created a new ${roleName} account for ${first_name} ${last_name} (${username}).`,
+          `Admin created a new ${activityLogRoleName(roleName).toLowerCase()} account for ${formatActivityLogUserName({ first_name, last_name })} (${username}).`,
           JSON.stringify({
             username,
             role: roleName,

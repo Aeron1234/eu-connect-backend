@@ -5,6 +5,8 @@ const STAFF_WATCH_TTL_MS = 60_000;
 
 const roomFor = (studentId, internshipId) => `dtr-location:${studentId}:${internshipId}`;
 
+// Accept bounded coordinates/accuracy and a timestamp no more than 30 seconds old
+// or 5 seconds ahead. These checks do not certify physical GPS authenticity.
 function validPosition(value, now) {
   if (!value || typeof value !== "object") return false;
   const { latitude, longitude, accuracy, timestamp } = value;
@@ -15,13 +17,15 @@ function validPosition(value, now) {
     timestamp <= now + 5_000 && timestamp >= now - 30_000;
 }
 
-// Positions live only in this process. They are never written to the database;
-// a student stops sharing on leaving the dashboard or disconnecting.
+// Only temporary shared positions live in this process; this stream writes no DB history.
+// Explicit stop, publisher disconnect or TTL expiry clears the pin. Attendance
+// clock-in/out coordinates and saved geofences are separate database features.
 export function createLiveDtrLocationService({ database = db, now = Date.now, ttlMs = LIVE_DTR_LOCATION_TTL_MS } = {}) {
   const locations = new Map();
 
   function remove(io, studentId, socketId) {
     const current = locations.get(studentId);
+    // An older publishing socket must not clear a newer socket's shared position.
     if (!current || current.socketId !== socketId) return;
     clearTimeout(current.timer);
     locations.delete(studentId);
@@ -42,6 +46,7 @@ export function createLiveDtrLocationService({ database = db, now = Date.now, tt
     const userId = String(socket.data.userId);
     let watchedRoom = null;
     let watchTimer = null;
+    // Invalidate in-flight authorization results when watching/sharing stops or changes.
     let watchGeneration = 0;
     let shareGeneration = 0;
     let lastShareAt = 0;
@@ -79,6 +84,8 @@ export function createLiveDtrLocationService({ database = db, now = Date.now, tt
             });
           }
         }
+        // Stamp the stored pin with server acceptance time, and replace the previous TTL.
+        // Publish only to this student/internship room, never a global audience.
         lastShareAt = now();
         const shared = {
           latitude: position.latitude,
@@ -104,6 +111,8 @@ export function createLiveDtrLocationService({ database = db, now = Date.now, tt
       remove(io, userId, socket.id);
     });
 
+    // Replace the existing watch before authorizing the requested target.
+    // Current role, latest student department and accepted supervisor come from the DB.
     socket.on("dtr_location:watch", async (request, reply) => {
       const acknowledge = typeof reply === "function" ? reply : () => {};
       if (watchTimer) clearTimeout(watchTimer);
@@ -145,6 +154,7 @@ export function createLiveDtrLocationService({ database = db, now = Date.now, tt
         }
         watchedRoom = roomFor(studentId, internshipId);
         socket.join(watchedRoom);
+        // Grant a short room lease; the client must renew so access is periodically rechecked.
         watchTimer = setTimeout(() => {
           if (watchedRoom) socket.leave(watchedRoom);
           watchedRoom = null;

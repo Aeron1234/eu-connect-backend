@@ -6,13 +6,17 @@ import { invalidateActivityLogsCache } from '../../config/cache/activityLogsCach
 import { invalidateRouteCache } from '../../config/cache/cache.js';
 import { evaluationReadScope } from './evaluationAccess.js';
 
+// Call while holding the internship row lock to serialize competing submissions.
+// Only undeleted evaluations occupy this direction's slot; soft-deleted history
+// does not block replacement. Table names are internal controller constants.
 export async function assertNoActiveEvaluation(connection, table, internshipId) {
   const [existing] = await connection.execute(
     `SELECT id FROM ${table} WHERE internship_record_id = ? AND deleted_at IS NULL LIMIT 1`, [internshipId]);
   if (existing.length) throw Object.assign(new Error('An active evaluation already exists for this internship. Delete it before posting a replacement.'), { status: 409, code: 'EVALUATION_ALREADY_EXISTS' });
 }
 
-// Configuration is supplied only by controllers, never by request input.
+// Share the deletion lifecycle across both directions using controller constants.
+// Table/column configuration must never come from request input.
 export function evaluationDeleteHandler({ table, scoresTable, ownerColumn, authorRole }) {
   return async (req, res) => {
     const viewer = req.verifiedUser;
@@ -24,6 +28,8 @@ export function evaluationDeleteHandler({ table, scoresTable, ownerColumn, autho
     try {
       connection = await db.getConnection();
       await connection.beginTransaction();
+      // Authors are restricted to their own rows. Staff reuse current department
+      // scope in the locked read; admin has no department restriction.
       const scope = staff ? evaluationReadScope(viewer) : { sql: `AND m.${ownerColumn} = ?`, params: [viewer.id] };
       const [[evaluation]] = await connection.execute(
         `SELECT m.id, m.deleted_at, m.internship_record_id, m.${ownerColumn} AS author_id, ir.company_name
@@ -33,6 +39,7 @@ export function evaluationDeleteHandler({ table, scoresTable, ownerColumn, autho
         await connection.rollback();
         return res.status(404).json({ error: 'Evaluation not found or access denied.' });
       }
+      // Staff may purge only after author deletion. Authors cannot delete a row twice.
       if (staff && !evaluation.deleted_at) {
         await connection.rollback();
         return res.status(409).json({ error: 'Only evaluations already deleted by their author can be permanently deleted.' });
@@ -41,6 +48,8 @@ export function evaluationDeleteHandler({ table, scoresTable, ownerColumn, autho
         await connection.rollback();
         return res.status(404).json({ error: 'Evaluation already deleted.' });
       }
+      // Purge removes scores, linked notification rows and the deleted master together.
+      // Author deletion only timestamps the master, retaining staff-visible history.
       if (staff) {
         await connection.execute(`DELETE FROM ${scoresTable} WHERE evaluation_master_id = ?`, [id]);
         await connection.execute(`DELETE FROM notifications WHERE link_uuid = ? AND type IN ('evaluation_submitted', 'evaluation_deleted')`, [id]);
@@ -55,6 +64,8 @@ export function evaluationDeleteHandler({ table, scoresTable, ownerColumn, autho
         [viewer.id, viewer.role, staff ? 'evaluation_permanently_deleted' : 'evaluation_soft_deleted', table, id,
           `${staff ? 'Permanently deleted' : 'Deleted'} an evaluation for the internship at ${evaluation.company_name}.`,
           JSON.stringify({ internship_record_id: evaluation.internship_record_id })]);
+      // Commit the deletion and audit entry before invalidating history, notification
+      // and dashboard data. A failed transaction leaves those caches untouched.
       await connection.commit();
       invalidateEvaluationHistoryCache();
       invalidateNotificationsCache();
@@ -69,6 +80,8 @@ export function evaluationDeleteHandler({ table, scoresTable, ownerColumn, autho
   };
 }
 
+// This read checks ongoing assignment and the active slot, not the start date.
+// It is no-store UI guidance; submission rechecks the current state under a lock.
 export function evaluationEligibilityHandler(direction) {
   const performance = direction === 'performance';
   return async (req, res) => {

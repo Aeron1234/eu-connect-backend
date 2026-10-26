@@ -633,9 +633,10 @@ export const updateAnnouncement = async (req, res) => {
           "announcement_updated",
           "announcements",
           String(announcementId),
-          `Author updated announcement "${updatedData[0].title}" (${changedFields.join(", ") || "no fields"}).`,
+          `Author updated announcement "${updatedData[0].title}".`,
           JSON.stringify({
             changed_fields: changedFields,
+            title: updatedData[0].title,
             became_department_category:
               !wasDepartmentCategory && willBeDepartmentCategory,
             recipient_count: recipients.length,

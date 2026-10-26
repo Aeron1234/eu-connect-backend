@@ -2,8 +2,12 @@ import { reportError } from "../../../config/errorTracking.js";
 import { invalidateCriteriaCache } from "../../../config/cache/criteriaCache.js";
 import { db } from "../../../config/db.js";
 
+// Internal table names select the evaluation direction; mounted management
+// routes are admin-only. Categories are stored on criteria rows, not separately.
 function createCriteriaEndpoints(tableName) {
   const isStudentCriteria = tableName === "student_evaluation_criteria";
+  // Performance criteria omit a leading numeric category prefix; supervisor
+  // criteria keep their category text after trimming.
   const cleanCategory = (value) => isStudentCriteria
     ? value.trim().replace(/^\d+\.\s*/, "").trim()
     : value.trim();
@@ -85,8 +89,8 @@ function createCriteriaEndpoints(tableName) {
     }
   };
 
-  // "Delete" is really deactivate — historical evaluations already
-  // reference this criterion_id, so the row must never actually be removed
+  // Deletion here means deactivation, preserving IDs referenced by saved scores.
+  // Saved score reads retain access to inactive criteria.
   const deactivateCriterion = async (req, res) => {
     let connection;
     try {
@@ -137,9 +141,8 @@ function createCriteriaEndpoints(tableName) {
     }
   };
 
-  // Reverses deactivateCriterion — admin only, per-criterion (a section
-  // deactivate doesn't record which rows were already inactive beforehand,
-  // so there's no safe "undo the whole section" operation)
+  // Reactivate one locked criterion. Whole-section reactivation is also available,
+  // but it activates all inactive rows rather than restoring a prior snapshot.
   const reactivateCriterion = async (req, res) => {
     let connection;
     try {
@@ -183,6 +186,8 @@ function createCriteriaEndpoints(tableName) {
     }
   };
 
+  // Deactivate all currently active rows in the category in one transaction.
+  // This stores no record of which criteria were already inactive.
   const deactivateSection = async (req, res) => {
     let connection;
     try {
@@ -229,10 +234,8 @@ function createCriteriaEndpoints(tableName) {
     }
   };
 
-  // Reverses deactivateSection — reactivates every currently-inactive
-  // criterion under this category. Note: this isn't scoped to "whatever the
-  // last deactivateSection call touched" — it's every inactive row in the
-  // category, including any deactivated individually beforehand.
+  // Reactivate every inactive row in the category, including those individually
+  // deactivated before the last section change. This is not a snapshot undo.
   const reactivateSection = async (req, res) => {
     let connection;
     try {

@@ -26,7 +26,8 @@ beforeEach(() => {
     async execute(sql, params = []) {
       queries++;
       if (sql.includes("AS unread_count")) return [[{ all_total: 1, request_total: 1, unread_count: 2 }]];
-      if (sql.trim().startsWith("SELECT")) return [[{ notification_id: 1, sender_id: "sender", sender_first_name: params[0], type: "supervisor_request_submitted", supervisor_request_status: "pending", is_read: 0 }]];
+      if (sql.startsWith("SELECT id FROM notifications")) return [[]];
+      if (sql.trim().startsWith("SELECT")) return [[{ notification_id: 1, sender_id: "sender", sender_first_name: params[0], type: "supervisor_request_submitted", supervisor_request_status: "pending", supervisor_request_actionable: 1, is_read: 0 }]];
       return [{ affectedRows }];
     },
   };
@@ -69,7 +70,7 @@ test("notification GET reuses data, isolates users/page/limit/scope and keeps au
 test("employer inbox lists, pagination, unread badges and cached reads exclude legacy announcements", async t => {
   const get = await client(t);
   const rows = [{ notification_id: 1, type: "announcement", is_read: 0 },
-    { notification_id: 2, type: "supervisor_request_submitted", supervisor_request_status: "pending", is_read: 0 }];
+    { notification_id: 2, type: "supervisor_request_submitted", supervisor_request_status: "pending", supervisor_request_actionable: 1, is_read: 0 }];
   const statements = [];
   connection.execute = async (sql, params) => {
     statements.push(sql);
@@ -213,7 +214,7 @@ test("supervisor acceptance/rejection invalidates before socket delivery; rollba
       assert.doesNotMatch(activityLog[5], /internship record 1/);
       assert.equal(activityLog[4], "r");
       assert.equal(JSON.parse(activityLog[6]).internship_id, 1);
-      assert.equal(emitted, decision === "failed-commit" ? 0 : 1);
+      assert.equal(emitted, decision === "failed-commit" ? 0 : 2);
       assert.equal(cache.has("bob"), decision === "failed-commit");assert.equal(cache.has("searched-supervision"),decision === "failed-commit");
     }
   } finally { console.error = log; }

@@ -1,3 +1,5 @@
+import { canHeadReadStudentRecords } from "../../../config/studentProfileAccess.js";
+import { activityLogRoleName } from "../../../config/activityLogMessages.js";
 import { reportError } from "../../../config/errorTracking.js";
 import { invalidateDocumentMetadataCache } from "../../../config/cache/documentMetadataCache.js";
 import { invalidatePastInternshipsCache } from "../../../config/cache/pastInternshipsCache.js";
@@ -154,7 +156,10 @@ export const getSearchedUser = async (req, res) => {
       INNER JOIN user_profiles up ON u.id = up.user_id
       INNER JOIN roles r ON u.role_id = r.id
 
-      LEFT JOIN student_academic_info sai ON u.id = sai.user_id AND r.role = 'student'
+      LEFT JOIN student_academic_info sai ON sai.id = (
+        SELECT MAX(profile_latest.id) FROM student_academic_info profile_latest
+        WHERE profile_latest.user_id = u.id
+      ) AND r.role = 'student'
       LEFT JOIN courses c ON sai.course_id = c.id
       LEFT JOIN departments sd ON sai.department_id = sd.id
       LEFT JOIN internship_records ir 
@@ -205,6 +210,9 @@ export const getSearchedUser = async (req, res) => {
 
     const { id: viewerId, role: rawViewerRole } = req.verifiedUser || {};
     const viewerRole = rawViewerRole?.toLowerCase() || null;
+
+    const canViewStudentRecords = viewerRole !== "department_head" || role !== "student" ||
+      await canHeadReadStudentRecords(connection, viewerId, searchedUserId);
 
     // Supervision is supplementary — a failure here should degrade the tag,
     // not take down the whole profile.
@@ -287,6 +295,7 @@ export const getSearchedUser = async (req, res) => {
         header,
         info,
         supervision,
+        ...(viewerRole === "department_head" && role === "student" && { permissions: { canViewStudentRecords } }),
         hasOngoingInternship:
           role === "student" && Boolean(user.student_internship_id),
       },
@@ -464,10 +473,7 @@ export const setSearchedStudentDtrLocation = async (req, res) => {
 
   let connection;
   try {
-    // Fixed: this used to run before checking whether label was even
-    // provided — label is optional everywhere else in this function
-    // (label ?? null), so an omitted label crashed here with
-    // "Cannot read properties of undefined (reading 'length')".
+    // The note is optional; check its length only when supplied.
     if (label && label.length > 1000) {
       return res.status(400).json({ error: "Label is too long." });
     }
@@ -513,7 +519,7 @@ export const setSearchedStudentDtrLocation = async (req, res) => {
         .json({ error: "lat/lon values are out of range." });
     }
 
-    // radius_meter is optional; fall back to a sane default if not provided
+    // An omitted radius uses the 150 m company-geofence default.
     const radiusMeters =
       radius_meter === undefined || radius_meter === null
         ? 150
@@ -549,9 +555,9 @@ export const setSearchedStudentDtrLocation = async (req, res) => {
 
     const internship = internships[0];
 
-    // Only this internship's accepted supervisor can set its DTR location —
-    // an employer who hasn't been accepted as supervisor is blocked here.
-    // Staff (admin/department_head) are unaffected by this check.
+    // Employers must be this internship's current accepted supervisor.
+    // Staff bypass this employer check; the mounted route separately enforces
+    // current department access for department heads.
     if (role === "employer" && internship.employer_id !== setterId) {
       await connection.rollback();
       return res.status(403).json({
@@ -633,10 +639,8 @@ export const setSearchedStudentDtrLocation = async (req, res) => {
       ? `${setterName} has set your DTR check-in location${locationDescription} with a ${radiusMeters}m radius.\nNote: "${label}"`
       : `${setterName} has set your DTR check-in location${locationDescription} with a ${radiusMeters}m radius.`;
 
-    // internshipId is a char(36) UUID (internship_records.id) — goes under
-    // link_uuid, matching the convention used for every other internship-
-    // record-related notification (link is reserved for int/auto-increment
-    // ids, like announcements).
+    // This DTR-location notification stores the internship UUID in link_uuid.
+    // Other notification types may retain different legacy link contracts.
     await connection.execute(
       `INSERT INTO notifications (user_id, sender_id, type, title, message, link_uuid) VALUES (?, ?, ?, ?, ?, ?)`,
       [
@@ -725,6 +729,9 @@ export const setSearchedStudentDtrLocation = async (req, res) => {
   }
 };
 
+// Remove the saved override from a locked, owned live ongoing internship.
+// Employer assignment is checked here; department-head scope is enforced
+// by route middleware. Return company coordinates and 150 m without altering the company site.
 export const removeSearchedStudentDtrLocation = async (req, res) => {
   const { searchedUserId } = req.params;
   const { internshipId } = req.query;
@@ -802,12 +809,9 @@ export const getSearchedStudentFiles = async (req, res) => {
       return res.status(200).json([]);
     }
 
-    // 2. Get every document belonging to this student, across all
-    // their internships, in one query — cheaper than N queries per record.
-    // Files uploaded directly by the student have no verification_status
-    // (NULL) and always show. Files uploaded by an employer only show once
-    // the student has accepted them — a 'pending' one shouldn't count
-    // toward requirements or appear anywhere until confirmed.
+    // Fetch all internships' documents together, but include only NULL/accepted
+    // verification states in this grouped staff view. Pending employer files remain
+    // available in their separate student-review and uploader views.
     const [documents] = await connection.execute(
       `SELECT 
          doc.id, doc.internship_id, doc.file_name, doc.company_name,
@@ -895,8 +899,8 @@ export const downloadSearchedStudentInternshipFile = async (req, res) => {
       return res.status(404).json({ error: "File not found." });
     }
 
-    // Employers can only download files they personally uploaded —
-    // admins/department heads are not restricted this way
+    // Employers can download only their own uploads. Staff use this handler's
+    // student/file match plus the current-department guard on the mounted route.
     if (role === "employer" && doc.uploaded_by_id !== requesterId) {
       return res.status(403).json({
         error: "You can only download files you uploaded yourself.",
@@ -1017,8 +1021,8 @@ export const uploadFileToSearchedStudent = async (req, res) => {
 
       const { id: requirementTypeId, category: catLower } = reqTypes[0];
 
-      // Need both names now — employer's (for the notification/log "from"),
-      // and the student's (so the activity log reads a name, not a raw uuid).
+      // Read employer/student names for notification and audit descriptions while
+      // keeping their identifiers in structured metadata.
       const [employerProfile] = await connection.execute(
         `SELECT first_name, last_name FROM user_profiles WHERE user_id = ?`,
         [employerId],
@@ -1041,6 +1045,8 @@ export const uploadFileToSearchedStudent = async (req, res) => {
       const studentName = `${studentProfile[0].first_name} ${studentProfile[0].last_name}`;
       return { internship, requirementTypeId, catLower, employerName, studentName };
     }
+    // Release the preflight connection before storage I/O. The final transaction
+    // rechecks this same internship and the employer's current supervisor assignment.
     const initial = await withUploadConnection((connection) => eligibility(connection));
 
     const fileExt = file.originalname.split(".").pop();
@@ -1054,6 +1060,8 @@ export const uploadFileToSearchedStudent = async (req, res) => {
 
     if (uploadError) throw uploadError;
 
+    // Keep pending document metadata, the student's review alert and log attempt
+    // in one transaction. Uploaded certificates still require student acceptance.
     const saved = await withUploadConnection(async (connection) => {
       const { internship, requirementTypeId, catLower, employerName, studentName } = await eligibility(connection, initial.internship.id);
       const [result] = await connection.execute(
@@ -1141,6 +1149,8 @@ export const uploadFileToSearchedStudent = async (req, res) => {
       id: saved.id,
     });
   } catch (error) {
+    // Delete staged storage only on a definite failure; preserve it when a lost
+    // commit acknowledgement leaves the saved metadata outcome uncertain.
     if (!committed && uploadedStoragePath && !error.uploadCommitUncertain) {
       await cleanupUploadPaths([uploadedStoragePath]);
     }
@@ -1189,6 +1199,8 @@ export const deleteSearchedStudentFile = async (req, res) => {
       });
     }
 
+    // The uploader cannot remove a certificate after acceptance. The student-owner
+    // deletion endpoint has its own ownership rules and permits accepted files.
     if (role === "employer" && doc.verification_status === "accepted") {
       await connection.rollback();
       return res.status(403).json({
@@ -1227,7 +1239,7 @@ export const deleteSearchedStudentFile = async (req, res) => {
           "internship_document_deleted",
           "internship_documents",
           String(fileId),
-          `${role === "employer" ? "Employer" : role} deleted document "${doc.file_name}" belonging to ${studentName}.`,
+          `${activityLogRoleName(role)} deleted document "${doc.file_name}" belonging to ${studentName}.`,
           JSON.stringify({
             document_owner_id: searchedUserId,
             uploaded_by_id: doc.uploaded_by_id,

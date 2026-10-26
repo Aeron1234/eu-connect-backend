@@ -66,6 +66,8 @@ async function findUserById(userId) {
   return rows[0] ?? null;
 }
 
+// Load role context when issuing/refreshing a session. The resulting token
+// claims are snapshots; they do not replace current-membership record guards.
 async function attachRoleContext(user) {
   if (user.role === "student") {
     const [rows] = await db.execute(
@@ -104,6 +106,8 @@ async function attachRoleContext(user) {
   }
 }
 
+// Track account-level failures separately from HTTP request limits. The fifth
+// failed attempt starts a 15-minute lock; successful login clears these fields.
 async function registerFailedAttempt(user) {
   const newAttempts = user.failed_login_attempts + 1;
 
@@ -139,6 +143,8 @@ function toSessionUser(user) {
   };
 }
 
+// Store the token digest and rotation identifier. Keep its database expiry
+// aligned with the refresh JWT and cookie lifetimes.
 async function storeRefreshToken({ jti, userId, token, req }) {
   await db.execute(
     `INSERT INTO refresh_tokens (jti, user_id, token_hash, expires_at, user_agent, ip_address)
@@ -175,6 +181,8 @@ export const forgotPassword = async (req, res) => {
     return res.status(400).json({ error: "email is required" });
   }
 
+  // Use the same outward recovery message for missing accounts, delivery
+  // success and caught failures; diagnostic errors stay in server reporting.
   const genericResponse = {
     message: "If that email is registered, a temporary password has been sent.",
   };
@@ -185,6 +193,8 @@ export const forgotPassword = async (req, res) => {
       return res.json(genericResponse);
     }
 
+    // Replacing the stored JTI invalidates an earlier recovery credential for
+    // this account. The emailed token must match this value when used to log in.
     const jti = newJti();
     const tempPasswordToken = signTempPassword(user.user_uuid, jti);
 
@@ -244,6 +254,8 @@ export const login = async (req, res) => {
 
     let mustChangePassword = false;
 
+    // JWT-shaped input follows the temporary-token branch. A verified token must
+    // also match this account and its stored JTI before that identifier is cleared.
     if (looksLikeJwt(password)) {
       let payload;
       try {
@@ -305,9 +317,9 @@ async function findRefreshTokenRecord(jti) {
   return rows[0] ?? null;
 }
 
-// Walks forward through the rotation chain (replaced_by_jti) to find
-// whichever token is currently live, in case this jti was already
-// rotated by a concurrent request a moment ago.
+// Follow at most MAX_CHAIN_HOPS successor links from a revoked record.
+// Return the first unrevoked, unexpired successor, or null when none is found;
+// only the revoked-token grace path below uses this bounded lookup.
 async function findLiveDescendant(record) {
   let current = record;
   for (let i = 0; i < MAX_CHAIN_HOPS; i++) {
@@ -332,6 +344,8 @@ export const refresh = async (req, res) => {
 
   let connection;
   try {
+    // A valid signature/expiry alone is insufficient: the JTI must still have
+    // a stored record whose digest matches this exact presented token.
     const payload = verifyRefreshToken(token);
     const record = await findRefreshTokenRecord(payload.jti);
 
@@ -345,10 +359,9 @@ export const refresh = async (req, res) => {
     if (record.revoked_at) {
       const revokedMsAgo = Date.now() - new Date(record.revoked_at).getTime();
 
-      // Recently revoked (likely a concurrent request that rotated this
-      // same token a split second ago) — follow the chain instead of
-      // nuking the session. Only treat it as genuine reuse/theft if the
-      // revocation is older than the grace window.
+      // A recently revoked token may belong to a concurrent rotation. Follow its
+      // successors only within the grace window. A missing live successor also
+      // revokes all refresh tokens for this account; older revocations do so directly.
       if (revokedMsAgo <= REUSE_GRACE_MS) {
         const live = await findLiveDescendant(record);
         if (!live) {
@@ -371,6 +384,8 @@ export const refresh = async (req, res) => {
       return res.status(401).json({ error: "Refresh token expired" });
     }
 
+    // Refresh checks the current account status and reloads role context before
+    // attempting rotation; the access-token middleware itself does not do this lookup.
     const user = await findUserById(workingRecord.user_id);
 
     if (!user || user.status === "inactive") {
@@ -388,10 +403,9 @@ export const refresh = async (req, res) => {
     connection = await db.getConnection();
     await connection.beginTransaction();
 
-    // Conditional UPDATE closes the last race window: if another
-    // request rotated `workingRecord` between our SELECT and this
-    // UPDATE, affectedRows will be 0 and we back off instead of
-    // double-rotating the same token.
+    // The conditional UPDATE selects one rotation winner even though the earlier
+    // reads were outside this transaction. A lost race rolls back and returns 409;
+    // the caller must retry rather than creating a second successor here.
     const [updateResult] = await connection.execute(
       `UPDATE refresh_tokens SET revoked_at = NOW(), replaced_by_jti = ? WHERE jti = ? AND revoked_at IS NULL`,
       [newJtiValue, workingRecord.jti],
@@ -416,6 +430,7 @@ export const refresh = async (req, res) => {
       ],
     );
 
+    // Publish the new pair only after revocation and successor insertion commit together.
     await connection.commit();
 
     setAuthCookies(res, {
@@ -448,7 +463,8 @@ export const logout = async (req, res) => {
         [payload.jti],
       );
     } catch {
-      // Token already invalid/expired — nothing to revoke, just clear cookies.
+      // Revocation is best-effort here: token or database errors still fall through
+      // to clearing the response cookies.
     }
   }
 
@@ -480,6 +496,9 @@ export const setPassword = async (req, res) => {
   try {
     const newHash = await bcrypt.hash(newPassword, 10);
 
+    // Clear the recovery identifier with the password update, then invalidate
+    // cached user data and revoke stored refresh sessions. Access JWTs continue
+    // to be governed by their signature/expiry checks.
     await db.execute(
       `UPDATE users SET password_hash = ?, password_changed_at = NOW(), temp_password_jti = NULL WHERE id = ?`,
       [newHash, userId],

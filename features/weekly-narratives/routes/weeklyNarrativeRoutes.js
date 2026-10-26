@@ -1,3 +1,4 @@
+import { requireStudentDepartmentAccess } from "../../../config/studentProfileAccess.js";
 import { cacheRoute } from "../../../middleware/cache-middleware.js";
 import express from "express";
 import multer from "multer";
@@ -70,6 +71,7 @@ weeklyNarrativeRoutes.get(
   verifyUser,
   verifyRole(["employer", "department_head", "admin"]),
   paginationLimiter,
+  requireStudentDepartmentAccess,
   cacheRoute(30),
   getSearchedStudentWeeklyNarratives,
 );

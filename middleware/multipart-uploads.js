@@ -3,7 +3,8 @@ import multer from "multer";
 const MB = 1024 * 1024;
 const MAX_FIELDS = 50;
 
-// Keep the existing controller limits while bounding buffers during receipt.
+// Bound multipart file buffers, file/field counts and field sizes during receipt.
+// Controllers still enforce their content and permission rules.
 const policies = {
   document: {
     field: "file", maxFiles: 1, maxBytes: 10 * MB,
@@ -37,6 +38,8 @@ function boundedUpload({ field, maxFiles, maxBytes, sizeMessage, countMessage })
   });
   const parse = maxFiles === 1 ? upload.single(field) : upload.array(field, maxFiles);
 
+  // Return expected size/count/malformed-body failures as JSON before controllers.
+  // Unexpected parser errors continue to the central error handler.
   return (req, res, next) => parse(req, res, (error) => {
     if (!error) return next();
     let status = 400;

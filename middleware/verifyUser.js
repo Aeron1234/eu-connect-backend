@@ -1,9 +1,9 @@
 import { verifyAccessToken } from "../config/jwt.js";
 
-// Accepts the token from either source:
-// - Authorization: Bearer <token>  — how Next.js server actions call this API
-// - the access_token cookie        — how a real browser (or Postman) calling
-//                                     this API directly would send it
+// Prefer a non-empty Bearer token, otherwise read the access_token cookie.
+// This middleware verifies the JWT and exposes its claims without querying
+// current account/department state. Route-specific guards enforce ownership
+// and any membership checks that must reflect current database records.
 export function verifyUser(req, res, next) {
   const authHeader = req.headers.authorization;
   const bearerToken = authHeader?.startsWith("Bearer ")

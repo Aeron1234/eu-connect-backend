@@ -1,5 +1,8 @@
-// Apply this scope in the query that reads confidential employer scores.
-// Department membership comes from current database rows, not token claims.
+// Apply role scope inside the score/header query: employers see their own
+// undeleted performance evaluations; staff retain deleted history within scope.
+// Department membership uses current database rows and the latest student
+// academic record. Students are denied this confidential direction.
+// The caller supplies internal aliases and the internship join named ir.
 export function evaluationReadScope(viewer, alias = "m") {
   if (viewer?.role === "admin") return { sql: "", params: [] };
   if (viewer?.role === "employer") return { sql: `AND ${alias}.evaluated_by = ? AND ${alias}.deleted_at IS NULL`, params: [viewer.id] };
@@ -16,6 +19,8 @@ export function evaluationReadScope(viewer, alias = "m") {
   throw Object.assign(new Error("Employer evaluations are confidential."), { status: 403 });
 }
 
+// Notify distinct current department heads for the student's latest academic
+// department. These notifications do not go to the evaluated student.
 export async function departmentEvaluationRecipients(connection, studentId) {
   const [rows] = await connection.execute(
     `SELECT DISTINCT u.id FROM users u

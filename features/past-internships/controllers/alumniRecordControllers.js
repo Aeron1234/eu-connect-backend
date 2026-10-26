@@ -1,3 +1,4 @@
+import { activityLogRoleName } from "../../../config/activityLogMessages.js";
 import { reportError } from "../../../config/errorTracking.js";
 import { invalidateAlumniCache } from "../../../config/cache/alumniCache.js";
 import { invalidateActivityLogsCache } from "../../../config/cache/activityLogsCache.js";
@@ -234,7 +235,7 @@ export const updateAlumniInternshipRecord = async (req, res) => {
 
     // Activity log is supplementary — isolated so a logging failure can
     // never roll back or fail the actual update. Only field names are
-    // recorded, not the values, since the current row is already the
+    // retained in metadata for the update-details view; the current row is the
     // source of truth for "what it is now."
     try {
       const changedFields = Object.keys(fieldMap).filter(
@@ -249,8 +250,8 @@ export const updateAlumniInternshipRecord = async (req, res) => {
           "alumni_internship_record_updated",
           "alumni_internship_records",
           recordId,
-          `${role === "admin" ? "Admin" : "Department head"} updated the alumni record for ${updated[0].alumni_name} at ${updated[0].company_name} (${changedFields.join(", ") || "no fields"}).`,
-          JSON.stringify({ changed_fields: changedFields }),
+          `${activityLogRoleName(role)} updated the alumni internship record for ${updated[0].alumni_name} at ${updated[0].company_name}.`,
+          JSON.stringify({ changed_fields: changedFields, alumni_name: updated[0].alumni_name, company_name: updated[0].company_name }),
         ],
       );
     } catch (logError) {

@@ -730,7 +730,7 @@ export const saveProgramAnnualReport = async (req, res) => {
           action,
           "program_annual_reports",
           reportId,
-          `${isNewReport ? "Created" : "Updated"} the ${degreeProgram.trim()} annual report for ${academicYear} (status: ${status}).`,
+          `${isNewReport ? "Created" : "Updated"} the ${degreeProgram.trim()} annual report for academic year ${academicYear}${status === "draft" ? " and saved it as a draft" : status === "submitted" ? " and submitted it" : ""}.`,
           JSON.stringify({
             academic_year: academicYear,
             degree_program: degreeProgram.trim(),
