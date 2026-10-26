@@ -2,6 +2,8 @@ import { reportError } from "../../../config/errorTracking.js";
 import { db } from "../../../config/db.js";
 import { mapOrigin } from "../mapRouting.js";
 
+// Staff visit planning spans departments and includes live ongoing internships
+// only. Current course labels come from each student's latest academic row.
 export const getStudentMap = async (req, res) => {
   let connection;
   try {
@@ -42,8 +44,8 @@ export const getStudentMap = async (req, res) => {
       )
       .stream({ highWaterMark: 64 });
 
-    // Group by physical location + normalized company name — same company
-    // at the same coordinates is one pin/card, regardless of casing
+    // Group trimmed, case-insensitive company names with coordinates rounded to
+    // five decimal places. Each group becomes one pin/card with its internship rows.
     const groups = {};
     const regionsSeen = new Map(); // id -> name, dedupe while preserving one clean name per id
 

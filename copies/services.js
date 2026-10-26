@@ -1,3 +1,5 @@
+// Historical reference copy: not imported by the current backend startup or feature routers.
+// Keep its older payloads, authorization and queries separate from the active features/.
 import { db } from "@/lib/db";
 import { auth } from "./auth";
 import { cache } from "react";
@@ -8,7 +10,7 @@ export const getUserSession = cache(async () => {
   return session;
 });
 
-// DONE
+
 export const getOngoingInternshipRecord = cache(async () => {
   try {
     const session = await getUserSession();
@@ -31,7 +33,7 @@ export const getOngoingInternshipRecord = cache(async () => {
 });
 
 // For the Map Page, we need to fetch all ongoing internships for the department head
-// DONE
+
 export const getActiveInternships = cache(async () => {
   try {
     const session = await getUserSession();
@@ -59,7 +61,7 @@ export const getActiveInternships = cache(async () => {
 });
 
 // For user account page
-// DONE
+
 export const getUserProfile = cache(async () => {
   try {
     const session = await getUserSession();
@@ -85,8 +87,8 @@ export const getUserProfile = cache(async () => {
   }
 });
 
-// NEW: Optimized for checking status without downloading the whole history
-// DONE
+// Historical single-day DTR read; this is not the active attendance service.
+
 export async function getTodayDtr() {
   try {
     const session = await getUserSession();
@@ -111,7 +113,7 @@ export async function getTodayDtr() {
 }
 
 export async function checkDtrStatus() {
-  // Use the new optimized query instead of fetching all DTRs
+  // Use the single-day read in this copy instead of loading its full DTR history.
   const dtrRecordToday = await getTodayDtr();
 
   if (!dtrRecordToday) return { status: "clocked-out" };
@@ -123,7 +125,7 @@ export async function checkDtrStatus() {
   return { status: "clocked-out" };
 }
 
-//DONE
+
 export const getInternshipFiles = cache(async () => {
   try {
     const session = await getUserSession();
@@ -148,7 +150,7 @@ export const getInternshipFiles = cache(async () => {
   }
 });
 
-// DONE
+
 export const getRoles = cache(async () => {
   try {
     const session = await getUserSession();
@@ -164,7 +166,7 @@ export const getRoles = cache(async () => {
   }
 });
 
-// DONE
+
 export const getCourses = cache(async () => {
   try {
     const session = await getUserSession();
@@ -183,7 +185,7 @@ export const getCourses = cache(async () => {
   }
 });
 
-// DONE
+
 export const getAllAccounts = cache(async () => {
   try {
     const session = await getUserSession();

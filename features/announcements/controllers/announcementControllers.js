@@ -15,6 +15,8 @@ function parseEventDate(value) {
   return typeof value === "string" ? value.trim() || null : value == null ? null : false;
 }
 
+// Both dates are optional. An end requires a start; equality is a one-day event.
+// Blank date inputs become null before this inclusive range check.
 function eventRangeError(start, end) {
   if (start === false || (start && !isValidEventDate(start))) {
     return "Enter a valid event date (YYYY-MM-DD).";
@@ -71,16 +73,10 @@ export const getAllAnnouncements = async (req, res) => {
       params.push(searchParam, searchParam);
     }
 
-    // Department-scoped visibility, applied unconditionally regardless of
-    // the `category` filter:
-    // - Non-department posts are always visible to everyone.
-    // - Department posts are NEVER visible to employers, full stop — this
-    //   is explicit rather than relying on employers having a null
-    //   department_id (which happened to produce the same result via the
-    //   join, but silently and fragile to future schema changes).
-    // - For everyone else (student, department_head, admin), a department
-    //   post is visible only to admin or to viewers sharing the post
-    //   author's department.
+    // Employers are rejected before this query. Registrar heads are restricted to
+    // General above; other allowed viewers can read non-Department posts.
+    // Department visibility always applies, independently of search/category filters:
+    // admins see all, while other viewers must match the author's department.
     filterClauses.push(
       `(
         ac.name != 'Department'
@@ -94,8 +90,8 @@ export const getAllAnnouncements = async (req, res) => {
 
     const whereString = `AND ${filterClauses.join(" AND ")}`;
 
-    // Joins back to the POST'S AUTHOR's department, not the viewer's —
-    // there's no department column on announcements itself.
+    // Department scope comes from the post author's current department assignment;
+    // announcements do not store a separate department snapshot.
     const departmentJoin = `LEFT JOIN dept_heads_background_info authorDept ON authorDept.user_id = a.author_id`;
 
     const pinnedQuery = `
@@ -176,9 +172,9 @@ export const getAllAnnouncements = async (req, res) => {
   }
 };
 
-// Load one announcement directly so a notification can target a post on any
-// feed page without fetching every preceding page. Keep the feed's department
-// visibility rule here as well; a UUID is not an access token.
+// Resolve UUID or legacy numeric notification targets with the same visibility
+// rules as the feed, returning the public ID. The board still loads preceding
+// feed pages to preserve the card's pinned/regular position.
 export const getAnnouncementById = async (req, res) => {
   if (req.verifiedUser?.role === "employer") return res.status(403).json({ error: "Announcements are not available to employer accounts." });
   const { announcementId } = req.params;
@@ -444,8 +440,8 @@ export const updateAnnouncement = async (req, res) => {
 
     await connection.beginTransaction();
 
-    // Need the CURRENT category before updating, to detect a General -> Department
-    // transition. Locked with FOR UPDATE since we're about to write to this row.
+    // Lock the author's current row before resolving partial updates, validating the
+    // combined date range and detecting a change into Department scope.
     const [existingRows] = await connection.execute(
       `SELECT a.category_id, ac.name AS category_name, a.title,
               DATE_FORMAT(a.event_date, '%Y-%m-%d') AS event_date,
@@ -464,6 +460,8 @@ export const updateAnnouncement = async (req, res) => {
       });
     }
 
+    // Omitted dates normally keep their saved values. Clearing the start also clears
+    // an omitted end; validate the merged range before writing either field.
     const writeEventEndDate = hasEventEndDate || (hasEventDate && eventDate === null);
     const nextEventDate = hasEventDate ? eventDate : existingRows[0].event_date ?? null;
     const nextEventEndDate = hasEventEndDate
@@ -505,13 +503,8 @@ export const updateAnnouncement = async (req, res) => {
       }
     }
 
-    // Admin has no department_id — same reasoning as createAnnouncement.
-    // Only the author can reach this endpoint at all (WHERE author_id = ?
-    // above), so in practice an admin can only ever be editing their own
-    // post, which is already guaranteed General by createAnnouncement's
-    // own guard. This check exists so that guarantee isn't the ONLY thing
-    // preventing an admin non-General post — if either endpoint changes
-    // independently later, this still holds on its own.
+    // Validate the final category on edits too, including legacy posts. Admins may set
+    // only General; the row lookup above already restricts editing to its author.
     if (role === "admin" && newCategoryName !== "General") {
       await connection.rollback();
       return res.status(400).json({
@@ -560,12 +553,9 @@ export const updateAnnouncement = async (req, res) => {
       [announcementId],
     );
 
-    // Updates don't normally notify anyone — EXCEPT this one case: a post
-    // that was previously General (visible to everyone) just became
-    // Department-scoped, meaning people who could see it a moment ago now
-    // can't. Notifying same-department students/dept-heads mirrors what
-    // createAnnouncement would have sent had this post been created as
-    // Department from the start.
+    // Ordinary edits do not create new notifications. A transition from a non-Department
+    // category into Department creates alerts for the newly resolved department audience.
+    // This also supports older posts whose categories predate current posting restrictions.
     let recipients = [];
 
     if (!wasDepartmentCategory && willBeDepartmentCategory) {
@@ -692,8 +682,8 @@ export const deleteAnnouncement = async (req, res) => {
     const { announcementId } = req.params;
     const { id: userId, role } = req.verifiedUser;
 
-    // Security: Only the author or an Admin can delete
-    // You might want to check ownership first if not a Super Admin
+    // The DELETE predicate below enforces author-or-admin ownership; a valid public ID
+    // alone does not authorize deletion.
     if (!announcementId) {
       return res.status(400).json({ error: "Announcement ID is required" });
     }
@@ -760,7 +750,7 @@ export const deleteAnnouncement = async (req, res) => {
 
     invalidateActivityLogsCache();
 
-    // io.emit("announcement-deleted", id);
+    // Deletion refreshes server caches; this handler does not broadcast a deletion event.
 
     res.status(200).json({
       message: "Announcement Deleted successfully",
@@ -780,10 +770,11 @@ export const togglePinAnnouncement = async (req, res) => {
   try {
     connection = await db.getConnection();
     const { announcementId } = req.params;
-    const { is_pinned } = req.body; // Expecting true or false
+    const { is_pinned } = req.body; // The form submits the target 0/1 state, rather than a toggle instruction
     const { role } = req.verifiedUser;
 
-    // Typically, only Admins or Dept Heads should be able to pin/unpin
+    // Only admin/department_head roles pass this guard; pinning here is role-based
+    // and does not apply the author's ownership check used by text edits.
     if (role !== "admin" && role !== "department_head") {
       return res
         .status(403)
@@ -807,7 +798,7 @@ export const togglePinAnnouncement = async (req, res) => {
     await connection.commit();
     invalidateAnnouncementsCache();
 
-    // io.emit("announcement-pinned-toggled", { id: announcementId, is_pinned });
+    // Pin changes invalidate the feed cache; no dedicated pin socket event is emitted.
 
     res.status(200).json({
       success: true,

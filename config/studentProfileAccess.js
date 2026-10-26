@@ -1,6 +1,9 @@
 import { db } from "./db.js";
 import { reportError } from "./errorTracking.js";
 
+// Compare the student's latest academic department with the head's current
+// assignment. Both must be present; display labels and token department claims
+// are not used to establish this private-record permission.
 export async function canHeadReadStudentRecords(connection, headId, studentId) {
   const [rows] = await connection.execute(
     `SELECT profile_student.department_id AS student_department_id,

@@ -18,7 +18,9 @@ let generation = 0;
 export const getCacheGeneration = () => generation;
 
 function invalidateMatching(matches) {
-  // Also invalidate reads that started before the write but have not finished.
+  // Advance the global generation even when no entries match. Every older
+  // in-flight cache miss must skip storing; its response still reaches the caller.
+  // Entry deletion below remains limited to the matching user or route.
   generation += 1;
   recordCacheMetric("invalidation_calls");
   for (const key of cache.keys()) {
@@ -34,7 +36,8 @@ export function invalidateUserCache(userId) {
 }
 
 export function invalidateRouteCache(path, userId) {
-  // Exact path match across query variants, optionally for one recipient.
+  // Match the canonical path across cached query variants, optionally for one user.
+  // Callers supply a path without a query; nested resource paths are separate.
   const canonicalPath = canonicalApiPath(path);
   invalidateMatching((entry) => canonicalApiPath(entry.path) === canonicalPath &&
     (userId === undefined || entry.userId === String(userId)));

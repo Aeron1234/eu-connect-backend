@@ -5,6 +5,8 @@ export function fail(status, message) { throw Object.assign(new Error(message), 
 export function assertRole(user) {
   if (!["employer", ...STAFF].includes(user?.role)) fail(403, "Feedback is available to employers and school staff only.");
 }
+// Validate category/text and deduplicate optional internship IDs. Tags are
+// permitted only for internship feedback; ownership is checked by the service.
 export function validatePost(body) {
   const category = String(body.category || "");
   const subject = String(body.subject || "").trim();
@@ -20,12 +22,17 @@ export function validatePost(body) {
   if (category !== "internship_feedback" && ids.length) fail(400, "Intern tagging is available for internship feedback and concerns only.");
   return { category, subject, description, ids };
 }
-// Shared by post access and notification recipients. Category checks also protect
-// against legacy/incorrect mention rows attached to technical or platform posts.
+// Use the same category-aware scope for reads and notification recipients.
+// General feedback reaches all heads; internship feedback matches saved mention
+// departments to the head's current assignment. Technical/platform categories
+// cannot grant head access through legacy or forged mention rows.
+// Aliases and headIdSql are internal SQL fragments, never request input.
 export function departmentFeedbackScope(alias = "p", headIdSql = "?") {
   return "(" + alias + ".category = 'general_feedback' OR (" + alias + ".category = 'internship_feedback' AND " +
     "EXISTS (SELECT 1 FROM feedback_mentions fm JOIN dept_heads_background_info dh ON dh.department_id = fm.department_id WHERE fm.post_id = " + alias + ".id AND dh.user_id = " + headIdSql + ")))";
 }
+// Admin sees all posts; employers see only their own. Department heads use
+// category/mention scope, and students are rejected before any post read.
 export function feedbackScope(user, alias = "p") {
   assertRole(user);
   if (user.role === "admin") return { sql: "1=1", params: [] };
@@ -35,9 +42,12 @@ export function feedbackScope(user, alias = "p") {
     params: [user.id],
   };
 }
+// Deduplicate recipients across mentioned students/departments and omit the actor.
 export function uniqueRecipients(rows, actorId) {
   return [...new Set(rows.map(row => row.id).filter(id => id && id !== actorId))];
 }
+// Validate allowed MIME types against file signatures and the 5 MB limit.
+// The returned extension controls the server-generated object path.
 export function attachmentType(file) {
   const b = file.buffer;
   if (!Buffer.isBuffer(b) || b.length > 5 * 1024 * 1024) fail(400, "Each attachment must be 5 MB or smaller.");

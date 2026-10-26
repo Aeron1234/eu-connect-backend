@@ -11,8 +11,10 @@ export const getStudentDashboardStats = async (req, res) => {
     connection = await db.getConnection();
     const { id: userId } = req.verifiedUser;
 
-    // Independent scalar counts keep each table's original filter while using
-    // one database statement.
+    // Each scalar count retains its own scope: favorites, unread announcement alerts
+    // and stored documents belong to the viewer. Missing requirements count unsatisfied
+    // before/after requirement types for the newest live ongoing internship.
+    // Null/accepted document verification satisfies a type; duplicate files count once.
     const [[counts]] = await connection.execute(
       `SELECT
          (SELECT COUNT(*) FROM internship_favorites
@@ -41,7 +43,7 @@ export const getStudentDashboardStats = async (req, res) => {
       [userId, userId, userId, userId, userId],
     );
 
-    // 3. Send back the aggregated metrics
+    // Keep missingRequirements null when no ongoing internship exists, distinct from zero.
     res.status(200).json({
       success: true,
       stats: {
@@ -217,6 +219,9 @@ export const getStudentDashboardData = async (req, res) => {
 ///////////////////
 //EMPLOYER
 //////////////////
+// Post totals exclude soft-deleted postings. Intern totals count assigned ongoing/
+// finished records, while uploads count documents attributed to this employer.
+// The intern-count query does not add a deleted_at predicate.
 async function loadEmployerDashboardStats(connection, employerId) {
 
     // Count both intern states in one employer-scoped scan. The other counters
@@ -257,6 +262,9 @@ function parseDashboardPage(value) {
   return Number.isSafeInteger(page) && page <= 1000000 ? page : null;
 }
 
+// List existing employer assignments, not pending supervisor_requests. The All filter
+// adds no status/deleted_at predicate; filtered pages use the requested record status.
+// Use count and page queries separately, with five rows and stable date/ID ordering.
 async function loadEmployerInternsPage(connection, employerId, { page = 1, status = "all" } = {}) {
   const statusFilter = status === "all" ? "" : " AND ir.status = ?";
   const params = status === "all" ? [employerId] : [employerId, status];
@@ -451,6 +459,9 @@ export const getPostedJobs = async (req, res) => {
 ///////////////////
 //DEPARTMENT HEAD
 //////////////////
+// Scope live record counts through each student's latest academic department.
+// The record total adds only manual alumni rows with no linked internship record,
+// avoiding a second count of linked alumni copies.
 async function loadDepartmentHeadDashboardStats(connection, departmentId, userId) {
     const [
       [internshipCountsResult],
@@ -536,6 +547,9 @@ function mapHoursStudent(row) {
   };
 }
 
+// Paginate ongoing records in the department with optional course/name filters.
+// This query's existing predicates do not include deleted_at; do not infer that
+// the stats card and hours tracker have identical record scopes.
 async function loadStudentHoursPage(connection, departmentId, { page = 1, courseId, search = "" } = {}) {
   const filters = ["sai.department_id = ?", "ir.status = 'ongoing'"];
   const params = [departmentId];
@@ -572,6 +586,9 @@ async function loadStudentHoursPage(connection, departmentId, { page = 1, course
   return { students, page, pageSize: HOURS_TRACKER_PAGE_SIZE, total, totalPages };
 }
 
+// Aggregate all ongoing rows per course, independent of tracker pagination/search.
+// Average individual completion percentages rather than dividing total worked hours
+// by total required hours; zero-hour requirements contribute zero.
 async function loadHoursDistribution(connection, departmentId) {
   const [rows] = await connection.execute(
     `SELECT c.short_name AS course,
@@ -655,6 +672,8 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
       );
     }
 
+    // The next two sections average individual score rows by category and exclude
+    // soft-deleted evaluation masters. They are not per-student weighted averages.
     let studentEvaluationAverages = [];
     try {
       const [rows] = await connection.execute(
@@ -849,7 +868,8 @@ export const getDepartmentStudentHoursPage = async (req, res) => {
   }
 };
 
-// Keep separate — interactive, refetched every time the month picker changes
+// Fetch the selected month independently of the department overview. Client query
+// freshness may reuse a result; changing the picker selects another month key.
 export const getAverageShiftHoursByWeek = async (req, res) => {
   let connection;
   try {
@@ -870,6 +890,8 @@ export const getAverageShiftHoursByWeek = async (req, res) => {
 
     const isoDay = (d) => ((d.getUTCDay() + 6) % 7) + 1;
 
+    // Expand to complete Monday-Sunday UTC weeks, including adjacent-month days.
+    // Buckets average closed present/invalid DTR rows by clock-in, not weekly totals.
     const rangeStart = new Date(firstOfMonth);
     rangeStart.setUTCDate(rangeStart.getUTCDate() - (isoDay(firstOfMonth) - 1));
 
@@ -978,6 +1000,8 @@ export const getAdminDashboardData = async (req, res) => {
 
     let userGrowth = [];
     try {
+      // Include the current month plus seven preceding months. Zero-fill absent month/
+      // role combinations; these are account creations per month, not cumulative totals.
       const monthsBack = 7;
       const rangeStart = new Date();
       rangeStart.setDate(1);

@@ -14,10 +14,9 @@ export const refreshTokensCleanUp = async () => {
   try {
     connection = await db.getConnection();
 
-    // Cap how many we look at per run as a safety net against runaway backlogs.
-    // Only deletes rows that are no longer useful for reuse-detection:
-    // fully expired, or revoked long enough ago that the grace-period
-    // check in the refresh controller would never need them.
+    // Scan at most 5,000 expired or sufficiently old revoked token JTIs per run.
+    // Revoked retention uses the configured day interval, not the refresh controller's
+    // short replay-grace interval. Release this scan connection before deletion batches.
     const [staleRecords] = await connection.execute(
       `SELECT jti FROM refresh_tokens
        WHERE expires_at < NOW()
@@ -35,6 +34,8 @@ export const refreshTokensCleanUp = async () => {
     }
 
     let deletedCount = 0;
+    // Delete sequential batches using fresh pooled connections. Earlier successful
+    // batches remain deleted if a later batch fails; there is no run-wide transaction.
     for (let i = 0; i < staleRecords.length; i += BATCH_SIZE) {
       const batch = staleRecords.slice(i, i + BATCH_SIZE);
       deletedCount += await deleteBatch(batch);

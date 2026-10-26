@@ -41,6 +41,7 @@ export function isWithinRadius(lat1, lon1, lat2, lon2, radiusMeters = 100) {
   };
 }
 
+// Generate a UUID v4 for new public identifiers; uniqueness is not an authorization check.
 export function newUUID() {
   return uuidv4();
 }
@@ -51,6 +52,8 @@ export const UPLOAD_ROOT = path.join(
   "internship-documents",
 );
 
+// Shared upload MIME allowlist. Route size/count checks and any content validation remain
+// separate; a client-provided MIME value alone does not establish file safety.
 export const ALLOWED_TYPES = [
   "application/pdf",
   "text/plain",
@@ -117,6 +120,8 @@ export async function verifyRecordAccess(
   return rows[0];
 }
 
+// Allow admins or department heads whose current database department has code REG.
+// Use the caller's connection and return a boolean; no role is inferred from display names.
 export const isRegistrarHeadOrAdmin = async (connection, verifiedUser) => {
   const { id: userId, role } = verifiedUser;
 
@@ -136,7 +141,8 @@ export const isRegistrarHeadOrAdmin = async (connection, verifiedUser) => {
   return rows.length > 0;
 };
 
-// utils/academicYear.js
+// Derive the July-to-June academic year from the supplied Date's local calendar month.
+// This is a date label, not a Manila timezone conversion or a saved internship year.
 export function getCurrentAcademicYear(date = new Date()) {
   const year = date.getFullYear();
   const month = date.getMonth() + 1; // JS months are 0-indexed

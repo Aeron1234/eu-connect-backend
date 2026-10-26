@@ -39,6 +39,8 @@ internshipPostingRoutes.post(
   createInternshipPosting,
 );
 
+// Editing is employer-only at the route; the controller also checks original ownership.
+// Admins have a delete moderation route below, not a posting-edit override.
 internshipPostingRoutes.put(
   "/internship-postings/:postingId",
   verifyUser,

@@ -1,3 +1,5 @@
+// Build report/signature names, omitting absent parts and normalizing the middle initial's dot.
+// First/last name casing is retained; this formats text without changing stored identity.
 export function formatPersonName(firstName, middleInitial, lastName) {
   const initial = String(middleInitial ?? "").trim().replace(/\.$/, "");
   return [
@@ -7,6 +9,8 @@ export function formatPersonName(firstName, middleInitial, lastName) {
   ].filter(Boolean).join(" ");
 }
 
+// Add the creator's middle initial only when Prepared By starts with their matching first/last
+// name and a supported suffix boundary. Preserve other signatories and custom text verbatim.
 export function formatCreatorPreparedBy(preparedBy, firstName, middleInitial, lastName) {
   const original = String(preparedBy ?? "");
   if (!middleInitial || !firstName || !lastName) return original;

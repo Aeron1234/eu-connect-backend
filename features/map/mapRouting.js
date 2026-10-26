@@ -18,6 +18,7 @@ export function mapOrigin() {
   return { ...DEFAULT_ORIGIN, ...configured };
 }
 
+// Build the independent Google Maps fallback even when provider geometry is unavailable.
 export function mapsDirections(destination, origin = mapOrigin()) {
   const url = new URL("https://www.google.com/maps/dir/");
   url.search = new URLSearchParams({ api: "1", origin: `${origin.lat},${origin.lng}`, destination: `${destination.lat},${destination.lng}`, travelmode: "driving" });
@@ -32,6 +33,8 @@ async function requestProvider(path, fetcher) {
   return requestRouteProvider(path, fetcher, process.env.MAP_ROUTING_BASE_URL || "https://routing.openstreetmap.de/routed-car/");
 }
 
+// Reuse campus routes for 24 hours, capped at 200 entries, and coalesce identical
+// pending work in this process. Failed calculations do not enter the cache.
 async function remembered(key, operation) {
   const entry = cache.get(key);
   if (entry && entry.expires > Date.now()) return entry.value;
@@ -49,6 +52,7 @@ export async function drivingRoute(destination, { fetcher = fetch, origin: reque
   const point = requestedOrigin && validMapPoint(requestedOrigin.lat, requestedOrigin.lng);
   if (requestedOrigin && !point) throw routingError("A valid starting location is required.", 400);
   const origin = requestedOrigin ? { ...point, label: "Your current location" } : mapOrigin();
+  // OSRM URLs use longitude,latitude pairs; Leaflet uses latitude,longitude.
   const coordinates = `${origin.lng},${origin.lat};${destination.lng},${destination.lat}`;
   const key = `route:${process.env.MAP_ROUTING_BASE_URL || "default"}:${coordinates}`;
   const calculate = async () => {

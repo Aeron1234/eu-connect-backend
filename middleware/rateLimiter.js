@@ -15,9 +15,9 @@ const authenticatedOrIpKey = (req) => {
   return `ip:${ipKeyGenerator(req.ip)}`;
 };
 
-// Read limits are per route, not shared by every page in the app. Express
-// exposes the matched route pattern here, so IDs and pagination query strings
-// cannot create fresh budgets for the same endpoint.
+// GET/HEAD budgets include the matched route pattern and method within this limiter.
+// Canonical API aliases share a budget; IDs and query pages do not create new ones.
+// Non-read requests, or requests without a route pattern, use the identity alone.
 const readEndpointKey = (req) => {
   const identity = authenticatedOrIpKey(req);
   if (req.method !== "GET" && req.method !== "HEAD") return identity;
@@ -26,7 +26,9 @@ const readEndpointKey = (req) => {
   return `${identity}:${req.method}:${canonicalApiPath(`${req.baseUrl}${routePath}`)}`;
 };
 
-// This one is for general browsing (Announcements, Profiles)
+// General reads allow 100 requests per endpoint in 15 minutes. Other methods using
+// this same instance share one identity budget across its mutation routes.
+// No external store is configured here: limiter counters belong to this API process.
 export const generalLimiter = rateLimit({
   keyGenerator: readEndpointKey,
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -43,7 +45,7 @@ export const generalLimiter = rateLimit({
 export const paginationLimiter = rateLimit({
   keyGenerator: readEndpointKey,
   windowMs: 5 * 60 * 1000, // Shorter window (5 mins)
-  max: 200, // Very high limit
+  max: 200, // 200 requests per read endpoint in each five-minute window
   message: {
     status: 429,
     error: "Too many requests to this page. Please try again in a few minutes.",
@@ -56,14 +58,14 @@ export const paginationLimiter = rateLimit({
 export const strictLimiter = rateLimit({
   keyGenerator: authenticatedOrIpKey,
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 10, // Students shouldn't need to create more than 10 records an hour
+  max: 10, // Shared per identity across all routes using this limiter
   message: {
     status: 429,
     error: "Submission limit reached. Please wait an hour before trying again.",
   },
 });
 
-// For any action that modifies the database
+// Selected edit/delete routes share this instance's 40-request identity budget.
 export const mediumLimiter = rateLimit({
   keyGenerator: authenticatedOrIpKey,
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -75,7 +77,8 @@ export const mediumLimiter = rateLimit({
 });
 
 // Next.js relays auth requests, so its IP is shared by many legitimate users.
-// Hash normalized identifiers to keep credentials/PII out of rate-limit keys.
+// Hash normalized usernames/emails so raw identifiers are absent from limiter keys.
+// These hashes are identifiers, not encrypted secrets. Missing values fall back to IP.
 const authIdentifierKey = (field, scope) => (req) => {
   const identifier = req.body?.[field];
   if (typeof identifier !== "string" || !identifier.trim()) {
@@ -117,6 +120,7 @@ export const passwordRecoveryLimiter = rateLimit({
   },
 });
 
+// All routes using this upload limiter share 30 attempts per identity each hour.
 export const uploadLimiter = rateLimit({
   keyGenerator: authenticatedOrIpKey,
   windowMs: 60 * 60 * 1000,

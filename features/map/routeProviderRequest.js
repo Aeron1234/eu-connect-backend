@@ -1,5 +1,7 @@
 // Deadlines cover queueing, connection establishment, and response-body reads.
 export function createRouteProviderRequester({ timeoutMs = 15000, intervalMs = 1100, maxPending = 10 } = {}) {
+  // Queue and spacing limits are per requester instance. The deadline begins
+  // before queueing and covers the response JSON read as well as the connection.
   let queue = Promise.resolve(), nextAt = 0, queued = 0;
   const failure = (message, status, code) => Object.assign(new Error(message), { status, code });
   return async function request(path, fetcher, baseUrl) {
@@ -30,7 +32,8 @@ export function createRouteProviderRequester({ timeoutMs = 15000, intervalMs = 1
       if (result.code !== 'Ok') throw failure('The routing service could not calculate this route. Try Google Maps.', 503, 'ROUTING_UNAVAILABLE');
       return result;
     });
-    // Even an adapter that ignores abort cannot block all subsequent requests.
+    // Advance the queue from the bounded promise so a timed-out adapter cannot
+    // hold the queue forever. An adapter ignoring abort may still have I/O running.
     const bounded = Promise.race([operation, deadline]);
     queue = bounded.catch(() => {});
     try { return await bounded; }

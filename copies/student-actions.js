@@ -1,3 +1,5 @@
+// Historical reference copy: not imported by the current backend startup or feature routers.
+// Keep its older payloads, authorization and queries separate from the active features/.
 "use server";
 
 import { db } from "@/lib/db";
@@ -113,7 +115,7 @@ export async function logout() {
 ////////////////////////////////////////////////////
 //INTERNSHIP RECORDS
 ////////////////////////////////////////////////////
-// DONE
+
 export async function createInternshipRecord(prevState, formData) {
   try {
     const session = await getUserSession();
@@ -177,7 +179,7 @@ export async function createInternshipRecord(prevState, formData) {
   }
 }
 
-// DONE
+
 export async function finishInternshipRecord(internshipId, formData = {}) {
   try {
     const session = await getUserSession();
@@ -222,7 +224,7 @@ export async function finishInternshipRecord(internshipId, formData = {}) {
 ////////////////////////////////////////////////////
 // DAILY TIME RECORDS
 ////////////////////////////////////////////////////
-//DONE
+
 export async function getDtrs(page = 1) {
   const limit = 5;
 
@@ -263,7 +265,7 @@ export async function getDtrs(page = 1) {
   }
 }
 
-// DONE
+
 export async function clockIn(prevState, formData) {
   try {
     const session = await getUserSession();
@@ -295,7 +297,7 @@ export async function clockIn(prevState, formData) {
   }
 }
 
-// DONE
+
 export async function clockOut(prevState, formData) {
   try {
     const session = await getUserSession();
@@ -333,9 +335,9 @@ export async function clockOut(prevState, formData) {
   }
 }
 
-// DONE
+
 export async function deleteDtr(prevState, formData) {
-  // Added prevState for useActionState compatibility
+  // The first argument follows the useActionState action signature.
   const connection = await db.getConnection();
 
   try {
@@ -393,7 +395,7 @@ export async function deleteDtr(prevState, formData) {
 ////////////////////////////////////////////////////
 // DAILY NARRATIVES
 ////////////////////////////////////////////////////
-//DONE
+
 export async function getDailyNarratives(page = 1) {
   const limit = 4;
 
@@ -485,7 +487,7 @@ export async function createNarrative(prevState, formData) {
   }
 }
 
-// DONE
+
 export async function editNarrative(narrativeId, formData) {
   try {
     const session = await getUserSession();
@@ -531,9 +533,9 @@ export async function editNarrative(narrativeId, formData) {
   }
 }
 
-//DONE
+
 export async function deleteNarrative(prevState, formData) {
-  // Added prevState for useActionState compatibility
+  // The first argument follows the useActionState action signature.
   const connection = await db.getConnection();
 
   try {
@@ -579,7 +581,7 @@ export async function deleteNarrative(prevState, formData) {
 ////////////////////////////////////////////////////
 // STORAGE
 ////////////////////////////////////////////////////
-// DONE
+
 export async function uploadInternshipFile(prevState, formData) {
   try {
     const session = await getUserSession();
@@ -656,9 +658,9 @@ export async function uploadInternshipFile(prevState, formData) {
   }
 }
 
-// DONE
+
 export async function deleteFile(prevState, formData) {
-  // Added prevState for useActionState compatibility
+  // The first argument follows the useActionState action signature.
   const connection = await db.getConnection();
 
   try {

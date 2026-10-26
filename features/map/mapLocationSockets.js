@@ -1,6 +1,8 @@
 import { db } from '../../config/db.js';
 
 export function attachMapLocationSocket(socket, { database = db, now = Date.now } = {}) {
+  // Scope echoes to the authenticated socket/session; stop/disconnect invalidates
+  // pending authorization results. No viewer movement history is stored.
   let generation = 0, lastUpdate = -Infinity;
   socket.on('map_location:update', async (value, reply) => {
     const ack = typeof reply === 'function' ? reply : () => {};
@@ -12,6 +14,8 @@ export function attachMapLocationSocket(socket, { database = db, now = Date.now 
         !Number.isFinite(value.timestamp) || value.timestamp < receivedAt - 30000 || value.timestamp > receivedAt + 5000 || receivedAt - lastUpdate < 3000) {
       return ack({ ok: false, error: 'Invalid or too frequent map location update.' });
     }
+    // Throttle accepted update attempts to three seconds, then recheck the user's
+    // current database role before echoing a still-fresh fix.
     lastUpdate = receivedAt;
     const version = ++generation;
     try {

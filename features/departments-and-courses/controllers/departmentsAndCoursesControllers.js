@@ -152,6 +152,8 @@ export const updateDepartment = async (req, res) => {
   }
 };
 
+// Change the course lookup's department association only; this handler does not
+// rewrite existing student_academic_info department assignments.
 export const updateCourse = async (req, res) => {
   const id = Number(req.params.id);
   const name = typeof req.body?.course_name === "string" ? req.body.course_name.trim() : "";
@@ -193,9 +195,12 @@ export const updateCourse = async (req, res) => {
   }
 };
 
+// Callers below supply fixed table names. Deactivation changes availability rather
+// than deleting historical course/department references.
 function createLookupTableEndpoints(tableName, label) {
   const getActive = async (req, res) => {
     try {
+      // Only an admin's explicit includeInactive request returns inactive lookup rows.
       const includeInactive =
         req.verifiedUser?.role === "admin" &&
         req.query?.includeInactive === "true";

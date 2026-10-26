@@ -12,6 +12,8 @@ const workedSecondsSql = `GREATEST(0, TIMESTAMPDIFF(SECOND, clock_in,
   CASE WHEN status = 'on-break' AND break_started_at IS NOT NULL
     THEN break_started_at ELSE NOW() END) - break_total_seconds)`;
 
+// The scheduler invokes this periodically, so closure may occur after the threshold.
+// Bounded scanning and locked rechecks belong to this worker, not to cron itself.
 export const autoCloseStaleShifts = async () => {
   let connection;
   try {

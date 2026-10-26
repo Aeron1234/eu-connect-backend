@@ -1,5 +1,7 @@
 import { canonicalApiPath } from "../api.js";
 import cache, { invalidateRouteCache } from "./cache.js";
+// Invalidate evaluation lists and cached student/record histories in this process.
+// Include legacy list names because old cache entries may still use those route families.
 export function invalidateEvaluationHistoryCache() {
   for (const route of ["/evaluations/all", "/evaluations/disputed", "/evaluations/submitted"]) invalidateRouteCache("/api/v1" + route);
   const families = ["/api/v1/student-past-evaluations/", "/api/v1/internship-records/evaluations/"];

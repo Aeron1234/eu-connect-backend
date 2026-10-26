@@ -8,6 +8,8 @@ const MAX_ERRORS_PER_REQUEST = 5;
 const MAX_PENDING_WRITES = 100;
 let pendingWrites = 0;
 
+// Redact recognized tokens/emails/secret patterns and bound stored text length.
+// This is targeted scrubbing, not proof that arbitrary error text contains no secrets.
 function cleanText(value, maxLength = 500) {
   return String(value ?? "")
     .replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
@@ -49,6 +51,8 @@ function routePattern(req) {
     .slice(0, 255);
 }
 
+// Bound concurrent best-effort writes in this process. Queue overflow drops an
+// occurrence; these writes are neither durable jobs nor awaited by the response.
 function queueOccurrence(entry) {
   if (pendingWrites >= MAX_PENDING_WRITES) {
     console.error("Error tracking queue full; occurrence omitted.");
@@ -71,6 +75,8 @@ function queueOccurrence(entry) {
   });
 }
 
+// Persist reported request errors after response finish, even when the final status
+// is not 5xx. Unreported 5xx responses receive one synthetic error occurrence.
 function persistRequestErrors(req, res, state) {
   const errors = state.errors.length
     ? state.errors
@@ -80,6 +86,8 @@ function persistRequestErrors(req, res, state) {
   const pattern = routePattern(req);
   const seen = new Set();
   for (const error of errors) {
+    // Group by method/route/code-or-name/context/location, not the variable message.
+    // Identical fingerprints are recorded once per request; separate requests add events.
     const identity = ["http", req.method, pattern, error.errorCode || error.errorName,
       error.context, error.location].join("|");
     const fingerprint = createHash("sha256").update(identity).digest("hex");
@@ -106,6 +114,9 @@ export function errorTrackingContext(req, res, next) {
   requestStorage.run(state, next);
 }
 
+// Always log to console; collect at most five reports in the active request context.
+// Outside an HTTP context this does not persist an event; background jobs use
+// reportBackgroundError explicitly.
 export function reportError(...args) {
   console.error(...args);
   const state = requestStorage.getStore();
@@ -131,6 +142,8 @@ export function reportBackgroundError(source, error) {
   });
 }
 
+// Remove events older than 30 database-time days in batches of 1,000 until drained.
+// Retention removes occurrences, so a group's recorded history can shrink.
 export async function purgeOldErrorEvents() {
   let removed = 0;
   do {

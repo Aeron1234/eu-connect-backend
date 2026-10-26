@@ -1,3 +1,4 @@
+// Counters and uptime describe this process lifetime; they reset on restart.
 const startedAt = new Date().toISOString();
 const started = performance.now();
 const totals = {};
@@ -38,6 +39,7 @@ export function recordCacheMetric(event, route, count = 1) {
   totals[event] = (totals[event] || 0) + count;
   if (route === undefined) return;
 
+  // Bound route-label cardinality: additional labels share the (other) bucket.
   const label =
     routes.has(route) || routes.size < MAX_ROUTES ? route : "(other)";
   if (!routes.has(label)) routes.set(label, {});
@@ -49,6 +51,8 @@ function withRate(counters) {
   const result = Object.fromEntries(
     events.map((event) => [event, counters[event] || 0]),
   );
+  // Hit rate covers successful cache lookups only; bypasses and read errors are separate.
+  // Return null until a hit or miss has been recorded.
   const lookups = result.hit + result.miss;
   return { ...result, lookups, hitRate: lookups ? result.hit / lookups : null };
 }

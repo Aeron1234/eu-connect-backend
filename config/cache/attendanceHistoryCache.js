@@ -1,5 +1,7 @@
 import { canonicalApiPath } from "../api.js";
 import cache, { invalidateRouteCache } from "./cache.js";
+// Invalidate attendance history plus cached searched-user/record DTR routes in this process.
+// Canonicalize aliases and match one identifier segment to avoid unrelated descendant routes.
 export function invalidateAttendanceHistoryCache() {
   invalidateRouteCache("/api/v1/dtr/history");
   const families = ["/api/v1/searched-user/dtrs/", "/api/v1/internship-records/dtr/"];

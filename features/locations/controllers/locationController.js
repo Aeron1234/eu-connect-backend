@@ -2,6 +2,8 @@ import { reportError } from "../../../config/errorTracking.js";
 //////////////////////////////////////
 //LocationIQ API
 //////////////////////////////////////
+// Legacy LocationIQ handler. Its locationRoute.js router is not mounted in server.js;
+// the current Leaflet search uses a separate provider flow.
 export const getLocationApi = async (req, res) => {
   try {
     const { q, lat, lon } = req.query;

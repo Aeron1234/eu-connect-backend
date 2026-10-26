@@ -1,5 +1,7 @@
 // The MySQL session uses +08:00, matching the dates shown in the admin UI.
 // Keep created_at unwrapped so an index on that column can still be used.
+// Validate actual calendar days and ordering before producing SQL parameters.
+// Preview and deletion share these bounds, including all of the final day.
 export function activityLogDateRange(input) {
   const { fromDate, throughDate } = input || {};
   const validDate = (value) => {

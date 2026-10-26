@@ -5,6 +5,8 @@ import TempPasswordEmail from "../emails/TempPasswordEmail.js";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
+// Render the temporary-password email and await the Resend request. This helper does not
+// set password validity, retry delivery or inspect the provider's returned error object.
 export async function sendTempPasswordEmail({
   to,
   username,

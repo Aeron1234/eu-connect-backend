@@ -43,6 +43,8 @@ export const getInternshipPostings = async (req, res) => {
       params.push(requesterId);
     }
 
+    // Course eligibility is an explicit filter, not an automatic restriction by viewer
+    // course. EXISTS avoids duplicating a posting with multiple eligible course links.
     if (courseId) {
       conditions.push(
         `EXISTS (
@@ -71,6 +73,8 @@ export const getInternshipPostings = async (req, res) => {
       params.push(requesterId);
     }
 
+    // Use the same predicates for page membership and totals, including this viewer's
+    // favorites/owner scope. Filled posts remain visible unless another filter excludes them.
     const whereClause = conditions.join(" AND ");
 
     connection = await db.getConnection();
@@ -119,6 +123,8 @@ export const getInternshipPostings = async (req, res) => {
     const postingIds = postings.map((p) => p.id);
     const placeholders = postingIds.map(() => "?").join(",");
 
+    // Fetch all course labels for the displayed postings in one query, even when a
+    // course filter matched just one of each posting's eligible courses.
     const [courseLinks] = await connection.execute(
       `SELECT ipc.posting_id, c.id AS course_id, c.course_name, c.short_name
        FROM internship_posting_courses ipc
@@ -407,7 +413,8 @@ export const updateInternshipPosting = async (req, res) => {
 
     const posting = rows[0];
 
-    // Same ownership rule as delete — only the original poster can edit
+    // Only the original employer can edit. Deletion has an additional admin override;
+    // that override does not apply to this update path.
     if (posting.employer_id !== requesterId) {
       await connection.rollback();
       return res.status(403).json({
@@ -463,8 +470,8 @@ export const updateInternshipPosting = async (req, res) => {
       return res.status(400).json({ error: "No fields provided to update." });
     }
 
-    // Bump updated_at whenever anything actually changed — including a
-    // course-only edit, which the plain column loop above wouldn't catch
+    // Bump updated_at for any supplied scalar fields or course set, including course-only
+    // edits. This records a submitted update, not a comparison against previous values.
     if (setClauses.length > 0 || course_ids !== undefined) {
       if (setClauses.length > 0) {
         setClauses.push("updated_at = CURRENT_TIMESTAMP");
@@ -480,7 +487,8 @@ export const updateInternshipPosting = async (req, res) => {
       }
     }
 
-    // Replace course links wholesale if a new set was provided
+    // Omitting course_ids preserves existing links; a supplied nonempty set replaces
+    // all links atomically with the posting update in this transaction.
     if (course_ids !== undefined) {
       await connection.execute(
         `DELETE FROM internship_posting_courses WHERE posting_id = ?`,
@@ -566,6 +574,8 @@ export const updateInternshipPosting = async (req, res) => {
   }
 };
 
+// Soft-delete the posting. Its course/favorite rows are retained, while list reads
+// exclude it through deleted_at and subsequent toggles reject it.
 export const deleteInternshipPosting = async (req, res) => {
   let connection;
   try {
@@ -648,13 +658,11 @@ export const deleteInternshipPosting = async (req, res) => {
   }
 };
 
-// Note: toggleInternshipFavorite is intentionally NOT logged to activity_logs.
-// Same reasoning as skipping DTR clock-in/out: favoriting is a high-frequency,
-// personal preference action with no audit value for the school (nobody needs
-// to know a student liked/unliked a posting), and internship_favorites already
-// is its own source of truth for current favorite state. Logging every toggle
-// would just add volume without adding anything an admin/dept head would ever
-// want to review.
+// Favorites represent current per-student preference in internship_favorites.
+// This handler intentionally creates no activity-log entry for individual toggles.
+// Lock the posting before reading/changing a student's favorite so toggles for that
+// posting serialize and deleted posts cannot be newly favorited. This is a toggle,
+// not an idempotent request to set a desired boolean.
 export const toggleInternshipFavorite = async (req, res) => {
   let connection;
   try {

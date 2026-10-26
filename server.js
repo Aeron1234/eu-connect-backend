@@ -47,7 +47,7 @@ import weeklyNarrativeRoutes from "./features/weekly-narratives/routes/weeklyNar
 import summaryReportRoutes from "./features/summary-reports/routes/summaryReportRoutes.js";
 import errorTrackingRoutes from "./features/error-tracking/routes/errorTrackingRoutes.js";
 
-// dotenv.config();
+// Environment loading is provided by the dotenv/config import above.
 
 // ---------------------------------------------------------------------------
 // A fatal exception leaves the process in an unknown state. Write to stderr
@@ -66,7 +66,8 @@ process.on("uncaughtException", (err) => exitAfterFatal("Uncaught Exception", er
 const app = express();
 const httpServer = createServer(app);
 
-// Dynamic CORS configuration for both production and local dev
+// Build the HTTP/Socket.IO origin allowlist once at startup from CLIENT_URL and
+// localhost. This is a fixed list, not runtime origin discovery or authentication.
 const allowedOrigins = [process.env.CLIENT_URL, "http://localhost:3000"].filter(
   Boolean,
 );
@@ -92,10 +93,13 @@ app.use(cookieParser());
 app.use(express.urlencoded({ limit: "10mb", extended: true }));
 
 app.set("socketio", io);
+// Trust one reverse-proxy hop when deriving client protocol/IP. Deployment proxy
+// topology must match this assumption; CORS does not establish proxy trust.
 app.set("trust proxy", 1);
 app.use(errorTrackingContext);
 
-// Health check endpoint for Render
+// HTTP liveness only: a successful response does not test database, storage,
+// mail delivery or scheduled-job readiness.
 app.get("/", (req, res) => {
   res.status(200).send("API Service is live.");
 });
@@ -133,9 +137,9 @@ mountApiRoutes(app, [
 
 // ---------------------------------------------------------------------------
 // Fallback error-handling middleware.
-// If a route handler calls next(err) or throws synchronously, this catches
-// it and returns a JSON response instead of letting Express hang or crash.
-// Keep this AFTER all app.use(routes) calls.
+// Handles errors forwarded by next(err), synchronous throws and rejected promises
+// returned by Express 5 handlers. If headers were sent, defer to Express's next
+// error handler. Keep this after mounted routes.
 // ---------------------------------------------------------------------------
 app.use((err, req, res, next) => {
   reportError("Unhandled route error:", err);
@@ -154,10 +158,11 @@ registerMapLocationSockets(io);
 
 // ---------------------------------------------------------------------------
 // Cron Jobs
-// Wrapped in try/catch so a failure inside either job (DB timeout, bad
-// query, etc.) is logged instead of throwing an unhandled rejection that
-// takes down the whole server.
+// Each API process registers these schedules in the host's local timezone; no
+// timezone option or deployment-wide scheduler lock is configured here.
+// The four jobs below report failures through their own catch paths.
 // ---------------------------------------------------------------------------
+// Hourly at minute zero: scan/cap stale shifts; the worker rechecks rows under locks.
 cron.schedule("0 * * * *", async () => {
   console.log("Running autoCloseStaleShifts job...");
   try {
@@ -167,6 +172,7 @@ cron.schedule("0 * * * *", async () => {
   }
 });
 
+// Daily at 03:00 host time: remove expired/old-revoked refresh-token records.
 cron.schedule("0 3 * * *", async () => {
   console.log("Running refreshTokensCleanUp...");
   try {
@@ -176,6 +182,8 @@ cron.schedule("0 3 * * *", async () => {
   }
 });
 
+// Daily at 03:15 host time: purge old error occurrences. Failures go to console
+// rather than recursively recording a failure in the same error-events store.
 cron.schedule("15 3 * * *", async () => {
   try {
     await purgeOldErrorEvents();
@@ -184,6 +192,8 @@ cron.schedule("15 3 * * *", async () => {
   }
 });
 
+// Every five minutes: retry due feedback storage-cleanup rows. The durable queue
+// survives requests/restarts; each drain has its own bounded batch.
 cron.schedule("*/5 * * * *", async () => {
   try { await cleanupFeedbackFiles(); }
   catch (error) { reportBackgroundError("feedbackFileCleanup", error); }

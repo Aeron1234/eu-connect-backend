@@ -81,7 +81,8 @@ export const getHteCompanyList = async (req, res) => {
 
     if (reportCacheHit(req, res)) return;
 
-    // --- Single-company detail mode (still used by PDF export re-fetch, if kept) ---
+    // An explicit companyKey selects one company/year without list pagination. The
+    // separate getHteCompanyReport endpoint below supplies the dedicated export read.
     if (companyKey) {
       const [rows] = await connection.execute(
         `SELECT 
@@ -164,6 +165,8 @@ export const getHteCompanyList = async (req, res) => {
       params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
     }
 
+    // Search chooses company groups by matching company/student rows. The later intern
+    // read loads all eligible interns for those selected keys, not just search matches.
     const whereClause = conditions.join(" AND ");
 
     const [[{ total }]] = await connection.execute(
@@ -270,6 +273,9 @@ export const getHteCompanyList = async (req, res) => {
   }
 };
 
+// Reauthorize the registrar/admin before cache access and fetch all matching interns
+// for this year/key. The key groups normalized name plus coordinates rounded to
+// five decimals; it is a grouping identifier, not proof of access.
 export const getHteCompanyReport = async (req, res) => {
   let connection;
   try {
@@ -563,6 +569,8 @@ export const getProgramAnnualReportById = async (req, res) => {
   }
 };
 
+// A new year/program report cannot overwrite an existing one. Editing requires an
+// explicit reportId that still points to a draft; submission finalizes that draft.
 export const saveProgramAnnualReport = async (req, res) => {
   let connection;
   try {
@@ -694,6 +702,8 @@ export const saveProgramAnnualReport = async (req, res) => {
       );
     }
 
+    // Persist only rows with at least one truthy field, keeping their relative order.
+    // The UI's initial blank rows do not impose a fixed saved/printed row count.
     const meaningfulEntries = entries.filter(
       (e) => e.issue || e.solution || e.recommendation,
     );

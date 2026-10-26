@@ -19,7 +19,8 @@ function service(req) {
         });
       } catch (error) { reportError("Feedback notification delivery failed:", error); }
     }
-    // Only a non-sensitive ID is emitted; all reads independently authorize.
+    // Refresh events carry only the post ID, not discussion text or attachments.
+    // Recipients must independently authorize their next read.
     for (const userId of new Set([req.verifiedUser.id, ...(result.recipients || []), ...(result.refreshRecipients || [])])) {
       invalidateNotificationsCache(userId);
       try { req.app.get("socketio")?.to("user-" + userId).emit("feedback_updated", { id: result.id }); }
@@ -33,6 +34,8 @@ function handler(work) {
     try {
       const result = await work(req, service(req));
       let cleanupPending = false;
+      // The database mutation is already committed. Try queued object removal now;
+      // cleanup failure reports pending retry without undoing the post/reply action.
       if (result.cleanupIds?.length) {
         try { cleanupPending = (await cleanupFeedbackFiles(result.cleanupIds)).pending > 0; }
         catch (error) { cleanupPending = true; reportError("Feedback cleanup retry queued:", error); }
@@ -60,6 +63,7 @@ export const getFeedbackInterns = handler(async (req, s) => ({ interns: await s.
 export const replyFeedback = handler((req, s) => s.reply(req.verifiedUser, req.params.id, req.body));
 export const setFeedbackStatus = handler((req, s) => s.status(req.verifiedUser, req.params.id, req.body.status));
 export const getFeedbackAttachment = handler(async (req, s) => {
+  // Authorize the post/attachment pair before minting the 120-second storage URL.
   const attachment = await s.attachment(req.verifiedUser, req.params.id, req.params.attachmentId);
   const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(attachment.storage_path, 120);
   if (error || !data?.signedUrl) fail(503, "Attachment is temporarily unavailable.");
@@ -76,7 +80,8 @@ function uploadFeedback(editing) { return handler(async (req, s) => {
   }
   const incoming = req.files || [];
   const types = incoming.map(attachmentType);
-  // Reject forged tags before uploading, then recheck inside the database transaction.
+  // Reject forged new tags before storage I/O, then recheck them in the transaction.
+  // Edits may retain existing mention snapshots even after supervision changes.
   if (input.ids.length) {
     const eligible = new Set((await s.interns(req.verifiedUser)).map(row => row.id));
     if (input.ids.some(id => !eligible.has(id) && !previous?.mentions?.some(m => m.internship_id === id))) fail(403, "You can tag only your own supervised internships.");
@@ -94,6 +99,8 @@ function uploadFeedback(editing) { return handler(async (req, s) => {
     const result = editing ? await s.update(req.verifiedUser, req.params.id, req.body, attachments) : await s.create(req.verifiedUser, req.body, attachments);
     return editing ? result : { success: true, id: result.id, detail: result.detail, message: "Feedback posted. Relevant school staff have been notified." };
   } catch (error) {
+    // Discard staged objects only on a definite save failure. A lost COMMIT reply
+    // can leave committed attachment rows, so retain their paths for reconciliation.
     if (!error.commitUncertain) await cleanupUploadPaths(paths);
     throw error;
   }

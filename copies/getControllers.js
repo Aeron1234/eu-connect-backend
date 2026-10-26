@@ -1,4 +1,6 @@
-import { db } from "../config/db.js"; // Added .js extension
+// Historical reference copy: not imported by the current backend startup or feature routers.
+// Keep its older payloads, authorization and queries separate from the active features/.
+import { db } from "../config/db.js"; // ES module import retained in this historical copy
 
 ///////////////////
 //ACCOUNT

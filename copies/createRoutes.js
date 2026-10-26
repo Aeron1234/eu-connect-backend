@@ -1,3 +1,5 @@
+// Historical reference copy: not imported by the current backend startup or feature routers.
+// Keep its older payloads, authorization and queries separate from the active features/.
 import express from "express";
 import multer from "multer";
 import {

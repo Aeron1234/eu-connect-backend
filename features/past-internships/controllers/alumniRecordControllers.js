@@ -24,9 +24,8 @@ export const addAlumniInternshipRecord = async (req, res) => {
       notes,
     } = req.body;
 
-    // Only these seven remain required — internship_position, total_hours,
-    // accumulated_hours, and supervisor_name are now optional per the
-    // professor's request; notes was already optional.
+    // Require identity, company details, course, batch and academic year. Position,
+    // hours, supervisor and notes remain optional and are stored as null when omitted.
     const required = {
       alumni_name,
       company_name,
@@ -368,6 +367,8 @@ export const deleteAlumniInternshipRecord = async (req, res) => {
   }
 };
 
+// Read the alumni archive table, not the student's live/personal record history.
+// Paginate normalized company groups; totals count companies rather than alumni.
 export const getAlumniInternships = async (req, res) => {
   let connection;
   try {
@@ -399,6 +400,8 @@ export const getAlumniInternships = async (req, res) => {
       params.push(`%${search}%`, `%${search}%`);
     }
 
+    // Combine academic year, saved department and name/company search with AND.
+    // Apply the same conditions to company selection and its returned alumni rows.
     const whereClause = conditions.length
       ? `WHERE ${conditions.join(" AND ")}`
       : "";
@@ -457,13 +460,13 @@ export const getAlumniInternships = async (req, res) => {
 
     const total = companyPage[0].total;
 
+    // Group by trimmed lowercase company name only. Addresses/branches with the same
+    // normalized name share a group; this differs from Annex D's coordinate-based key.
     const normalizedNames = companyPage.map((c) => c.normalized_name);
     const placeholders = normalizedNames.map(() => "?").join(",");
 
-    // Position, hours, supervisor, and notes are no longer selected here —
-    // this list view never displays them, and the frontend doesn't need
-    // them fetched. They still exist in the table and are still editable
-    // via the update endpoint; this endpoint just no longer carries them.
+    // This list returns only fields used by company/alumni rows. Optional position,
+    // hours, supervisor and notes remain stored but are absent from this response.
     const [rows] = await connection.execute(
       `SELECT air.id, air.alumni_name, air.company_name, air.company_address,
               air.industry, air.course_id, air.batch_year, air.academic_year,

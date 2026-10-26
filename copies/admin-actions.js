@@ -1,3 +1,5 @@
+// Historical reference copy: not imported by the current backend startup or feature routers.
+// Keep its older payloads, authorization and queries separate from the active features/.
 "use server";
 
 import { getUserSession } from "./services";
@@ -5,7 +7,7 @@ import bcrypt from "bcryptjs";
 import { v4 as uuidv4 } from "uuid";
 import { revalidatePath } from "next/cache";
 
-// DONE
+
 export async function createUser(prevState, formData) {
   const connection = await db.getConnection();
 
@@ -88,7 +90,7 @@ export async function createUser(prevState, formData) {
   }
 }
 
-// DONE
+
 export async function deactivateAccount(prevState, formData) {
   const connection = await db.getConnection();
 
@@ -129,7 +131,7 @@ export async function deactivateAccount(prevState, formData) {
   }
 }
 
-// DONE
+
 export async function reactivateAccount(prevState, formData) {
   const connection = await db.getConnection();
 

@@ -14,6 +14,8 @@ const EXTENSIONS = {
   "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp",
 };
 
+// Check the declared image type against its leading bytes; this is a signature
+// check, not a complete image decode. Multipart limits are enforced upstream.
 function hasImageSignature(file) {
   const buffer = file.buffer;
   if (!Buffer.isBuffer(buffer)) return false;
@@ -23,6 +25,8 @@ function hasImageSignature(file) {
   return false;
 }
 
+// Attach images in saved sort order with fresh one-hour storage links. Promise.all
+// preserves row order even if individual signing calls finish out of order.
 async function withReportImages(reports, execute) {
   const ids = reports.map((report) => report.report_id).filter(Boolean);
   if (!ids.length) return reports.map((report) => ({ ...report, images: [] }));
@@ -51,6 +55,8 @@ async function withReportImages(reports, execute) {
   }));
 }
 
+// Require the four text sections, allow an optional memorabilia note, and apply
+// the 900-word cap across all five fields before storage or database work.
 function readContent(body) {
   const content = {};
   for (const field of FIELDS) {
@@ -65,6 +71,8 @@ function readContent(body) {
   return { content };
 }
 
+// Cleanup is best effort and logged on failure. It does not roll back a committed
+// report change or enqueue a durable retry.
 async function removeStoredFile(path) {
   if (path) {
     try {
@@ -76,6 +84,8 @@ async function removeStoredFile(path) {
   }
 }
 
+// Return eligible ongoing/finished internships even before a report exists. The
+// LEFT JOIN preserves empty report slots and keeps older finished reports selectable.
 export async function listSummaryReports(req, res) {
   try {
     const [rows] = await db.execute(
@@ -184,6 +194,8 @@ export async function saveSummaryReport(req, res) {
   const removedPaths = [];
   let committed = false;
   try {
+    // Check POST-versus-PATCH against the latest report slot. Locking the parent record
+    // in the final transaction serializes saves for the same internship.
     async function saveState(connection, lock = false) {
       const [internships] = await connection.execute(
         `SELECT id, DATE_FORMAT(date_started, '%Y-%m-%d') AS date_started FROM internship_records
@@ -272,6 +284,8 @@ export async function saveSummaryReport(req, res) {
         await connection.execute("DELETE FROM summary_report_images WHERE id = ? AND report_id = ?", [image.id, reportId]);
         removedPaths.push(image.storage_path);
       }
+      // Append new images after the previous maximum, including removed images. Retained
+      // images keep their saved order; deletion does not renumber the remaining rows.
       let sortOrder = Math.max(-1, ...existingImages.map((image) => image.sort_order || 0)) + 1;
       for (const { file, imagePath } of uploadedImages) {
         await connection.execute(
@@ -325,6 +339,8 @@ export async function getSummaryAttachment(req, res) {
   }
 }
 
+// Delete the owned report in a transaction, then attempt storage cleanup after commit.
+// The internship remains available for a replacement report.
 export async function deleteSummaryReport(req, res) {
   const userId = req.verifiedUser.id;
   let connection;

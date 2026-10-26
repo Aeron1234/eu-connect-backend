@@ -3,6 +3,8 @@ import { reportError } from "../../../config/errorTracking.js";
 
 const PAGE_SIZE = 15;
 
+// Remove every recorded occurrence for this fingerprint, not just the active list
+// filters. A later occurrence can recreate the group; deletion does not fix its cause.
 export async function deleteErrorGroup(req, res) {
   res.set("Cache-Control", "private, no-store");
   if (req.verifiedUser?.role !== "admin") {
@@ -55,6 +57,8 @@ function filtersFrom(query) {
   return { where: `WHERE ${conditions.join(" AND ")}`, params };
 }
 
+// Summary counts and group pages share the same filters. Each displayed sample is
+// the greatest event ID within that filtered group, not an unfiltered global sample.
 export async function getErrorGroups(req, res) {
   try {
     const { where, params } = filtersFrom(req.query);
@@ -113,6 +117,8 @@ export async function getErrorGroups(req, res) {
   }
 }
 
+// Detail ignores list filters: summarize retained history for the fingerprint and
+// return only its newest 25 occurrences. Route middleware restricts reads to admin.
 export async function getErrorGroup(req, res) {
   const { fingerprint } = req.params;
   if (!/^[a-f0-9]{64}$/.test(fingerprint)) {

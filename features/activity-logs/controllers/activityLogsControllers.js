@@ -4,6 +4,8 @@ import { invalidateActivityLogsCache } from "../../../config/cache/activityLogsC
 import { db } from "../../../config/db.js";
 import { activityLogDateRange } from "../activityLogDateRange.js";
 
+// Read-only, uncached estimate for the chosen date range across all actors/modules.
+// The later DELETE recomputes its match set; preview does not reserve rows.
 export const previewActivityLogBatchDelete = async (req, res) => {
   if (req.verifiedUser?.role !== "admin") {
     return res.status(403).json({ error: "Access Denied." });
@@ -23,6 +25,8 @@ export const previewActivityLogBatchDelete = async (req, res) => {
   }
 };
 
+// Delete by validated date range only, independently of list filters or preview count.
+// Commit before invalidating cached log pages and return the actual affected count.
 export const deleteActivityLogsByDateRange = async (req, res) => {
   if (req.verifiedUser?.role !== "admin") {
     return res.status(403).json({ error: "Access Denied." });
@@ -233,7 +237,8 @@ export const getAllActivityLogs = async (req, res) => {
   }
 };
 
-// DELETE — a user can delete their own log entries; admin can delete any
+// The mounted DELETE route is admin-only. This handler also retains a generic
+// owner-or-admin check for direct callers; it does not widen the route permission.
 export const deleteActivityLog = async (req, res) => {
   let connection;
   try {

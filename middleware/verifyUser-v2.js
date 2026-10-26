@@ -1,3 +1,5 @@
+// Historical API-key middleware; no current router imports this version.
+// Active routes use middleware/verifyUser.js and its bearer-token identity contract.
 import { db } from "../config/db.js";
 
 export const verifyUser = async (req, res, next) => {
@@ -34,7 +36,7 @@ export const verifyUser = async (req, res, next) => {
           LEFT JOIN departments AS d ON d.id = sai.department_id
           WHERE sai.user_id = ?
         `,
-        [user.id], // Fixed: changed user.user_uuid -> user.id
+        [user.id], // Use the selected users.id to look up academic/department membership.
       );
 
       if (courseRows.length > 0) {
@@ -52,7 +54,7 @@ export const verifyUser = async (req, res, next) => {
           LEFT JOIN departments AS d ON d.id = dhbi.department_id
           WHERE dhbi.user_id = ?
         `,
-        [user.id], // Fixed: changed user.user_uuid -> user.id
+        [user.id], // Use the selected users.id to look up academic/department membership.
       );
 
       if (deptRows.length > 0) {

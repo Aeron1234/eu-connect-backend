@@ -1,3 +1,5 @@
+// Historical reference copy: not imported by the current backend startup or feature routers.
+// Keep its older payloads, authorization and queries separate from the active features/.
 import express from "express";
 import {
   getActiveInternship,
@@ -12,7 +14,7 @@ import {
   getAllAccounts,
   getAllAnnouncements,
   getAnnouncementCategories,
-} from "./getControllers.js"; // Added .js
+} from "./getControllers.js"; // Historical router imports its sibling controller copy
 import { verifyUser } from "../middleware/verifyUser.js";
 import { verifyRole } from "../middleware/verifyRole.js";
 

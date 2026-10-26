@@ -1,4 +1,6 @@
-import { db } from "../config/db.js"; // Added .js extension
+// Historical API-key middleware; no current router imports this version.
+// Active routes use middleware/verifyUser.js and its bearer-token identity contract.
+import { db } from "../config/db.js"; // Historical ESM database import
 
 export const verifyUser = async (req, res, next) => {
   const apiKey = req.headers["x-api-key"];

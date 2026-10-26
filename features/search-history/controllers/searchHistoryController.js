@@ -1,5 +1,5 @@
 import { reportError } from "../../../config/errorTracking.js";
-import { db } from "../../../config/db.js"; // Adjust the path to your DB connection instance
+import { db } from "../../../config/db.js"; // Shared database pool for user search and per-viewer search history
 
 // 🔍 A. SEARCH USERS
 export const searchUsers = async (req, res) => {
@@ -16,7 +16,9 @@ export const searchUsers = async (req, res) => {
     connection = await db.getConnection();
     const searchTerm = `%${q.trim()}%`;
 
-    // Searches user profiles, handles students, employers, and department heads
+    // Search names and internship/employer company text, returning at most ten rows.
+    // Academic labels use the greatest student_academic_info ID per user; this search
+    // does not itself authorize private tabs on a matched profile.
     const query = `
         SELECT 
           up.user_id, 

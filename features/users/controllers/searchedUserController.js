@@ -177,6 +177,8 @@ export const getSearchedUser = async (req, res) => {
       LIMIT 1;
     `;
 
+    // Use the latest academic row for student details. The ongoing internship join is
+    // separate from accepted/pending supervision labels resolved after this read.
     let rows;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
@@ -211,6 +213,8 @@ export const getSearchedUser = async (req, res) => {
     const { id: viewerId, role: rawViewerRole } = req.verifiedUser || {};
     const viewerRole = rawViewerRole?.toLowerCase() || null;
 
+    // Only head-to-student profiles need this explicit permission field. Resolve it
+    // from current database assignments; missing assignments deny private-record access.
     const canViewStudentRecords = viewerRole !== "department_head" || role !== "student" ||
       await canHeadReadStudentRecords(connection, viewerId, searchedUserId);
 
@@ -240,7 +244,8 @@ export const getSearchedUser = async (req, res) => {
       );
     }
 
-    // ---- HEADER: exactly what <SearchedUserHeader> renders, nothing more ----
+    // Shared header plus target-role fields. Numeric internship progress belongs only
+    // to student headers; background details come from the role-scoped joins above.
     const header = {
       first_name: user.first_name,
       last_name: user.last_name,
@@ -260,8 +265,8 @@ export const getSearchedUser = async (req, res) => {
       }),
     };
 
-    // ---- INFO: everything else, for the info tab / detail view ----
-    // Admin gets nothing beyond the shared contact fields, per your instruction.
+    // Shape Info by the searched account's role, not the viewer's role. An admin target
+    // has only shared contact fields; this is not an admin-viewer restriction.
     const roleSpecificInfo =
       role === "student"
         ? {

@@ -5,7 +5,8 @@ export function cacheAttendanceHistory(req, res, next) {
     const json = res.json.bind(res);
     res.json = body => {
       const rows = Array.isArray(body) ? body : body?.dtrs;
-      // Never store a response containing live/open shifts. Preserve its contents.
+      // Cache only recognized lists of closed shifts. Open shifts and unrecognized bodies
+      // opt out of storage while retaining their original response contents.
       if (!Array.isArray(rows) || rows.some(row => row.clock_out == null)) res.locals.skipCache = true;
       return json(body);
     };

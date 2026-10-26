@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import { queueFeedbackFiles } from "./feedbackFileCleanup.js";
 import { assertRole, validatePost, feedbackScope, departmentFeedbackScope, uniqueRecipients, STATUSES, STAFF, fail } from "./feedbackPolicy.js";
 
-// Department/student labels are captured when the post is created. Future academic
-// transfers do not silently change an existing discussion's department audience.
+// Tagging snapshots the student's latest academic department and display labels.
+// Later student transfers do not rewrite existing mentions. Access still follows
+// the department head's current assignment to those saved departments.
 const internsSQL = `
  SELECT ir.id, ir.user_id AS student_id, ir.company_name, ir.internship_position,
    CONCAT_WS(' ', up.first_name, up.last_name) AS student_name,
@@ -23,6 +24,8 @@ export function createFeedbackService({ db, afterCommit = () => {} }) {
     const c = await db.getConnection();
     try { return await work(c); } finally { c.release(); }
   }
+  // Release the connection on every outcome. Once COMMIT has been attempted,
+  // a lost acknowledgement marks the outcome uncertain so staged files are retained.
   async function transaction(work) {
     const c = await db.getConnection(); let attempted = false;
     try {
@@ -36,10 +39,14 @@ export function createFeedbackService({ db, afterCommit = () => {} }) {
       throw error;
     } finally { c.release(); }
   }
+  // Expose only the revision visible to this audience; internal-note changes must
+  // not reveal staff-only activity through an employer's revision value.
   function scopedHeader(user) {
     const version = user.role === "employer" ? "public_reply_version" : "staff_reply_version";
     return headerSQL.replace("p.*", "p.id, p.author_id, p.category, p.subject, p.description, p.status, p.created_at, p.updated_at, p." + version + " AS reply_version");
   }
+  // Every change advances staff history. Public changes also advance employer
+  // history and feed timestamp; internal notes leave employer ordering unchanged.
   async function bumpReplies(c, id, internal) {
     await c.execute("UPDATE feedback_posts SET staff_reply_version = staff_reply_version + 1" +
       (internal ? "" : ", public_reply_version = public_reply_version + 1, updated_at = CURRENT_TIMESTAMP") + " WHERE id = ?", [id]);
@@ -63,6 +70,8 @@ export function createFeedbackService({ db, afterCommit = () => {} }) {
         const moreReplies = replies.length > 100;
         return { post, mentions, attachments, replies: replies.slice(0, 100).reverse(), moreReplies };
   }
+  // Resolve current authorized staff through category scope, adding the employer
+  // author only for public updates. This is a shared discussion, not per-head threads.
   async function participants(c, postId, authorId, internal = false) {
     const [rows] = await c.execute(`
       SELECT DISTINCT u.id FROM users u JOIN roles r ON r.id = u.role_id
@@ -113,6 +122,8 @@ export function createFeedbackService({ db, afterCommit = () => {} }) {
       assertRole(user);
       return read(c => detailRows(c, user, id));
     },
+    // Authorize both the discussion and its pagination anchor. Employers cannot
+    // page through an internal-note anchor; equal timestamps are ordered by reply ID.
     async replies(user, id, before) {
       assertRole(user);
       if (typeof before !== "string" || !/^[a-f0-9-]{36}$/i.test(before)) fail(400, "Invalid discussion page.");
@@ -134,6 +145,8 @@ export function createFeedbackService({ db, afterCommit = () => {} }) {
       assertRole(user); if (user.role !== "employer") fail(403, "Only employers can create feedback posts.");
       const input = validatePost(body); const id = randomUUID();
       const result = await transaction(async c => {
+        // Recheck newly tagged internships under locks before snapshotting labels.
+        // Eligible tags belong to this employer's ongoing or finished, non-deleted placements.
         let mentions = [];
         if (input.ids.length) {
           const [rows] = await c.execute(internsSQL + " AND ir.id IN (" + input.ids.map(() => "?").join(",") + ") FOR UPDATE", [user.id, ...input.ids]);
@@ -152,8 +165,8 @@ export function createFeedbackService({ db, afterCommit = () => {} }) {
           input.category === "technical_issue" ? "An employer reported a technical issue." :
           input.category === "platform_feedback" ? "An employer submitted platform feedback." : "An employer submitted private internship feedback.";
         await notify(c, recipients, user, id, "feedback_mentioned", title, message);
-        // Return the committed, authorized view so the client can display the post
-        // without waiting for a second read or a socket notification.
+        // Build the authorized creation view within this transaction; return it only
+        // after commit so the client can seed its cache without another read or socket.
         const post = await visible(c, user, id);
         const detail = {
           post,
@@ -176,6 +189,7 @@ export function createFeedbackService({ db, afterCommit = () => {} }) {
       if (internal && !STAFF.includes(user.role)) fail(403, "Internal notes are for school staff only.");
       return deliver(await transaction(async c => {
         const post = await visible(c, user, id, true);
+        // New replies require an open/in-review discussion; staff must reopen resolved posts.
         if (post.status === "resolved") fail(409, "This discussion is resolved. School staff can reopen it before you reply.");
         const replyId = randomUUID();
         await c.execute("INSERT INTO feedback_replies (id, post_id, author_id, body, is_internal) VALUES (?, ?, ?, ?, ?)", [replyId, id, user.id, text, internal ? 1 : 0]);
@@ -212,6 +226,8 @@ export function createFeedbackService({ db, afterCommit = () => {} }) {
         if (user.role !== "employer" || old.author_id !== user.id) fail(403, "Only the author can edit this feedback.");
         const before = uniqueRecipients(await participants(c, id, old.author_id), null);
         const [existingMentions] = await c.execute("SELECT internship_id, student_id, student_name, department_id, department_code, department_name, company_name FROM feedback_mentions WHERE post_id = ?", [id]);
+        // Retained tags keep their original snapshots. Only newly added internship IDs
+        // must pass the employer's current supervision/department eligibility query.
         const snapshots = new Map(existingMentions.map(m => [m.internship_id, { ...m, id: m.internship_id }]));
         const newIds = input.ids.filter(key => !snapshots.has(key));
         if (newIds.length) {
@@ -226,6 +242,8 @@ export function createFeedbackService({ db, afterCommit = () => {} }) {
         if (!Array.isArray(removed) || removed.length > 3 || removed.some(key => typeof key !== "string" || !attachments.some(a => a.id === key))) fail(400, "Choose valid attachments to remove.");
         removed = [...new Set(removed)];
         if (attachments.length - removed.length + added.length > 3) fail(400, "Keep up to three attachments in total.");
+        // Queue removed paths in the same transaction as attachment metadata removal.
+        // The combined retained/new attachment count has already been checked.
         const cleanupIds = await queueFeedbackFiles(c, attachments.filter(a => removed.includes(a.id)).map(a => a.storage_path));
         for (const key of removed) await c.execute("DELETE FROM feedback_attachments WHERE id = ? AND post_id = ?", [key, id]);
         for (const a of added) await c.execute("INSERT INTO feedback_attachments (id, post_id, storage_path, filename, mime_type, size_bytes) VALUES (?, ?, ?, ?, ?, ?)", [a.id, id, a.path, a.filename, a.mime, a.size]);
@@ -236,6 +254,8 @@ export function createFeedbackService({ db, afterCommit = () => {} }) {
           await c.execute("INSERT INTO feedback_mentions (post_id, internship_id, student_id, student_name, department_id, department_code, department_name, company_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [id, key, m.student_id, m.student_name, m.department_id, m.department_code || "", m.department_name || "", m.company_name || ""]);
         }
         const recipients = uniqueRecipients(await participants(c, id, user.id), user.id);
+        // Remove stale alerts for participants losing access and refresh the prior
+        // audience after commit so already-open clients recheck visibility.
         const removedUsers = before.filter(key => key !== user.id && !recipients.includes(key));
         for (const key of removedUsers) await c.execute("DELETE FROM notifications WHERE link_uuid = ? AND user_id = ? AND type IN ('feedback_mentioned','feedback_reply','feedback_status')", [id, key]);
         const title = "Feedback updated", message = "An employer updated a feedback discussion.";
@@ -243,6 +263,8 @@ export function createFeedbackService({ db, afterCommit = () => {} }) {
         return { success: true, id, detail: await detailRows(c, user, id), recipients, refreshRecipients: before, type: "feedback_mentioned", title, message, cleanupIds };
       }));
     },
+    // Only the employer author can delete the post. Queue file paths before removing
+    // discussion metadata/alerts in the same transaction; storage cleanup follows commit.
     async remove(user, id) {
       assertRole(user);
       return deliver(await transaction(async c => {
@@ -257,6 +279,9 @@ export function createFeedbackService({ db, afterCommit = () => {} }) {
         return { success: true, id, deleted: true, recipients: [], refreshRecipients, cleanupIds };
       }));
     },
+    // Lock the visible post then its reply, and allow only the reply's own author
+    // to edit/delete. Keep its internal/public classification unchanged; these changes
+    // refresh permitted viewers without creating a new reply notification.
     async changeReply(user, id, replyId, body, deleting = false) {
       assertRole(user);
       const text = String(body?.body || "").trim();
@@ -275,6 +300,8 @@ export function createFeedbackService({ db, afterCommit = () => {} }) {
       }));
     },
 
+    // Reauthorize post visibility and match the attachment to that same post before
+    // returning its private object path for signed access.
     async attachment(user, postId, attachmentId) {
       assertRole(user);
       return read(async c => {

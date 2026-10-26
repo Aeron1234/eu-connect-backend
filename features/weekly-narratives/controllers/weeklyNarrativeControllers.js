@@ -6,6 +6,8 @@ import { verifyRecordAccess } from "../../../config/helpers.js";
 import { assertInternshipStarted } from "../../../config/internshipStart.js";
 import { parseNarrativeDateRange } from "../narrativeDates.js";
 
+// Create/edit lock the student's ongoing, non-deleted internship before checking its
+// start date and writing. History reads and deletion use separate paths.
 async function withNarrativeWrite(userId, internshipId, write) {
   const connection = await db.getConnection();
   let started = false;
@@ -35,6 +37,8 @@ async function withNarrativeWrite(userId, internshipId, write) {
   }
 }
 
+// The student's print read accepts owned ongoing or finished records and returns all
+// entries in week order. Coverage dates come from saved fields, not created_at.
 export const getWeeklyNarrativesForPrint = async (req, res) => {
   const userId = req.verifiedUser?.id;
   const internshipId = req.params.internshipId;
@@ -93,6 +97,9 @@ export const getAllWeeklyNarratives = async (req, res) => {
   try {
     connection = await db.getConnection();
 
+    // Statistics cover the whole selected internship, independently of the visible page.
+    // This Week counts created_at in the database's current week; it is not coverage.
+    // The word count is a space-based SQL estimate, not a general whitespace tokenizer.
     const statsQuery = `
       SELECT 
         COUNT(*) AS total_entries,
@@ -131,6 +138,8 @@ export const getAllWeeklyNarratives = async (req, res) => {
       offset,
     ]);
 
+    // Nonempty pages carry aggregate totals in each row. Empty/out-of-range pages need
+    // the separate aggregate query so pagination and statistics retain their totals.
     let stats = pageRows[0];
     if (!stats) {
       const [statsResult] = await connection.execute(statsQuery, [
@@ -367,6 +376,8 @@ export const getSearchedStudentWeeklyNarratives = async (req, res) => {
       LIMIT ? OFFSET ?
     `;
 
+    // The profile feed counts only ongoing, non-deleted internships, matching its list.
+    // This differs from selecting a specific finished record in the student's history.
     const countQuery = `
       SELECT COUNT(*) AS total 
       FROM weekly_narratives wn
@@ -414,6 +425,8 @@ export const getInternshipRecordWeeklyNarratives = async (req, res) => {
 
     connection = await db.getConnection();
     await verifyRecordAccess(connection, internshipId, requesterId, role);
+    // Recheck record access before a possible cache hit. This record-tab read is capped
+    // at 100 entries; the student's print endpoint above uses a separate unpaged query.
     if (weeklyNarrativesCacheHit(req, res)) return;
 
     const [rows] = await connection.execute(

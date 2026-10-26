@@ -25,6 +25,8 @@ export function cacheRoute(ttlSeconds = 60) {
     const userId = String(user.id);
     const originalUrl = canonicalApiPath(req.originalUrl);
     const path = originalUrl.split("?")[0];
+    // Partition by verified viewer attributes and the full canonical URL.
+    // Query values and ordering remain part of the key; aliases share a prefix.
     const key = JSON.stringify([
       userId, user.role, user.username, user.department_id, user.course_id,
       user.department_code, user.course_name, originalUrl,
@@ -39,8 +41,12 @@ export function cacheRoute(ttlSeconds = 60) {
       return next();
     }
 
+    // Snapshot the process-wide generation before the controller runs. Any intervening
+    // invalidation prevents this read from repopulating the cache, even for another route.
     const generation = getCacheGeneration();
     const originalJson = res.json.bind(res);
+    // Store only successful, cookie-free JSON within the size limit. Opt-outs and
+    // generation changes bypass storage without changing the outgoing response.
     res.json = (body) => {
       if (res.statusCode !== 200) metric("skip_status");
       else if (res.locals.skipCache) metric("skip_opt_out");
@@ -56,6 +62,7 @@ export function cacheRoute(ttlSeconds = 60) {
           try {
             const stored = cache.set(
               key,
+              // Keep a JSON snapshot plus metadata used by user/path invalidation.
               { userId, path, body: JSON.parse(serialized) },
               ttlSeconds,
             );

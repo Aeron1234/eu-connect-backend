@@ -11,6 +11,8 @@ function validDate(value) {
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
+// Use a half-open month interval [first day, next month) for SQL overlap tests.
+// Event end dates remain inclusive within that interval.
 function monthBounds(month) {
   if (typeof month !== "string" || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return null;
   const [year, number] = month.split("-").map(Number);
@@ -42,6 +44,8 @@ export async function getCalendarMonth(req, res) {
     const departmentId = viewer.role === "employer" ? -1 : viewer.department_id ?? -1;
     const isRegistrar = viewer.role === "department_head" && viewer.department_code === "REG";
 
+    // The role guard already excludes employers. Keep registrar General-only reads
+    // and author-department visibility aligned with the announcement feed.
     const [announcements] = viewer.role === "employer" ? [[]] : await db.execute(
       `SELECT a.public_id AS id, a.title, a.content, ${dateSql("a.event_date")} AS event_date,
               ${dateSql("a.event_end_date")} AS event_end_date,
@@ -56,6 +60,8 @@ export async function getCalendarMonth(req, res) {
       [until, from, viewer.role, departmentId],
     );
 
+    // Include any schedule overlapping the month, even if it starts before the first.
+    // A null department is school-wide; admin can also view department schedules.
     const [schedules] = await db.execute(
       `SELECT id, created_by, department_id, title, description,
               ${dateSql("starts_on")} AS starts_on, ${dateSql("ends_on")} AS ends_on
@@ -113,6 +119,8 @@ export async function getCalendarSchedule(req, res) {
   }
 }
 
+// New private to-dos must fall within an owned ongoing, non-deleted internship.
+// Updating title/completion or deleting an existing to-do uses ownership separately.
 async function activeInternshipOn(connection, userId, date) {
   const [[record]] = await connection.execute(
     `SELECT id FROM internship_records
@@ -178,6 +186,8 @@ export async function deleteCalendarTodo(req, res) {
   }
 }
 
+// Persist alerts in the schedule transaction. Department audiences use each
+// student's latest academic row; school-wide schedules target all student accounts.
 async function notifyStudents(connection, req, scheduleId, title, date, departmentId, action) {
   const [students] = await connection.execute(
     `SELECT DISTINCT u.id
@@ -198,6 +208,8 @@ async function notifyStudents(connection, req, scheduleId, title, date, departme
   return students;
 }
 
+// Called after commit to invalidate notification reads and emit recipient-scoped
+// alerts. Cancellation alerts have no link to the deleted schedule.
 function broadcastSchedule(req, recipients, scheduleId, title, date, action) {
   invalidateNotificationsCache();
   const io = req.app.get("socketio");
@@ -223,6 +235,8 @@ function scheduleInput(req, res) {
   return { title, description, startsOn, endsOn };
 }
 
+// Route guards permit school staff only. Admin creates school-wide schedules;
+// department heads create schedules for their assigned department.
 export async function createCalendarSchedule(req, res) {
   const input = scheduleInput(req, res);
   if (!input) return;
@@ -250,6 +264,8 @@ export async function createCalendarSchedule(req, res) {
   }
 }
 
+// Lock before author/admin checks. Edits keep the stored audience, replace linked
+// alerts in the transaction, then broadcast after commit.
 export async function updateCalendarSchedule(req, res) {
   const input = scheduleInput(req, res);
   if (!input) return;

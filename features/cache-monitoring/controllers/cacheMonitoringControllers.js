@@ -1,6 +1,9 @@
 import cache from "../../../config/cache/cache.js";
 import { getCacheMetrics } from "../../../config/cache/cacheMetrics.js";
 
+// Read-only snapshot of this API process, protected by the admin route. Cache size
+// estimates and process-wide memory are separate measures; neither reports a
+// deployment-wide cache total across workers.
 export function getCacheMonitoringMetrics(req, res) {
   res.set("Cache-Control", "private, no-store");
   const stats = cache.getStats();

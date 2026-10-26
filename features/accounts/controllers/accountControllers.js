@@ -101,6 +101,8 @@ export const getUserProfile = async (req, res) => {
 
     connection = await db.getConnection();
 
+    // Select only the current account role's profile/background fields. The student
+    // branch uses the academic row with the greatest ID, not every historical row.
     let query;
     switch (role) {
       case "admin":
@@ -253,9 +255,8 @@ export const updateUserInfo = async (req, res) => {
       [email ?? null, username ?? null, id],
     );
 
-    // --- user_profiles table ---
-    // Students keep their name locked server-side regardless of payload,
-    // mirroring the frontend rule (retain professionalism / prevent impersonation)
+    // Students' first/last names remain unchanged even if submitted. Other roles can
+    // update them; shared contact/address/gender fields follow the payload below.
     const [firstNameParam, lastNameParam] =
       role === "student"
         ? [null, null]
@@ -305,7 +306,8 @@ export const updateUserInfo = async (req, res) => {
         [employee_number ?? null, id],
       );
     }
-    // student & admin: nothing further here — academic info has its own endpoint
+    // Student academic assignments are not modified by this self-profile update; admin
+    // profiles have no additional background table to update here.
 
     await connection.commit();
     invalidateProfileOverviewCache();
@@ -514,7 +516,8 @@ export const getAllAccounts = async (req, res) => {
 };
 
 export const getCreateAccountFormData = async (req, res) => {
-  // THIS ENDPOINT IS FOR THE CREATE ACCOUNT ONLY
+  // Load role choices and active academic lookups for account creation. Individual
+  // lookup failures return partial choices and opt out of response caching.
   let connection;
   try {
     connection = await db.getConnection();
@@ -619,12 +622,16 @@ export const createUser = async (req, res) => {
       }
     }
 
+    // Accept an optional single letter with an optional period; persist uppercase
+    // without the period so report formatters can add punctuation consistently.
     const submittedMiddleInitial = String(middle_initial ?? "").trim();
     if (submittedMiddleInitial && !/^[A-Za-z]\.?$/.test(submittedMiddleInitial)) {
       return res.status(400).json({ message: "Middle initial must be one letter." });
     }
     const normalizedMiddleInitial = submittedMiddleInitial.replace(/\.$/, "").toUpperCase();
 
+    // Resolve the role name from its database ID before choosing required background
+    // fields. IDs are lookup values, not hardcoded role meanings.
     const roleId = Number(role);
     if (Number.isNaN(roleId)) {
       return res.status(400).json({ message: "Invalid role." });
@@ -686,6 +693,8 @@ export const createUser = async (req, res) => {
       if (courseRows.length === 0) {
         return res.status(400).json({ message: "Invalid course selected." });
       }
+      // Derive the student's department from the selected active course, ignoring any
+      // independent student department value supplied by the form.
       studentDepartmentId = courseRows[0].department_id;
     }
 

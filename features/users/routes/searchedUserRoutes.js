@@ -30,6 +30,8 @@ import {
 
 const searchedUserRoutes = express.Router();
 const cacheSearchedProfile = cacheRoute(30);
+// Head profile reads bypass this cache so their current student-record permission
+// is recomputed. Private tab routes apply their own guard before cache lookup.
 function searchedProfileCache(req, res, next) {
   if (req.verifiedUser.role === "department_head") {
     res.set("Cache-Control", "private, no-store");
