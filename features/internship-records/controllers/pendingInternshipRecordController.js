@@ -1,3 +1,4 @@
+import { rotationEnabled } from "../../internship-rotations/rotationPolicy.js";
 import { readPlacementCity } from "../placementCity.js";
 import { db } from "../../../config/db.js";
 import { reportError } from "../../../config/errorTracking.js";
@@ -96,16 +97,17 @@ export async function updateOwnPendingInternshipRecord(req, res) {
       await connection.rollback(); transaction = false;
       return res.status(400).json({ error: "Select a valid region." });
     }
+    if (req.body.rotations_enabled !== undefined) fields.rotations_enabled = Number(rotationEnabled(req.body.rotations_enabled));
     // Retain ownership/status/deletion predicates on the UPDATE itself.
     // A conflict returns 409 so the client refreshes instead of claiming success.
     const [result] = await connection.execute(
       `UPDATE internship_records SET company_name = ?, company_address = ?, internship_position = ?,
        company_website = ?, description = ?, date_started = ?, date_ended = ?, total_hours = ?,
-       region_id = ?, semester = ?, lat = ?, lon = ?, city_name = ?, province_name = ?, updated_at = NOW()
+       region_id = ?, semester = ?, lat = ?, lon = ?, city_name = ?, province_name = ?, rotations_enabled = ?, updated_at = NOW()
        WHERE id = ? AND user_id = ? AND status = 'pending' AND deleted_at IS NULL`,
       [fields.company_name, fields.company_address, fields.internship_position, fields.company_website,
         fields.description, fields.date_started, fields.date_ended, fields.total_hours, fields.region_id,
-        fields.semester, fields.lat, fields.lon, fields.city_name, fields.province_name, internshipId, studentId],
+        fields.semester, fields.lat, fields.lon, fields.city_name, fields.province_name, fields.rotations_enabled ?? record.rotations_enabled ?? 0, internshipId, studentId],
     );
     if (result.affectedRows !== 1) {
       await connection.rollback(); transaction = false;
@@ -133,6 +135,7 @@ export async function updateOwnPendingInternshipRecord(req, res) {
     return res.status(200).json({ success: true, message: "Pending internship record updated.", record: { ...record, ...fields } });
   } catch (error) {
     if (transaction) await connection.rollback();
+    if (error.status) return res.status(error.status).json({ success: false, error: error.message });
     reportError("Update own pending internship record error:", error);
     return res.status(500).json({ error: "Failed to update internship record." });
   } finally {

@@ -151,8 +151,22 @@ test("pending edits persist validated city fields in the same transaction", asyn
   assert.equal(response.status, 200);
   const body = await response.json(); assert.equal(body.record.city_name, "Lucena City");
   const update = calls.find(call => call.sql.includes("UPDATE internship_records"));
-  assert.deepEqual(update.params.slice(-4), ["Lucena City", "Quezon", "record-1", "student-1"]);
+  assert.deepEqual(update.params.slice(-5), ["Lucena City", "Quezon", 0, "record-1", "student-1"]);
   assert.equal(commits, 1);
+});
+
+test("pending placement edits can opt in to rotations and legacy clients preserve the setting", async (t) => {
+  const request = await client(t);
+  let response = await request({ ...valid, rotations_enabled: "1" });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).record.rotations_enabled, 1);
+  record.rotations_enabled = 1;
+  response = await request();
+  assert.equal(response.status, 200);
+  const updates = calls.filter(call => call.sql.includes("UPDATE internship_records"));
+  assert.equal(updates.at(-1).params.at(-3), 1);
+  response = await request({ ...valid, rotations_enabled: "yes" });
+  assert.equal(response.status, 400);
 });
 
 test("legacy pending edits preserve city only when the saved location is unchanged", async (t) => {
@@ -179,6 +193,6 @@ test("new internship creation saves city and province with the original placemen
   assert.equal(res.statusCode, 201); assert.equal(res.body.success, true);
   const insert = writes.find(row => row.sql.includes("INSERT INTO internship_records"));
   assert.match(insert.sql, /semester, city_name, province_name/);
-  assert.deepEqual(insert.params.slice(-3), ["Lucena City", "Quezon", "student-1"]);
+  assert.deepEqual(insert.params.slice(-4), ["Lucena City", "Quezon", 0, "student-1"]);
   assert.equal(commits, 1);
 });

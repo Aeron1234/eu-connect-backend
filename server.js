@@ -21,6 +21,7 @@ import { cleanupFeedbackFiles } from "./features/feedback/feedbackController.js"
 import feedbackRoutes from "./features/feedback/routes/feedbackRoutes.js";
 import announcementRoutes from "./features/announcements/routes/announcementRoutes.js";
 import accountRoutes from "./features/accounts/routes/accountRoutes.js";
+import rotationRoutes from "./features/internship-rotations/rotationRoutes.js";
 import internshipRecordRoutes from "./features/internship-records/routes/internshipRecordRoutes.js";
 import dtrRoutes from "./features/dtr/routes/dtrRoutes.js";
 import narrativeRoutes from "./features/narratives/routes/narrativeRoutes.js";
@@ -110,6 +111,7 @@ mountApiRoutes(app, [
   authRoutes,
   announcementRoutes,
   accountRoutes,
+  rotationRoutes,
   internshipRecordRoutes,
   dtrRoutes,
   narrativeRoutes,

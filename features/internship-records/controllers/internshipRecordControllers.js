@@ -1,3 +1,4 @@
+import { rotationEnabled } from "../../internship-rotations/rotationPolicy.js";
 import { readPlacementCity } from "../placementCity.js";
 import { reportError } from "../../../config/errorTracking.js";
 import { getActivityLogUserName } from "../../../config/activityLogNames.js";
@@ -110,7 +111,7 @@ export const getAllUserInternships = async (req, res) => {
 
     if (role === "student") {
       const [rows] = await db.execute(
-        `SELECT ir.id, ir.created_at, ir.company_name, ir.company_address, ir.internship_position, ir.company_website, ir.description, ir.status, ir.date_started, ir.date_ended, ir.total_hours, up.first_name, up.last_name, c.course_name, r.short_name,
+        `SELECT ir.id, ir.rotations_enabled, (SELECT COUNT(*) FROM internship_rotations rot WHERE rot.internship_id = ir.id AND rot.deleted_at IS NULL) AS rotation_count, ir.created_at, ir.company_name, ir.company_address, ir.internship_position, ir.company_website, ir.description, ir.status, ir.date_started, ir.date_ended, ir.total_hours, up.first_name, up.last_name, c.course_name, r.short_name,
                 NULLIF(TRIM(CONCAT_WS(' ', supervisor.first_name, supervisor.last_name)), '') AS supervisor_name
         FROM internship_records AS ir
        INNER JOIN user_profiles AS up ON ir.user_id = up.user_id
@@ -159,6 +160,7 @@ export const createInternshipRecord = async (req, res) => {
 
     const { id: userId, role, department_id } = req.verifiedUser;
     const data = req.body;
+    const rotationsEnabled = rotationEnabled(data.rotations_enabled);
 
     if (role !== "student") {
       return res
@@ -242,8 +244,8 @@ export const createInternshipRecord = async (req, res) => {
     // A skipped insert is reported through affectedRows, not a successful submission.
     const [result] = await connection.execute(
       `
-      INSERT INTO internship_records (id, user_id, company_name, company_address, internship_position, description, lon, lat, date_started, date_ended, total_hours, region_id, company_website, semester, city_name, province_name)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      INSERT INTO internship_records (id, user_id, company_name, company_address, internship_position, description, lon, lat, date_started, date_ended, total_hours, region_id, company_website, semester, city_name, province_name, rotations_enabled)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       FROM DUAL
       WHERE NOT EXISTS (
         SELECT 1 FROM internship_records WHERE user_id = ? AND status = 'ongoing'
@@ -266,6 +268,7 @@ export const createInternshipRecord = async (req, res) => {
         data.semester,
         city.fields.city_name,
         city.fields.province_name,
+        Number(rotationsEnabled),
         userId,
       ],
     );
@@ -345,8 +348,9 @@ export const createInternshipRecord = async (req, res) => {
       success: true,
     });
   } catch (error) {
-    reportError(error);
     if (connection) await connection.rollback();
+    if (error.status) return res.status(error.status).json({ success: false, error: error.message });
+    reportError(error);
     res.status(500).json({ error: "Database query failed", success: false });
   } finally {
     if (connection) connection.release();

@@ -1,3 +1,4 @@
+import { narrativeRotationSnapshot } from "../../internship-rotations/rotationPolicy.js";
 import { reportError } from "../../../config/errorTracking.js";
 import { invalidateWeeklyNarrativesCache } from "../../../config/cache/weeklyNarrativesCache.js";
 import { weeklyNarrativesCacheHit } from "../../../middleware/weekly-narratives-cache.js";
@@ -15,7 +16,7 @@ async function withNarrativeWrite(userId, internshipId, write) {
     await connection.beginTransaction();
     started = true;
     const [records] = await connection.execute(
-      `SELECT id, DATE_FORMAT(date_started, '%Y-%m-%d') AS date_started
+      `SELECT id, rotations_enabled, DATE_FORMAT(date_started, '%Y-%m-%d') AS date_started
        FROM internship_records
        WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND status = 'ongoing'
        LIMIT 1 FOR UPDATE`,
@@ -23,7 +24,7 @@ async function withNarrativeWrite(userId, internshipId, write) {
     );
     if (!records.length) throw Object.assign(new Error("Ongoing internship record not found."), { status: 404 });
     assertInternshipStarted(records[0].date_started, "Weekly narratives");
-    await write(connection);
+    await write(connection, records[0]);
     await connection.commit();
     started = false;
   } catch (error) {
@@ -60,7 +61,7 @@ export const getWeeklyNarrativesForPrint = async (req, res) => {
     if (!records.length) return res.status(404).json({ error: "Internship record not found." });
 
     const [narratives] = await db.execute(
-      `SELECT week_number, title, narrative, created_at,
+      `SELECT week_number, title, narrative, created_at, rotation_assignments,
               DATE_FORMAT(date_from, '%Y-%m-%d') AS date_from,
               DATE_FORMAT(date_to, '%Y-%m-%d') AS date_to
        FROM weekly_narratives
@@ -117,7 +118,7 @@ export const getAllWeeklyNarratives = async (req, res) => {
 
     const narrativesQuery = `
       SELECT wn.id, wn.user_id, wn.internship_id, wn.week_number, wn.title,
-             wn.narrative, wn.created_at, wn.updated_at,
+             wn.narrative, wn.created_at, wn.updated_at, wn.rotation_assignments,
              DATE_FORMAT(wn.date_from, '%Y-%m-%d') AS date_from,
              DATE_FORMAT(wn.date_to, '%Y-%m-%d') AS date_to,
              stats.total_entries, stats.latest_week, stats.total_words,
@@ -201,11 +202,12 @@ export const createWeeklyNarrative = async (req, res) => {
     }
 
     const dates = parseNarrativeDateRange(req.body);
-    await withNarrativeWrite(userId, internshipId, async connection => {
+    await withNarrativeWrite(userId, internshipId, async (connection, record) => {
+      const snapshot = await narrativeRotationSnapshot(connection, record, req.body, dates);
       const [result] = await connection.execute(
-        `INSERT INTO weekly_narratives (user_id, internship_id, week_number, title, narrative, date_from, date_to)
-          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [userId, internshipId, Number(week_number), title, narrative.trim(), dates.from, dates.to],
+        `INSERT INTO weekly_narratives (user_id, internship_id, week_number, title, narrative, date_from, date_to, rotation_assignments)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [userId, internshipId, Number(week_number), title, narrative.trim(), dates.from, dates.to, snapshot ?? null],
       );
       if (result.affectedRows === 0) throw Object.assign(new Error("Posting narrative failed."), { status: 400 });
     });
@@ -245,7 +247,17 @@ export const editWeeklyNarrative = async (req, res) => {
     }
 
     const dates = parseNarrativeDateRange(req.body);
-    await withNarrativeWrite(userId, internshipId, async connection => {
+    let savedNarrative;
+    await withNarrativeWrite(userId, internshipId, async (connection, record) => {
+      let previous = [];
+      let preserveAssignments = false;
+      if (req.body.rotation_ids !== undefined) {
+        const [saved] = await connection.execute("SELECT rotation_assignments, DATE_FORMAT(date_from, '%Y-%m-%d') AS date_from, DATE_FORMAT(date_to, '%Y-%m-%d') AS date_to FROM weekly_narratives WHERE id = ? AND user_id = ? AND internship_id = ?", [narrativeId, userId, internshipId]);
+        if (!saved.length) throw Object.assign(new Error("Narrative not found."), { status: 404 });
+        previous = saved[0].rotation_assignments;
+        preserveAssignments = saved[0].date_from === dates.from && saved[0].date_to === dates.to;
+      }
+      const snapshot = await narrativeRotationSnapshot(connection, record, req.body, dates, previous, preserveAssignments);
       const [result] = await connection.execute(
         `
         UPDATE weekly_narratives
@@ -255,6 +267,7 @@ export const editWeeklyNarrative = async (req, res) => {
           narrative = COALESCE(?, narrative),
           date_from = ?,
           date_to = ?,
+          ${snapshot !== undefined ? "rotation_assignments = ?," : ""}
           updated_at = NOW()
         WHERE id = ? AND user_id = ? AND internship_id = ?
         `,
@@ -264,6 +277,7 @@ export const editWeeklyNarrative = async (req, res) => {
           narrative.trim() || null,
           dates.from,
           dates.to,
+          ...(snapshot !== undefined ? [snapshot] : []),
           narrativeId,
           userId,
           internshipId,
@@ -273,12 +287,19 @@ export const editWeeklyNarrative = async (req, res) => {
       if (result.affectedRows === 0) {
         throw Object.assign(new Error("Failed to update narrative or can't find the narrative."), { status: 404 });
       }
+      savedNarrative = {
+        id: Number(narrativeId) || narrativeId, internship_id: internshipId,
+        week_number: Number(week_number), title: title.trim(), narrative: narrative.trim(),
+        date_from: dates.from, date_to: dates.to,
+        ...(snapshot !== undefined ? { rotation_assignments: snapshot } : {}),
+      };
     });
 
     invalidateWeeklyNarrativesCache();
     res.status(200).json({
       message: "Narrative updated successfully!",
       success: true,
+      narrative: savedNarrative,
     });
   } catch (error) {
     if (error.status) return res.status(error.status).json({ error: error.message, code: error.code });
@@ -353,6 +374,7 @@ export const getSearchedStudentWeeklyNarratives = async (req, res) => {
         wn.week_number,
         wn.title,
         wn.narrative,
+        wn.rotation_assignments,
         DATE_FORMAT(wn.date_from, '%Y-%m-%d') AS date_from,
         DATE_FORMAT(wn.date_to, '%Y-%m-%d') AS date_to,
         wn.created_at,
@@ -430,7 +452,7 @@ export const getInternshipRecordWeeklyNarratives = async (req, res) => {
     if (weeklyNarrativesCacheHit(req, res)) return;
 
     const [rows] = await connection.execute(
-      `SELECT id, week_number, title, narrative, created_at, updated_at,
+      `SELECT id, week_number, title, narrative, created_at, updated_at, rotation_assignments,
               DATE_FORMAT(date_from, '%Y-%m-%d') AS date_from,
               DATE_FORMAT(date_to, '%Y-%m-%d') AS date_to
        FROM weekly_narratives

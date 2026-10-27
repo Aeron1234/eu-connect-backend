@@ -582,3 +582,15 @@ Back up database records and private storage objects through the deployment's no
 - [Error tracking](docs/error-tracking.md)
 - [Database and feature scripts](docs/)
 - [Dated migrations and executable helpers](scripts/)
+
+## Optional company rotations
+
+Apply `scripts/2026-10-27-internship-rotations.sql` before deploying both applications. It adds default-off `internship_records.rotations_enabled`, a dated `internship_rotations` table and nullable narrative `rotation_assignments` JSON snapshots. Existing placements/attendance/evaluations and legacy narratives are not rewritten. No new environment variables.
+
+Authenticated routes under `/api/v1/internship-records/:internshipId/rotations`: GET reads timeline/settings/capabilities; PATCH `/settings` toggles tracking; POST creates, PATCH `/:rotationId` edits and DELETE `/:rotationId` soft-deletes. Existing API aliases use the normal router registry.
+
+Only the owning student writes. Pending/ongoing records can toggle; assignments require an enabled, ongoing internship. Reads allow the owner, Admin, the assigned employer and heads whose current database department matches the student. Writes lock the parent before status/date/overlap checks; narrative writes use the same lock. Disabling retains history; finalized records are read-only.
+
+Narrative create/edit accepts optional JSON-array `rotation_ids`. IDs must belong to the internship and overlap coverage; existing saved IDs may retain a removed assignment snapshot. Omitted selections preserve snapshots on edit; [] clears them. Reads and printing use saved `rotation_assignments`, independent of later timeline changes. Overall supervision, hours and evaluation slots stay on the original internship.
+
+Tests: tests/internship-rotations.test.js, plus existing internship update/start-date/narrative/department-access checks.
