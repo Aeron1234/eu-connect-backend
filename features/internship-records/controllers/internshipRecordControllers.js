@@ -111,7 +111,7 @@ export const getAllUserInternships = async (req, res) => {
 
     if (role === "student") {
       const [rows] = await db.execute(
-        `SELECT ir.id, ir.rotations_enabled, (SELECT COUNT(*) FROM internship_rotations rot WHERE rot.internship_id = ir.id AND rot.deleted_at IS NULL) AS rotation_count, ir.created_at, ir.company_name, ir.company_address, ir.internship_position, ir.company_website, ir.description, ir.status, ir.date_started, ir.date_ended, ir.total_hours, up.first_name, up.last_name, c.course_name, r.short_name,
+        `SELECT ir.id, ir.rejection_reason, ir.rotations_enabled, (SELECT COUNT(*) FROM internship_rotations rot WHERE rot.internship_id = ir.id AND rot.deleted_at IS NULL) AS rotation_count, ir.created_at, ir.company_name, ir.company_address, ir.internship_position, ir.company_website, ir.description, ir.status, ir.date_started, ir.date_ended, ir.total_hours, up.first_name, up.last_name, c.course_name, r.short_name,
                 NULLIF(TRIM(CONCAT_WS(' ', supervisor.first_name, supervisor.last_name)), '') AS supervisor_name
         FROM internship_records AS ir
        INNER JOIN user_profiles AS up ON ir.user_id = up.user_id
@@ -365,6 +365,10 @@ export const approveInternshipRecord = async (req, res) => {
     const { id: userId, role } = req.verifiedUser;
     const { internshipId } = req.params;
     const { status } = req.body;
+    const rejectionReason = typeof req.body.rejection_reason === "string" ? req.body.rejection_reason.trim() : "";
+    if (status === "rejected" && (!rejectionReason || rejectionReason.length > 1000)) {
+      return res.status(400).json({ error: "Enter a rejection reason of up to 1,000 characters." });
+    }
 
     if (!internshipId || !status) {
       return res.status(400).json({
@@ -450,8 +454,8 @@ export const approveInternshipRecord = async (req, res) => {
     }
 
     const [result] = await connection.execute(
-      `UPDATE internship_records SET updated_at = NOW(), status = ? WHERE id = ?`,
-      [status, internshipId],
+      `UPDATE internship_records SET updated_at = NOW(), status = ?, rejection_reason = ? WHERE id = ?`,
+      [status, status === "rejected" ? rejectionReason : null, internshipId],
     );
 
     if (result.affectedRows === 0) {
@@ -474,7 +478,7 @@ export const approveInternshipRecord = async (req, res) => {
     const isApproved = status === "ongoing";
     const notifMessage = isApproved
       ? `Your internship at ${company_name} has been approved by ${personInChargeName}!`
-      : `Your internship request for ${company_name} was rejected by ${personInChargeName}.`;
+      : rejectionReason;
     const notifType = isApproved
       ? "internship_record_approved"
       : "internship_record_rejected";
@@ -1191,7 +1195,7 @@ export const restoreInternshipRecord = async (req, res) => {
     }
 
     await connection.execute(
-      `UPDATE internship_records SET status = 'pending', updated_at = NOW() WHERE id = ?`,
+      `UPDATE internship_records SET status = 'pending', rejection_reason = NULL, updated_at = NOW() WHERE id = ?`,
       [internshipId],
     );
 

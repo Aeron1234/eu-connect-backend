@@ -594,3 +594,7 @@ Only the owning student writes. Pending/ongoing records can toggle; assignments 
 Narrative create/edit accepts optional JSON-array `rotation_ids`. IDs must belong to the internship and overlap coverage; existing saved IDs may retain a removed assignment snapshot. Omitted selections preserve snapshots on edit; [] clears them. Reads and printing use saved `rotation_assignments`, independent of later timeline changes. Overall supervision, hours and evaluation slots stay on the original internship.
 
 Tests: tests/internship-rotations.test.js, plus existing internship update/start-date/narrative/department-access checks.
+
+### Internship rejection reasons
+
+Apply backend `scripts/2026-10-27-internship-rejection-reason.sql` before deploying both applications. Staff must enter a reason (up to 1,000 characters) when rejecting a pending internship record, from either the list or detail confirmation. The saved reason is the student notification message and appears on their rejected record card. Failed submissions retain the reason; restoring clears it on the record, while previous notifications remain historical. Existing rejected records have no reason until a future rejection. No environment changes are required.
