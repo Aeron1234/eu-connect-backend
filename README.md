@@ -602,3 +602,7 @@ Apply backend `scripts/2026-10-27-internship-rejection-reason.sql` before deploy
 ### Map department filter
 
 The map supports department acronym filtering alongside search and region. Filtering applies to individual interns at mixed-department company sites, and the same results drive pins, company details, city counts and recommendations. The backend includes department metadata from the latest academic row and availableDepartments in the map response. Deploy both applications; no SQL or environment changes are needed.
+
+### Student-profile rotation visibility
+
+The Company rotations panel in searched student profiles is visible only to the student's current department head. The profile response exposes the rotation internship ID only after a current database department match; the frontend requires explicit permission and the head role. Student My Records management and existing authorized staff record-detail views retain their permissions. Deploy both applications. No SQL or environment changes.

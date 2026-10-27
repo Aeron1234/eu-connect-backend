@@ -270,7 +270,7 @@ export const getSearchedUser = async (req, res) => {
     const roleSpecificInfo =
       role === "student"
         ? {
-            ...((viewerRole === "admin" || (viewerRole === "department_head" && canViewStudentRecords) || (viewerRole === "employer" && supervision.status === "accepted")) ? { internship_id: user.student_internship_id } : {}),
+            ...((viewerRole === "department_head" && canViewStudentRecords) ? { internship_id: user.student_internship_id } : {}),
             company_name: user.student_company_name,
             internship_date_started: user.student_internship_date_started,
           }

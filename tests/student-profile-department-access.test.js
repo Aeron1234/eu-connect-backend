@@ -36,7 +36,7 @@ beforeEach(() => {
       }
       if (sql.includes("FROM users u")) {
         assert.match(sql, /MAX\(profile_latest.id\)/);
-        return [[{ user_id: "student", role_name: "student", first_name: "Student", last_name: "Name", student_internship_id: "internship", student_department_name: "Department", total_hours: 200, hours_rendered: 30 }]];
+        return [[{ user_id: "student", role_name: "student", first_name: "Student", last_name: "Name", student_internship_id: "internship", student_internship_employer_id: "employer", student_department_name: "Department", total_hours: 200, hours_rendered: 30 }]];
       }
       privateReads++;
       throw Error("Private handler should not run without an authorized cache miss fixture");
@@ -114,6 +114,7 @@ test("basic profile stays visible with Info-only permission and ignores a previo
   assert.equal(profile.header.first_name, "Student");
   assert.equal(profile.info.role, "student");
   assert.equal(profile.permissions.canViewStudentRecords, false);
+  assert.equal(profile.info.internship_id, undefined);
   assert.equal(privateReads, 0);
 });
 
@@ -157,4 +158,15 @@ test("membership comparison uses the latest academic row, never the token's depa
   assert.equal(await canHeadReadStudentRecords(connection, "head", "student"), true);
   database.exec("UPDATE dept_heads_background_info SET department_id=NULL");
   assert.equal(await canHeadReadStudentRecords(connection, "head", "student"), false);
+});
+
+
+test("profile rotation record ID is returned only to the matching department head", async t => {
+  const get = await client(t);
+  for (const role of ["admin", "employer", "student", "department_head"]) {
+    const res = await get("/searched-user/student", {role, id:role === "department_head" ? "head" : role});
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.user.info.internship_id, role === "department_head" ? "internship" : undefined);
+  }
 });
