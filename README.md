@@ -598,3 +598,7 @@ Tests: tests/internship-rotations.test.js, plus existing internship update/start
 ### Internship rejection reasons
 
 Apply backend `scripts/2026-10-27-internship-rejection-reason.sql` before deploying both applications. Staff must enter a reason (up to 1,000 characters) when rejecting a pending internship record, from either the list or detail confirmation. The saved reason is the student notification message and appears on their rejected record card. Failed submissions retain the reason; restoring clears it on the record, while previous notifications remain historical. Existing rejected records have no reason until a future rejection. No environment changes are required.
+
+### Map department filter
+
+The map supports department acronym filtering alongside search and region. Filtering applies to individual interns at mixed-department company sites, and the same results drive pins, company details, city counts and recommendations. The backend includes department metadata from the latest academic row and availableDepartments in the map response. Deploy both applications; no SQL or environment changes are needed.
