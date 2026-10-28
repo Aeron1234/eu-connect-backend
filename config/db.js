@@ -10,6 +10,9 @@ export const db = mysql.createPool({
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
   port: process.env.DB_PORT,
+  // Match the driver handshake to the SQL session below. Changing only the
+  // session leaves bound strings and SQL literals with different collations.
+  charset: "UTF8MB4_GENERAL_CI",
   timezone: "+08:00",
   waitForConnections: true,
   connectionLimit: 10,

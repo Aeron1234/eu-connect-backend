@@ -1478,3 +1478,8 @@ and annual mutation invalidation is unchanged. The existing
 `(academic_year, degree_program)` report index supports the list filter and
 order. No schema or write path changed, and no production-scale speedup was
 measured.
+
+
+## Database connection collation
+
+The mysql2 pool explicitly negotiates UTF8MB4_GENERAL_CI, matching the existing utf8mb4_general_ci session setting. Setting only collation_connection while leaving the driver at its unicode_ci default can produce error 1267 (Illegal mix of collations) in prepared parameter/literal comparisons, including announcement visibility checks. Keep both aligned when changing connection configuration. No table conversion or SQL migration is required for this fix; restart/redeploy the backend to replace existing connections. Regression coverage: tests/db-collation.test.js checks configuration without accessing a database; live deployment verification is separate.

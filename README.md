@@ -607,3 +607,8 @@ The map supports department acronym filtering alongside search and region. Filte
 ### Student-profile rotation visibility
 
 The Company rotations panel in searched student profiles is visible only to the student's current department head. The profile response exposes the rotation internship ID only after a current database department match; the frontend requires explicit permission and the head role. Student My Records management and existing authorized staff record-detail views retain their permissions. Deploy both applications. No SQL or environment changes.
+
+
+## Database connection collation
+
+The mysql2 pool explicitly negotiates UTF8MB4_GENERAL_CI, matching the existing utf8mb4_general_ci session setting. Setting only collation_connection while leaving the driver at its unicode_ci default can produce error 1267 (Illegal mix of collations) in prepared parameter/literal comparisons, including announcement visibility checks. Keep both aligned when changing connection configuration. No table conversion or SQL migration is required for this fix; restart/redeploy the backend to replace existing connections. Regression coverage: tests/db-collation.test.js checks configuration without accessing a database; live deployment verification is separate.
