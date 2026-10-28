@@ -1483,3 +1483,8 @@ measured.
 ## Database connection collation
 
 The mysql2 pool explicitly negotiates UTF8MB4_GENERAL_CI, matching the existing utf8mb4_general_ci session setting. Setting only collation_connection while leaving the driver at its unicode_ci default can produce error 1267 (Illegal mix of collations) in prepared parameter/literal comparisons, including announcement visibility checks. Keep both aligned when changing connection configuration. No table conversion or SQL migration is required for this fix; restart/redeploy the backend to replace existing connections. Regression coverage: tests/db-collation.test.js checks configuration without accessing a database; live deployment verification is separate.
+
+
+## DTR longitude storage
+
+Apply scripts/2026-10-29-dtr-longitude-range.sql to widen daily_time_records.lon_in and lon_out from DECIMAL(10,8) to DECIMAL(11,8). The previous type cannot store valid Philippine longitudes above 99.99999999. Latitude types, GPS validation, geofencing and hour calculations are unchanged. Coordinate storage range failures return a safe actionable 503 message, distinct from the 422 outside-area response; they do not imply the student is outside the attendance radius. Deploy the backend and apply the SQL separately. No live migration was executed.

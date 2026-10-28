@@ -348,3 +348,40 @@ test("auto-close does not overwrite a shift manually closed after its initial sc
   assert.equal(rolledBack, true);
   assert.equal(mutations, 0);
 });
+
+
+test("valid Philippine coordinates produce an actionable storage error and roll back on old longitude columns", async () => {
+  for (const [action, column] of [[clockIn, "lon_in"], [clockOut, "lon_out"]]) {
+    let rolledBack = false, committed = false, released = false;
+    db.getConnection = async () => ({
+      async beginTransaction() {},
+      async rollback() { rolledBack = true; },
+      async commit() { committed = true; },
+      release() { released = true; },
+      async execute(sql, params) {
+        if (sql.includes("SELECT id FROM daily_time_records")) return [[]];
+        if (sql.includes("FROM internship_records ir") || sql.includes("FROM daily_time_records dtr")) {
+          return [[{ internship_id: "internship", dtr_id: 1, date_started: "2026-01-01", has_started: 1,
+            company_lat: 14, company_lon: 121, clock_in: "2026-10-29 08:00:00", status: "present", break_started_at: null }]];
+        }
+        if (sql.includes("TIMESTAMPDIFF")) return [[{ hours: 1 }]];
+        if (sql.includes("INSERT INTO daily_time_records") || sql.includes("UPDATE daily_time_records")) {
+          assert.ok(params.includes(121), "valid longitude reaches the storage write unchanged");
+          throw Object.assign(new Error("coordinate storage range"), {
+            code: "ER_WARN_DATA_OUT_OF_RANGE", sqlMessage: "Out of range value for column '" + column + "' at row 1",
+          });
+        }
+        throw new Error("Unexpected SQL");
+      },
+    });
+    const res = response();
+    await action({ verifiedUser: { id: "student" }, query: {}, body: { lat_in: 14, lon_in: 121, lat_out: 14, lon_out: 121 } }, res);
+    assert.equal(res.statusCode, 503);
+    assert.equal(res.body.code, "DTR_LOCATION_STORAGE_UNAVAILABLE");
+    assert.match(res.body.error, /could not be saved.*contact your coordinator/i);
+    assert.doesNotMatch(res.body.error, /rejected|away from|lon_in|lon_out/i);
+    assert.equal(rolledBack, true);
+    assert.equal(committed, false);
+    assert.equal(released, true);
+  }
+});

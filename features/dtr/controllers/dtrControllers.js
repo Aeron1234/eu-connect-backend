@@ -26,6 +26,13 @@ function parseDtrCoordinates(lat, lon) {
   return { latitude, longitude };
 }
 
+// Valid GPS coordinates can still fail when an older schema stores longitude in
+// DECIMAL(10,8), which cannot represent values above 99.99999999.
+function isCoordinateStorageError(error) {
+  return error?.code === "ER_WARN_DATA_OUT_OF_RANGE" &&
+    /column ['`](?:lat|lon)_(?:in|out)['`]/i.test(error.sqlMessage || error.message || "");
+}
+
 export const getTodayDTR = async (req, res) => {
   let connection;
   try {
@@ -274,6 +281,13 @@ export const clockIn = async (req, res) => {
   } catch (error) {
     if (connection) await connection.rollback();
     reportError("Clock-in error:", error);
+    if (isCoordinateStorageError(error)) {
+      return res.status(503).json({
+        success: false,
+        code: "DTR_LOCATION_STORAGE_UNAVAILABLE",
+        error: "Your clock-in could not be saved because of a server location-storage issue. Please contact your coordinator or administrator.",
+      });
+    }
     res.status(500).json({
       error: "Server error during clock-in.",
       success: false,
@@ -533,6 +547,13 @@ export const clockOut = async (req, res) => {
   } catch (error) {
     if (connection) await connection.rollback();
     reportError("Clock-out Error:", error);
+    if (isCoordinateStorageError(error)) {
+      return res.status(503).json({
+        success: false,
+        code: "DTR_LOCATION_STORAGE_UNAVAILABLE",
+        error: "Your clock-out could not be saved because of a server location-storage issue. Please contact your coordinator or administrator.",
+      });
+    }
     res.status(500).json({
       error: "Server error during clock-out.",
       success: false,
