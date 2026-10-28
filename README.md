@@ -430,6 +430,7 @@ The default campus origin is latitude **13.9304557**, longitude **121.4312752**.
 - Responses include Google Maps directions when a destination is available.
 - Campus route geometry has bounded process-local reuse. Routes containing the viewer's current position bypass that shared cache.
 - Provider calls have bounded deadlines/queueing and safe failure responses.
+- Map View shows city groups beside the map, using the same search, region and department filters. Company/route details open in a left slideout inside the map on desktop and mobile. Loading or failure keeps it open; successful routing closes it. A small in-map control reopens it, without a duplicated route panel below the map.
 
 The frontend's internship-record Overview map also provides **See on Google Maps** in the company pin popup. It builds campus-to-company directions from the coordinates already returned by the authorized record overview endpoint; it does not call the ongoing-only road-route endpoint. No additional backend endpoint, database column or environment variable is needed for that link.
 

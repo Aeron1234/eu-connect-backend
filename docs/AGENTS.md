@@ -1,5 +1,15 @@
 # EU Connect backend — agent handoff
 
+## Current documentation status (October 28, 2026)
+
+The optimization reports below are historical. Their test counts, data sizes and next-work lists are not current deployment verification. Use README.md and mounted source for present contracts. Incremental SQL and regression tests now exist; historical database inspection does not authorize live database access.
+
+- Canonical API: `/api/v1`; `/eu-connect/api` remains a compatibility alias sharing handlers, cache identities and limiter budgets.
+- Socket rooms require verified short-lived tickets. Identity comes from the ticket, not a client-selected user ID; connections end at access-token expiry.
+- Map View has city groups beside the map, with shared search, region and department filters. Company/route controls slide out inside the map on desktop and mobile. Keep the panel open during loading/failure and close only after success; preserve the in-map reopen icon and Google Maps fallback.
+- Frontend routing uses authenticated GET `/api/map/route/:internshipId`, not the browser Server Action queue. See features/map/README.md and the frontend routing README for the separate deadlines and caches.
+- Activities remains proposed, not implemented.
+
 Updated: 2026-10-05 (Asia/Manila).
 
 ## Combined dashboard responses
@@ -134,7 +144,7 @@ Narrative work remains weekly-only.
 - Project: `ims-backend`, the EU Connect internship management backend.
 - Original checkout: `C:\Users\Admin\Desktop\Dev-Projects\Nextjs-Workspace\ims-backend`.
 - Node.js ES modules, Express 5, MySQL through `mysql2/promise`.
-- `server.js` mounts routes under `/eu-connect/api`.
+- `server.js` mounts the same routers under canonical `/api/v1` and legacy `/eu-connect/api`.
 - Controllers contain business logic, SQL queries and transaction handling.
 - Roles: `student`, `employer`, `department_head`, `admin`.
 - JWT authentication accepts bearer tokens or access-token cookies and populates
@@ -796,8 +806,9 @@ phase, including test status and remaining work.
 
 The initial review identified these concerns; they were not fixed by caching:
 
-- Socket room membership accepts a client-supplied user ID without identity
-  verification in the reviewed `server.js`.
+- Resolved historical finding: socket rooms formerly accepted client-supplied
+  identity. Current config/socketAuth.js verifies socket tickets and derives room
+  membership from the authenticated user. Do not restore client-selected joins.
 - Some internship listing queries appeared to omit department filtering even
   though other record-access helpers enforce it. Revalidate before proposing fixes.
 - No live schema/migrations were available to verify constraints and indexes.

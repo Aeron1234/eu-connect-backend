@@ -7,8 +7,17 @@ import { invalidateNotificationsCache } from "../../../config/cache/notification
 import { invalidateActivityLogsCache } from "../../../config/cache/activityLogsCache.js";
 import { db } from "../../../config/db.js";
 import { supabase } from "../../../config/supabase.js";
-import { ALLOWED_TYPES, UPLOAD_ROOT, newUUID } from "../../../config/helpers.js";
-import { withUploadConnection, uploadValidationError, cleanupUploadPaths, afterUploadCommit } from "../../../config/uploadLifecycle.js";
+import {
+  ALLOWED_TYPES,
+  UPLOAD_ROOT,
+  newUUID,
+} from "../../../config/helpers.js";
+import {
+  withUploadConnection,
+  uploadValidationError,
+  cleanupUploadPaths,
+  afterUploadCommit,
+} from "../../../config/uploadLifecycle.js";
 
 const BUCKET = process.env.SUPABASE_BUCKET;
 
@@ -193,7 +202,9 @@ export const getSearchedUser = async (req, res) => {
         // Reacquire a dropped pooled connection once for this read only.
         if (
           attempt > 0 ||
-          !["ECONNRESET", "PROTOCOL_CONNECTION_LOST", "EPIPE"].includes(error?.code)
+          !["ECONNRESET", "PROTOCOL_CONNECTION_LOST", "EPIPE"].includes(
+            error?.code,
+          )
         ) {
           throw error;
         }
@@ -215,8 +226,10 @@ export const getSearchedUser = async (req, res) => {
 
     // Only head-to-student profiles need this explicit permission field. Resolve it
     // from current database assignments; missing assignments deny private-record access.
-    const canViewStudentRecords = viewerRole !== "department_head" || role !== "student" ||
-      await canHeadReadStudentRecords(connection, viewerId, searchedUserId);
+    const canViewStudentRecords =
+      viewerRole !== "department_head" ||
+      role !== "student" ||
+      (await canHeadReadStudentRecords(connection, viewerId, searchedUserId));
 
     // Supervision is supplementary — a failure here should degrade the tag,
     // not take down the whole profile.
@@ -270,7 +283,9 @@ export const getSearchedUser = async (req, res) => {
     const roleSpecificInfo =
       role === "student"
         ? {
-            ...((viewerRole === "department_head" && canViewStudentRecords) ? { internship_id: user.student_internship_id } : {}),
+            ...(viewerRole === "department_head" && canViewStudentRecords
+              ? { internship_id: user.student_internship_id }
+              : {}),
             company_name: user.student_company_name,
             internship_date_started: user.student_internship_date_started,
           }
@@ -301,7 +316,8 @@ export const getSearchedUser = async (req, res) => {
         header,
         info,
         supervision,
-        ...(viewerRole === "department_head" && role === "student" && { permissions: { canViewStudentRecords } }),
+        ...(viewerRole === "department_head" &&
+          role === "student" && { permissions: { canViewStudentRecords } }),
         hasOngoingInternship:
           role === "student" && Boolean(user.student_internship_id),
       },
@@ -743,7 +759,9 @@ export const removeSearchedStudentDtrLocation = async (req, res) => {
   const { internshipId } = req.query;
   const { id: setterId, role } = req.verifiedUser;
   if (!searchedUserId || !internshipId) {
-    return res.status(400).json({ error: "Student and internship are required." });
+    return res
+      .status(400)
+      .json({ error: "Student and internship are required." });
   }
   let connection;
   try {
@@ -755,23 +773,34 @@ export const removeSearchedStudentDtrLocation = async (req, res) => {
     );
     if (!records.length) {
       await connection.rollback();
-      return res.status(404).json({ error: "No ongoing internship found for this student." });
+      return res
+        .status(404)
+        .json({ error: "No ongoing internship found for this student." });
     }
     if (role === "employer" && records[0].employer_id !== setterId) {
       await connection.rollback();
-      return res.status(403).json({ error: "Only this student's accepted supervisor can remove the DTR location." });
+      return res.status(403).json({
+        error:
+          "Only this student's accepted supervisor can remove the DTR location.",
+      });
     }
-    await connection.execute("DELETE FROM dtr_locations WHERE internship_id = ?", [internshipId]);
+    await connection.execute(
+      "DELETE FROM dtr_locations WHERE internship_id = ?",
+      [internshipId],
+    );
     await connection.commit();
-    return res.json({ success: true, dtrLocation: {
-      internship_id: internshipId,
-      lat: records[0].lat,
-      lon: records[0].lon,
-      radius_meters: 150,
-      label: "Company address (default)",
-      address: null,
-      updated_at: null,
-    } });
+    return res.json({
+      success: true,
+      dtrLocation: {
+        internship_id: internshipId,
+        lat: records[0].lat,
+        lon: records[0].lon,
+        radius_meters: 150,
+        label: "Company address (default)",
+        address: null,
+        updated_at: null,
+      },
+    });
   } catch (error) {
     if (connection) await connection.rollback();
     reportError("Remove DTR location error:", error);
@@ -1000,17 +1029,25 @@ export const uploadFileToSearchedStudent = async (req, res) => {
         `SELECT id, employer_id FROM internship_records WHERE user_id = ? AND status = 'ongoing'
          AND deleted_at IS NULL ${expectedInternshipId ? "AND id = ?" : ""}
          LIMIT 1 ${expectedInternshipId ? "FOR UPDATE" : ""}`,
-        expectedInternshipId ? [searchedUserId, expectedInternshipId] : [searchedUserId],
+        expectedInternshipId
+          ? [searchedUserId, expectedInternshipId]
+          : [searchedUserId],
       );
 
       if (internships.length === 0) {
-        throw uploadValidationError(404, "This student does not have an ongoing internship.");
+        throw uploadValidationError(
+          404,
+          "This student does not have an ongoing internship.",
+        );
       }
 
       const internship = internships[0];
 
       if (internship.employer_id !== employerId) {
-        throw uploadValidationError(403, "Only this student's accepted supervisor can upload files on their behalf.");
+        throw uploadValidationError(
+          403,
+          "Only this student's accepted supervisor can upload files on their behalf.",
+        );
       }
 
       const [reqTypes] = await connection.execute(
@@ -1022,7 +1059,10 @@ export const uploadFileToSearchedStudent = async (req, res) => {
         reportError(
           `"${CERTIFICATE_OF_COMPLETION_NAME}" requirement type not found in requirement_types table.`,
         );
-        throw uploadValidationError(500, "Certificate of Completion requirement type is not configured.");
+        throw uploadValidationError(
+          500,
+          "Certificate of Completion requirement type is not configured.",
+        );
       }
 
       const { id: requirementTypeId, category: catLower } = reqTypes[0];
@@ -1049,11 +1089,19 @@ export const uploadFileToSearchedStudent = async (req, res) => {
 
       const employerName = `${employerProfile[0].first_name} ${employerProfile[0].last_name}`;
       const studentName = `${studentProfile[0].first_name} ${studentProfile[0].last_name}`;
-      return { internship, requirementTypeId, catLower, employerName, studentName };
+      return {
+        internship,
+        requirementTypeId,
+        catLower,
+        employerName,
+        studentName,
+      };
     }
     // Release the preflight connection before storage I/O. The final transaction
     // rechecks this same internship and the employer's current supervisor assignment.
-    const initial = await withUploadConnection((connection) => eligibility(connection));
+    const initial = await withUploadConnection((connection) =>
+      eligibility(connection),
+    );
 
     const fileExt = file.originalname.split(".").pop();
     uploadedStoragePath = `requirements/${searchedUserId}/${newUUID()}.${fileExt}`;
@@ -1069,7 +1117,13 @@ export const uploadFileToSearchedStudent = async (req, res) => {
     // Keep pending document metadata, the student's review alert and log attempt
     // in one transaction. Uploaded certificates still require student acceptance.
     const saved = await withUploadConnection(async (connection) => {
-      const { internship, requirementTypeId, catLower, employerName, studentName } = await eligibility(connection, initial.internship.id);
+      const {
+        internship,
+        requirementTypeId,
+        catLower,
+        employerName,
+        studentName,
+      } = await eligibility(connection, initial.internship.id);
       const [result] = await connection.execute(
         `INSERT INTO internship_documents 
           (user_id, internship_id, file_name, company_name, category, requirement_type_id, file_type, path, uploaded_by_id, uploaded_by_role, verification_status)
@@ -1160,8 +1214,15 @@ export const uploadFileToSearchedStudent = async (req, res) => {
     if (!committed && uploadedStoragePath && !error.uploadCommitUncertain) {
       await cleanupUploadPaths([uploadedStoragePath]);
     }
-    if (error?.status) return res.status(error.status).json({ error: error.message });
-    reportError("Upload to searched user error:", error, error.uploadCommitUncertain ? { retainedStoragePath: uploadedStoragePath } : undefined);
+    if (error?.status)
+      return res.status(error.status).json({ error: error.message });
+    reportError(
+      "Upload to searched user error:",
+      error,
+      error.uploadCommitUncertain
+        ? { retainedStoragePath: uploadedStoragePath }
+        : undefined,
+    );
     return res.status(500).json({ error: "Server failed to process upload." });
   }
 };
