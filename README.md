@@ -38,7 +38,7 @@ The backend serves students, employers/company supervisors, department heads, re
 - Student requirement documents, supervisor uploads, document acceptance, and authorized signed access.
 - Internship opportunities, employer posting management, and student favorites.
 - Supervision requests, acceptance/decline, cancellation, and supervisor removal.
-- Confidential performance evaluations, student-authored supervisor evaluations, and one-active-evaluation enforcement.
+- Multiple confidential employer performance evaluations per ongoing internship; student-authored supervisor feedback retains one active evaluation per internship.
 - Announcements, dated events, calendar schedules, and private student to-dos.
 - Student/company map data, saved city/province fields, route preparation, and road-routing integration.
 - Alumni placement search and department/academic-year filters.
@@ -226,7 +226,8 @@ Review the installed schema, server version, and each script's comments before a
 | Profile middle initials | [user-profile-middle-initial.sql](docs/user-profile-middle-initial.sql) |
 | Password-change dates | [password-change-date.sql](docs/password-change-date.sql) |
 | Evaluation category names | [student-evaluation-category-names.sql](docs/student-evaluation-category-names.sql) |
-| Evaluation soft deletion and active-slot uniqueness | [2026-10-22-evaluation-soft-delete.sql](scripts/2026-10-22-evaluation-soft-delete.sql) |
+| Evaluation soft deletion baseline (historical; apply before the October 29 upgrade, never replay afterward) | [2026-10-22-evaluation-soft-delete.sql](scripts/2026-10-22-evaluation-soft-delete.sql) |
+| Allow multiple employer-to-student performance evaluations; keep student-to-supervisor uniqueness | [2026-10-29-multiple-performance-evaluations.sql](scripts/2026-10-29-multiple-performance-evaluations.sql) |
 | Weekly narrative coverage dates | [2026-10-22-weekly-narrative-date-range.sql](scripts/2026-10-22-weekly-narrative-date-range.sql) |
 | Map city/province columns and export-specific backfill | [2026-10-21-map-city-backfill.sql](scripts/2026-10-21-map-city-backfill.sql) |
 
@@ -275,7 +276,7 @@ Current workflow rules include:
 - Supervision requests are answered through Notifications in the frontend. The employer dashboard's intern list includes assigned interns with `all`, `ongoing`, and `finished` filters.
 - Unanswered active supervisor-request notifications cannot be deleted; direct deletion attempts return `409`. Answered, cancelled/superseded, and obsolete requests can be dismissed.
 - Employer performance evaluations are hidden from students, including print and notification access.
-- Both evaluation directions allow one active evaluation per internship. Author deletion is a soft delete; authorized staff retain deleted history and may permanently remove already-deleted copies.
+- Employers may post multiple performance evaluations per ongoing internship, without deleting earlier reviews. Student-authored supervisor evaluations still allow one active entry per internship. Both directions retain accepted-supervisor/start-date restrictions and author soft deletion; authorized staff retain deleted history and may permanently remove already-deleted copies. Apply `scripts/2026-10-29-multiple-performance-evaluations.sql` before deploying backend/frontend together. It drops only the performance unique index, preserves all rows/scores, and requires no environment or package changes. No automatic 200-hour milestone or per-department setting is enforced.
 - Weekly narrative/report writes and employer performance-evaluation submission enforce the applicable internship start-date restriction.
 - Feedback audiences and attachment access are checked on the backend, including staff-only internal notes.
 

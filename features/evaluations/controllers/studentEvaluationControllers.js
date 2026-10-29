@@ -1,4 +1,4 @@
-import { assertNoActiveEvaluation, evaluationDeleteHandler } from "../evaluationLifecycle.js";
+import { evaluationDeleteHandler } from "../evaluationLifecycle.js";
 import { reportError } from "../../../config/errorTracking.js";
 import { invalidateEvaluationHistoryCache } from "../../../config/cache/evaluationHistoryCache.js";
 import { invalidateNotificationsCache } from "../../../config/cache/notificationsCache.js";
@@ -114,7 +114,7 @@ export const getStudentCompleteEvaluations = async (req, res) => {
       evaluation_details: null,
     };
 
-    // Only the selected master's scores belong in this summary; history may contain replacements.
+    // Only the selected master's scores belong in this summary; history may contain multiple performance evaluations.
     if (payload.is_evaluated) {
       const categoriesByName = new Map();
       payload.evaluation_details = {
@@ -203,7 +203,7 @@ export const getPastStudentEvaluations = async (req, res) => {
       JOIN user_profiles AS up ON m.evaluated_by = up.user_id
       LEFT JOIN user_profiles AS reviewer_up ON m.reviewed_by = reviewer_up.user_id
       WHERE ir.user_id = ? AND ir.deleted_at IS NULL ${evaluationReadScope(req.verifiedUser).sql}
-      ORDER BY m.created_at DESC, c.id ASC
+      ORDER BY m.created_at DESC, m.id DESC, c.id ASC
     `;
 
     const [rows] = await connection.execute(query, [studentId, ...evaluationReadScope(req.verifiedUser).params]);
@@ -340,7 +340,7 @@ export const createStudentEvaluation = async (req, res) => {
     await connection.beginTransaction();
 
     // Lock the student's live ongoing internship before checking the accepted
-    // supervisor, Philippine start date and this direction's active evaluation slot.
+    // supervisor and Philippine start date. Each performance review gets its own master.
     const [records] = await connection.execute(
       `SELECT id, company_name, employer_id, DATE_FORMAT(date_started, '%Y-%m-%d') AS date_started FROM internship_records
        WHERE user_id = ? AND status = 'ongoing' AND deleted_at IS NULL LIMIT 1 FOR UPDATE`,
@@ -369,7 +369,6 @@ export const createStudentEvaluation = async (req, res) => {
     }
 
     assertInternshipStarted(records[0].date_started, "Student evaluations");
-    await assertNoActiveEvaluation(connection, "student_evaluation_masters", internship_record_id);
 
     const [employerProfile] = await connection.execute(
       `SELECT first_name, last_name FROM user_profiles WHERE user_id = ?`,
@@ -492,7 +491,15 @@ export const createStudentEvaluation = async (req, res) => {
     });
   } catch (error) {
     if (connection) await connection.rollback();
-    if (error?.code === "ER_DUP_ENTRY") return res.status(409).json({ error: "An active evaluation already exists for this internship." });
+    // An older deployment may still enforce the retired performance unique index.
+    // Give an actionable error without telling employers to delete earlier reviews.
+    if (error?.code === "ER_DUP_ENTRY" && /uq_student_evaluation_active_slot/.test(error.sqlMessage || error.message || "")) {
+      return res.status(503).json({
+        error: "Multiple performance evaluations require a database update. Please ask your administrator to apply the evaluation migration.",
+        code: "EVALUATION_SCHEMA_UPGRADE_REQUIRED",
+      });
+    }
+    if (error?.code === "ER_DUP_ENTRY") return res.status(409).json({ error: "The evaluation could not be saved because of a conflicting record. Refresh and try again." });
     if (error?.status) return res.status(error.status).json({ error: error.message, code: error.code });
     console.log("Post student evaluation error:", error);
     res.status(500).json({

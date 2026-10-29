@@ -1,43 +1,51 @@
-# Direct posting and deletion
+# Evaluation posting and deletion
 
-Each internship allows one active performance evaluation (employer to student)
-and one active supervisor evaluation (student to employer). Author deletion
-sets `deleted_at` and frees that direction's active slot for a replacement.
-The author no longer sees the deleted scores in histories or PDF reads.
-Employer performance evaluations remain confidential from students.
+Employers can submit multiple performance evaluations for the same ongoing
+internship, so departments can review progress at their required intervals.
+Earlier active evaluations do not block another review. There is no automatic
+200-hour gate or department-specific configuration. Each submission has its own
+master ID, scores, submitted date, history entry, notification and printable PDF.
+The legacy complete-summary endpoint continues to return its latest master;
+history and record-detail endpoints include the individual evaluations.
 
-Staff record histories include active and deleted evaluations. Deleted entries
-are labeled Deleted. Admins may permanently delete already deleted entries;
-department heads may do so only for students in their current department,
-checked against current database membership. Staff cannot permanently delete
-an active entry. Permanent deletion removes scores and linked evaluation
-notifications in the same transaction. All successful writes invalidate history
-and dashboard caches after commit.
+Student-authored supervisor evaluations still allow one active entry per
+internship. Soft-deleting that entry frees its slot for a replacement. Accepted
+supervision and Philippine internship-start checks remain enforced on submission
+in both directions. Forms post immediately without a confirmation/status step.
+Performance evaluations remain confidential from students.
 
-Posting locks the ongoing internship row before checking for another active
-evaluation. The migration's composite unique indexes on
-`(internship_record_id, active_evaluation)` also protect
-against duplicate concurrent submissions. Client forms check availability,
-but authorization, start-date checks and duplicate prevention are server-side.
-Legacy confirmation/dispute endpoints cannot change evaluation state.
+Author deletion sets `deleted_at` and hides only that evaluation from the author's
+history and PDF reads. Scores and other evaluations are retained. Staff histories
+include deleted entries with a Deleted label. Admins may permanently delete only
+already deleted entries; department heads may do so only within their current
+database-verified student department. Purge removes that evaluation's scores and
+linked notifications transactionally. Successful writes invalidate caches after
+commit. Notifications target the internship record and identify each evaluation
+with its own `link_uuid`.
 
-Run `scripts/2026-10-22-evaluation-soft-delete.sql` before deploying this
-backend and frontend together. Pause evaluation writes and back up first;
-DDL is not transactional. Existing duplicate groups keep their newest entry
-active (created_at, then UUID); older entries and all their scores are retained
-as deleted history. The supplied export has duplicates in both tables.
-Review the script's duplicate lists and this consolidation rule before running.
-No live database migration has been executed by Codex.
+Submission locks the ongoing internship row before checking assignment and start
+date. Only student-authored supervisor feedback checks for an existing active
+evaluation, protected by `uq_employer_evaluation_active_slot`. Performance posting
+does not check for an existing master. Availability reads are private/no-store
+and fail closed on errors; submission remains authoritative. Existing submission
+rate limits apply. Legacy confirmation/dispute endpoints remain retired.
 
-The SQL is for MariaDB 11.8, matching the supplied export. It adds `deleted_at`
-and a generated numeric active flag to both masters, adds unique indexes, then
-drops `status` from `student_evaluation_masters` only. The other table never
-had that column. Old review notes are retained, with no confirmation UI.
+## Deployment and SQL
 
-The corrected migration also resumes a partial run of the earlier script that
-failed with MariaDB error #1901. Existing `deleted_at` columns are skipped and
-already archived duplicates keep their timestamps. The generated expression
-now reads only `deleted_at` and returns 1 for active rows or NULL for deleted
-rows; the internship ID stays an ordinary column in the composite index.
-This avoids generating a copy of the CHAR foreign-key column. No runtime code
-changes or environment variables are required for this SQL correction.
+Back up first. For databases with the October 22 soft-delete baseline already
+installed (including the latest supplied Layerbase export), run only
+[`2026-10-29-multiple-performance-evaluations.sql`](../../scripts/2026-10-29-multiple-performance-evaluations.sql),
+then deploy the matching backend and frontend. This MariaDB 11.8 migration drops
+only `uq_student_evaluation_active_slot`, preserving all evaluation rows, scores,
+deleted timestamps, the nonunique internship foreign-key index and the harmless
+generated active flag. It is safe to rerun. No environment or package changes
+are required. The API reports a schema-upgrade error if the old index still
+rejects a subsequent performance evaluation.
+
+For an older schema without soft deletion, apply
+[`2026-10-22-evaluation-soft-delete.sql`](../../scripts/2026-10-22-evaluation-soft-delete.sql)
+first, following its duplicate-consolidation review, then the October 29 upgrade.
+Never replay that historical baseline after enabling multiple reviews: it would
+archive older active performance entries and recreate the retired index.
+The new migration does not restore previously deleted historical entries.
+DDL commits implicitly. No live database migration was executed by Codex.

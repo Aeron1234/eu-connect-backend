@@ -1,3 +1,8 @@
+-- Historical baseline: apply before 2026-10-29-multiple-performance-evaluations.sql.
+-- Do not rerun this baseline after enabling multiple performance evaluations:
+-- its consolidation would archive older active performance reviews and restore
+-- the retired unique index. Use only the October 29 migration for that upgrade.
+
 -- MariaDB 11.8 (the supplied export). Run during a maintenance window,
 -- with evaluation writes stopped, BEFORE deploying the matching backend.
 -- Back up the database first. ALTER TABLE commits implicitly.

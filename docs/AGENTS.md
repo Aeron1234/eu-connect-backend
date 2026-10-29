@@ -9,6 +9,7 @@ The optimization reports below are historical. Their test counts, data sizes and
 - Map View has city groups beside the map, with shared search, region and department filters. Company/route controls slide out inside the map on desktop and mobile. Keep the panel open during loading/failure and close only after success; preserve the in-map reopen icon and Google Maps fallback.
 - Frontend routing uses authenticated GET `/api/map/route/:internshipId`, not the browser Server Action queue. See features/map/README.md and the frontend routing README for the separate deadlines and caches.
 - Activities remains proposed, not implemented.
+- Evaluation policy (October 29): employers can post multiple confidential performance reviews per ongoing internship; students still have one active supervisor evaluation per internship. Keep accepted-supervisor authorization, start-date gates, soft deletion/staff purge, per-evaluation scores/printing and department notifications. Apply `scripts/2026-10-29-multiple-performance-evaluations.sql` to drop only `uq_student_evaluation_active_slot`; retain the supervisor unique index. Do not rerun the October 22 consolidation afterward. Do not add automatic 200-hour restrictions.
 
 Updated: 2026-10-05 (Asia/Manila).
 
