@@ -160,3 +160,12 @@ export const refreshLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: "Too many refresh attempts, please try again shortly." },
 });
+
+// Secret tokens are high-entropy. Hash keys so neither tokens nor passwords are
+// retained in rate-limit identifiers; malformed input falls back to the caller IP.
+export const accountSetupLimiter = rateLimit({
+  keyGenerator: authIdentifierKey("token", "account-setup"),
+  windowMs: 15 * 60 * 1000, max: 20,
+  standardHeaders: true, legacyHeaders: false,
+  message: { error: "Too many password setup attempts. Please try again later." },
+});

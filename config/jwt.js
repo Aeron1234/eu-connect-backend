@@ -41,6 +41,15 @@ export function signAccessToken(sessionUser) {
   );
 }
 
+// Recovery credentials can authorize only password setup, never normal APIs.
+export function signPasswordSetupToken(userId, jti) {
+  return jwt.sign(
+    { sub: userId, jti, purpose: "password_setup" },
+    ACCESS_TOKEN_SECRET,
+    { expiresIn: "10m" },
+  );
+}
+
 export function verifyAccessToken(token) {
   return jwt.verify(token, ACCESS_TOKEN_SECRET);
 }

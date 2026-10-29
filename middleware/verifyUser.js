@@ -18,6 +18,7 @@ export function verifyUser(req, res, next) {
   try {
     const payload = verifyAccessToken(token);
 
+    if (payload.purpose === "password_setup") return res.status(403).json({ error: "Complete password setup before accessing the system." });
     req.verifiedUser = {
       id: payload.sub,
       username: payload.username,
@@ -32,4 +33,15 @@ export function verifyUser(req, res, next) {
   } catch (err) {
     return res.status(401).json({ error: "Invalid or expired access token" });
   }
+}
+
+// Kept separate so setup-only tokens cannot authorize another mounted router.
+export function verifyPasswordSetupSession(req, res, next) {
+  const token = req.headers.authorization?.startsWith("Bearer ") ? req.headers.authorization.slice(7) : req.cookies?.access_token;
+  try {
+    const payload = verifyAccessToken(token);
+    if (payload.purpose !== "password_setup" || !payload.sub || !payload.jti) throw new Error("invalid");
+    req.verifiedUser = { id: payload.sub, setup_jti: payload.jti };
+    return next();
+  } catch { return res.status(401).json({ error: "Request a new password setup email." }); }
 }

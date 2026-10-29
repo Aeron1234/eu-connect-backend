@@ -4,8 +4,13 @@ import { db } from "../config/db.js";
 import { createUser } from "../features/accounts/controllers/accountControllers.js";
 
 const originalGetConnection = db.getConnection;
+const originalFetch = global.fetch;
+// Account creation also sends an invitation; keep this profile-field regression
+// isolated from live email services and any credentials in the local .env.
+global.fetch = async () => new Response("OK");
 after(async () => {
   db.getConnection = originalGetConnection;
+  global.fetch = originalFetch;
   await db.end();
 });
 
@@ -42,6 +47,7 @@ test("admin account creation saves an optional uppercase middle initial", async 
     verifiedUser: { id: "admin-1", role: "admin" },
     body: {
       username: "jane.cruz",
+      email: "jane@example.test",
       password: "temporary123",
       role: "3",
       first_name: "Jane",
@@ -78,6 +84,7 @@ test("account creation rejects a middle name in the initial field", async () => 
       verifiedUser: { id: "admin-1", role: "admin" },
       body: {
         username: "invalid",
+        email: "jane@example.test",
         password: "temporary123",
         role: "3",
         first_name: "Jane",

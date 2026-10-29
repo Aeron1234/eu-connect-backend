@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+import { prepareAccountSetup, deliverAccountSetup } from "../../auth/accountSetup.js";
 import { formatActivityLogUserName } from "../../../config/activityLogNames.js";
 import { activityLogRoleName } from "../../../config/activityLogMessages.js";
 import { reportError } from "../../../config/errorTracking.js";
@@ -401,7 +403,7 @@ export const getAllAccounts = async (req, res) => {
     const offset = (page - 1) * limit;
 
     const unionQuery = `
-      SELECT u.id, u.email, u.created_at, u.status, up.first_name, up.last_name, up.avatar,
+      SELECT u.id, u.email, u.created_at, u.status, u.password_setup_required, u.password_setup_sent_at, u.password_setup_expires_at, up.first_name, up.last_name, up.avatar,
              r.role, c.course_name, d.code AS department_code, d.name AS department_name,
              NULL AS employee_number, NULL AS company_name
       FROM users u
@@ -414,7 +416,7 @@ export const getAllAccounts = async (req, res) => {
 
       UNION ALL
 
-      SELECT u.id, u.email, u.created_at, u.status, up.first_name, up.last_name, up.avatar,
+      SELECT u.id, u.email, u.created_at, u.status, u.password_setup_required, u.password_setup_sent_at, u.password_setup_expires_at, up.first_name, up.last_name, up.avatar,
              r.role, NULL AS course_name, d.code AS department_code, d.name AS department_name,
              dhbi.employee_number, NULL AS company_name
       FROM users u
@@ -426,7 +428,7 @@ export const getAllAccounts = async (req, res) => {
 
       UNION ALL
 
-      SELECT u.id, u.email, u.created_at, u.status, up.first_name, up.last_name, up.avatar,
+      SELECT u.id, u.email, u.created_at, u.status, u.password_setup_required, u.password_setup_sent_at, u.password_setup_expires_at, up.first_name, up.last_name, up.avatar,
              r.role, NULL AS course_name, NULL AS department_code, NULL AS department_name,
              NULL AS employee_number, ebi.company_name
       FROM users u
@@ -588,6 +590,17 @@ export const getRoles = async (req, res) => {
 };
 
 export const createUser = async (req, res) => {
+  // Require email on new accounts before acquiring a database connection. Native
+  // form validation is only a convenience; direct API requests must also fail.
+  const submittedEmail = req.body?.email;
+  if (typeof submittedEmail !== "string" || !submittedEmail.trim()) {
+    return res.status(400).json({ message: "Email address is required." });
+  }
+  const email = submittedEmail.trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ message: "Invalid email format." });
+  }
+
   let connection;
   try {
     connection = await db.getConnection();
@@ -595,9 +608,7 @@ export const createUser = async (req, res) => {
     const userData = req.body;
 
     const {
-      email,
       username,
-      password,
       first_name,
       middle_initial,
       last_name,
@@ -611,7 +622,6 @@ export const createUser = async (req, res) => {
       "username",
       "first_name",
       "last_name",
-      "password",
       "role",
     ];
     for (const field of requiredFields) {
@@ -646,19 +656,6 @@ export const createUser = async (req, res) => {
     }
     const roleName = roleRows[0].role;
 
-    if (email && email.trim() !== "") {
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        return res.status(400).json({
-          message: "Invalid email format.",
-        });
-      }
-    }
-
-    if (password.length < 8) {
-      return res.status(400).json({
-        message: "Password must be at least 8 characters.",
-      });
-    }
 
     // Department is only ever collected directly from the form for
     // department_head accounts now — a student's department is derived
@@ -711,27 +708,27 @@ export const createUser = async (req, res) => {
       });
     }
 
-    if (email && email.trim() !== "") {
-      const [emailExists] = await connection.execute(
-        `SELECT id FROM users WHERE email = ?`,
-        [email],
-      );
-      if (emailExists.length > 0) {
-        await connection.rollback();
-        return res.status(400).json({
-          message: "User already exists.",
-        });
-      }
+    const [emailExists] = await connection.execute(
+      `SELECT id FROM users WHERE email = ?`,
+      [email],
+    );
+    if (emailExists.length > 0) {
+      await connection.rollback();
+      return res.status(400).json({
+        message: "Email address is already in use.",
+      });
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    // No administrator-selected/shared password: this random placeholder cannot
+    // be used to sign in, and the pending flag independently blocks authentication.
+    const hashedPassword = await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 10);
     const newId = newUUID();
 
     const [result] = await connection.execute(
-      `INSERT INTO users (id, email, username, password_hash, role_id) VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO users (id, email, username, password_hash, role_id, password_setup_required) VALUES (?, ?, ?, ?, ?, 1)`,
       [
         newId,
-        email && email.trim() !== "" ? email : null,
+        email,
         username,
         hashedPassword,
         roleId,
@@ -802,14 +799,17 @@ export const createUser = async (req, res) => {
       reportError("Activity log insert failed (account created):", logError);
     }
 
+    const invitation = await prepareAccountSetup(connection, { id: newId, email, username, password_setup_required: 1 });
     await connection.commit();
-
+    // Release the pool connection before waiting on external email delivery.
+    connection.release(); connection = null;
     invalidateActivityLogsCache();
 
     invalidateRouteCache("/api/v1/accounts");
+    const sent = await deliverAccountSetup(invitation);
     res.status(201).json({
-      success: true,
-      message: "Account created successfully!",
+      success: true, accountId: newId, invitation_sent: sent,
+      message: sent ? "Account created. A password setup invitation was sent." : "Account created, but the invitation email could not be confirmed. Use Resend invitation; do not create the account again.",
     });
   } catch (error) {
     if (connection) await connection.rollback();

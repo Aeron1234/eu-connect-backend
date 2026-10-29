@@ -1,3 +1,4 @@
+import { resendAccountInvitation } from "../../auth/accountSetup.js";
 import express from "express";
 import multer from "multer";
 import { verifyUser } from "../../../middleware/verifyUser.js";
@@ -121,5 +122,7 @@ accountRoutes.patch(
   mediumLimiter,
   reactivateAccount,
 );
+
+accountRoutes.post("/accounts/:accountId/invitation", verifyUser, verifyRole(["admin"]), strictLimiter, resendAccountInvitation);
 
 export default accountRoutes;

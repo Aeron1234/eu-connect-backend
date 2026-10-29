@@ -1,3 +1,4 @@
+import { requestPasswordSetup } from "../accountSetup.js";
 import { REFRESH_COOKIE, setAuthCookies, clearAuthCookies } from "../../../config/authCookies.js";
 import { reportError } from "../../../config/errorTracking.js";
 import bcrypt from "bcryptjs";
@@ -9,37 +10,20 @@ import {
   newJti,
   hashToken,
   REFRESH_TOKEN_TTL_MS,
-  signTempPassword,
+  signPasswordSetupToken,
   verifyTempPassword,
   looksLikeJwt,
 } from "../../../config/jwt.js";
-import { sendTempPasswordEmail } from "../../../services/mailer.js";
 import { invalidateUserCache } from "../../../config/cache/cache.js";
 
 // ---- DB helpers ---------------------------------------------------------
-async function findUserByEmail(email) {
-  const [rows] = await db.execute(
-    `
-    SELECT
-      u.id AS user_uuid, u.username, u.email, u.status,
-      u.account_locked_until, u.failed_login_attempts,
-      r.role
-    FROM users AS u
-    INNER JOIN roles AS r ON u.role_id = r.id
-    WHERE u.email = ?
-    `,
-    [email],
-  );
-  return rows[0] ?? null;
-}
-
 async function findUserByUsername(username) {
   const [rows] = await db.execute(
     `
     SELECT
       u.id AS user_uuid, u.username, u.password_hash, u.status,
       u.account_locked_until, u.failed_login_attempts,
-      u.temp_password_jti,
+      u.temp_password_jti, u.password_setup_required,
       r.role
     FROM users AS u
     INNER JOIN roles AS r ON u.role_id = r.id
@@ -54,7 +38,7 @@ async function findUserById(userId) {
   const [rows] = await db.execute(
     `
     SELECT
-      u.id AS user_uuid, u.username, u.status,
+      u.id AS user_uuid, u.username, u.status, u.password_setup_required,
       u.account_locked_until, u.failed_login_attempts,
       r.role
     FROM users AS u
@@ -174,48 +158,7 @@ async function issueTokenPair(sessionUser, req) {
 }
 
 // ---- controllers ----------------------------------------------------------
-export const forgotPassword = async (req, res) => {
-  const { email } = req.body ?? {};
-
-  if (!email) {
-    return res.status(400).json({ error: "email is required" });
-  }
-
-  // Use the same outward recovery message for missing accounts, delivery
-  // success and caught failures; diagnostic errors stay in server reporting.
-  const genericResponse = {
-    message: "If that email is registered, a temporary password has been sent.",
-  };
-
-  try {
-    const user = await findUserByEmail(email);
-    if (!user) {
-      return res.json(genericResponse);
-    }
-
-    // Replacing the stored JTI invalidates an earlier recovery credential for
-    // this account. The emailed token must match this value when used to log in.
-    const jti = newJti();
-    const tempPasswordToken = signTempPassword(user.user_uuid, jti);
-
-    await db.execute(`UPDATE users SET temp_password_jti = ? WHERE id = ?`, [
-      jti,
-      user.user_uuid,
-    ]);
-
-    await sendTempPasswordEmail({
-      to: user.email,
-      username: user.username,
-      tempPassword: tempPasswordToken,
-      expiresInMinutes: 10,
-    });
-
-    return res.json(genericResponse);
-  } catch (err) {
-    reportError("Forgot password error:", err);
-    return res.json(genericResponse);
-  }
-};
+export const forgotPassword = requestPasswordSetup;
 
 export const login = async (req, res) => {
   const { username, password } = req.body ?? {};
@@ -252,10 +195,14 @@ export const login = async (req, res) => {
       return res.status(403).json({ error: "inactive_account" });
     }
 
+    // Pending accounts have no login credential until their invitation is consumed.
+    if (Number(user.password_setup_required)) return res.status(401).json({ error: "Invalid username or password" });
     let mustChangePassword = false;
+    let setupJti;
 
     // JWT-shaped input follows the temporary-token branch. A verified token must
-    // also match this account and its stored JTI before that identifier is cleared.
+    // also match this account and its stored JTI before it is exchanged atomically
+    // for a one-use setup-only session. No refresh token is issued for that session.
     if (looksLikeJwt(password)) {
       let payload;
       try {
@@ -275,10 +222,12 @@ export const login = async (req, res) => {
         return res.status(401).json({ error: "Invalid username or password" });
       }
 
-      await db.execute(
-        `UPDATE users SET temp_password_jti = NULL WHERE id = ?`,
-        [user.user_uuid],
+      setupJti = newJti();
+      const [claimed] = await db.execute(
+        `UPDATE users SET temp_password_jti = ? WHERE id = ? AND temp_password_jti = ?`,
+        [setupJti, user.user_uuid, payload.jti],
       );
+      if (claimed.affectedRows !== 1) return res.status(401).json({ error: "Invalid username or password" });
 
       mustChangePassword = true;
     } else {
@@ -294,7 +243,9 @@ export const login = async (req, res) => {
     await attachRoleContext(user);
 
     const sessionUser = toSessionUser(user);
-    const tokens = await issueTokenPair(sessionUser, req);
+    const tokens = mustChangePassword
+      ? { accessToken: signPasswordSetupToken(user.user_uuid, setupJti), refreshToken: null }
+      : await issueTokenPair(sessionUser, req);
     setAuthCookies(res, tokens);
 
     return res.json({ user: sessionUser, mustChangePassword, ...tokens });
@@ -388,7 +339,7 @@ export const refresh = async (req, res) => {
     // attempting rotation; the access-token middleware itself does not do this lookup.
     const user = await findUserById(workingRecord.user_id);
 
-    if (!user || user.status === "inactive") {
+    if (!user || user.status !== "active" || Number(user.password_setup_required)) {
       clearAuthCookies(res);
       return res.status(403).json({ error: "inactive_account" });
     }
@@ -499,11 +450,12 @@ export const setPassword = async (req, res) => {
     // Clear the recovery identifier with the password update, then invalidate
     // cached user data and revoke stored refresh sessions. Access JWTs continue
     // to be governed by their signature/expiry checks.
-    await db.execute(
-      `UPDATE users SET password_hash = ?, password_changed_at = NOW(), temp_password_jti = NULL WHERE id = ?`,
-      [newHash, userId],
+    const [updated] = await db.execute(
+      `UPDATE users SET password_hash = ?, password_changed_at = NOW(), temp_password_jti = NULL WHERE id = ? AND temp_password_jti = ? AND status = 'active' AND deleted_at IS NULL AND password_setup_required = 0`,
+      [newHash, userId, req.verifiedUser.setup_jti],
     );
 
+    if (updated.affectedRows !== 1) return res.status(400).json({ error: "This password setup session has expired or was already used. Request a new email." });
     invalidateUserCache(userId);
 
     await revokeAllTokensForUser(userId);

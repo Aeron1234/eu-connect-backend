@@ -29,8 +29,9 @@ The backend serves students, employers/company supervisors, department heads, re
 
 ## Features
 
-- JWT login, access-token verification, refresh-token rotation, logout, password recovery, and temporary-password email delivery.
+- JWT login, access-token verification, refresh-token rotation, logout, invitation onboarding, and password recovery links through EmailJS.
 - Account creation, profile management, account activation/deactivation, and academic reference data.
+- Every newly created account requires a valid email and username. The backend creates a pending account without an administrator-selected password and emails a one-use setup link. Pending accounts cannot sign in or refresh sessions. Existing accounts retain access. Apply `scripts/2026-10-29-account-invitations.sql`, configure the backend EmailJS service/template/keys, and deploy the matching frontend. Setup, resend, failure handling and a ready-to-copy email template are documented in [account-invitations.md](docs/account-invitations.md).
 - Internship record submission, pending edits, approval/rejection, restoration, completion, and authorized record details.
 - Daily Time Records (DTR), geofence checks, breaks, duty resumption, clock-out, and automatic stale-shift closure.
 - Weekly narratives with coverage dates and authorized data for journal printing.
@@ -60,7 +61,7 @@ PDF files are generated in the **Next.js frontend's server runtime**. This backe
 | Real-time updates | Socket.IO 4 |
 | Private file storage | Supabase Storage |
 | Multipart uploads | Multer memory storage with bounded upload policies |
-| Email | Resend and React Email |
+| Email | EmailJS REST API from the backend using native fetch; no email SDK or server-side React renderer |
 | Response caching | node-cache |
 | Request limits | express-rate-limit |
 | Scheduled jobs | node-cron |
@@ -82,7 +83,7 @@ HTTP + Socket.IO server (server.js)
                   │
          ┌────────┼───────────┐
          ▼        ▼           ▼
-      MySQL    Supabase     Resend
+      MySQL    Supabase     EmailJS
       records  private     temporary-password
                objects     email
                   │
@@ -100,7 +101,7 @@ Database connections use a pool with a maximum of 10 connections per process. Th
 - Node.js matching `engines.node` and npm.
 - A compatible MySQL/MariaDB server with the approved EU-Connect base schema and reference data.
 - A Supabase project and a **private** storage bucket.
-- Resend configuration for temporary-password email delivery.
+- EmailJS connected mail service, account-setup template, and backend keys (see docs/account-invitations.md).
 - The separate EU-Connect frontend for the complete user interface.
 
 ### 1. Open the repository
@@ -130,8 +131,10 @@ SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_KEY=replace_with_backend_storage_key
 SUPABASE_BUCKET=your-private-bucket
 
-RESEND_API_KEY=replace_with_resend_api_key
-MAIL_FROM=EU-Connect <no-reply@example.com>
+EMAILJS_SERVICE_ID=replace_with_service_id
+EMAILJS_TEMPLATE_ID=replace_with_template_id
+EMAILJS_PUBLIC_KEY=replace_with_public_key
+EMAILJS_PRIVATE_KEY=replace_with_private_key
 
 # Example attendance policy; set this to the approved maximum duty hours.
 MAX_SHIFT_HOURS=8
@@ -182,13 +185,23 @@ There is no application compilation step or unified `npm run migrate` command in
 | Variable | Purpose |
 | --- | --- |
 | `PORT` | HTTP/Socket.IO listening port; defaults to `7000`. |
-| `CLIENT_URL` | Allowed frontend origin for HTTP and Socket.IO CORS. Localhost `http://localhost:3000` is also allowed by the current server configuration. |
+| `CLIENT_URL` | Trusted frontend origin for emailed setup links and HTTP/Socket.IO CORS. Localhost `http://localhost:3000` is also allowed by the current server configuration. |
 | `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` | Database connection settings. |
 | `ACCESS_TOKEN_SECRET` | Access-token signing and verification; also used to derive the separate socket-ticket signing key. |
 | `REFRESH_TOKEN_SECRET` | Refresh-token signing and verification. |
-| `TEMP_PASSWORD_SECRET` | One-time temporary-password token signing and verification. |
+| `TEMP_PASSWORD_SECRET` | Legacy short-lived temporary-code verification; still required by startup validation. Retain until the legacy path and its validation are explicitly removed. |
 | `SUPABASE_URL`, `SUPABASE_KEY`, `SUPABASE_BUCKET` | Storage project, backend credential, and private bucket name. |
-| `RESEND_API_KEY`, `MAIL_FROM` | Email API credential and accepted sender address. |
+| `EMAILJS_SERVICE_ID`, `EMAILJS_TEMPLATE_ID`, `EMAILJS_PUBLIC_KEY`, `EMAILJS_PRIVATE_KEY` | Backend-only EmailJS setup/recovery delivery settings. See [account-invitations.md](docs/account-invitations.md). |
+
+The updated backend's active invitation and recovery routes no longer require
+`RESEND_API_KEY` or `MAIL_FROM`; these can be removed from that environment.
+Keep them on any host still running the older Resend-based backend until it is
+updated. Restart the backend after local environment changes. Keep `CLIENT_URL`,
+all `EMAILJS_*` settings and `TEMP_PASSWORD_SECRET`. The obsolete Resend mailers,
+React Email template, email-only logo asset and tests have been removed, along
+with the backend's `resend`, `react-email` and email-only `react` dependencies.
+The frontend continues to use React normally. Run `npm ci` after pulling these
+dependency changes.
 | `MAX_SHIFT_HOURS` | Positive whole-number maximum duty hours; required by attendance validation and stale-shift cleanup. |
 | `NODE_ENV` | Use `production` in production; affects secure authentication-cookie settings. |
 
@@ -216,6 +229,7 @@ Review the installed schema, server version, and each script's comments before a
 
 | Area | Script / instructions |
 | --- | --- |
+| Account invitations and email setup | [2026-10-29-account-invitations.sql](scripts/2026-10-29-account-invitations.sql), then [EmailJS setup](docs/account-invitations.md) |
 | Attendance breaks | [attendance-breaks.sql](docs/attendance-breaks.sql) |
 | Historical stale-shift corrections | [attendance-auto-close-backfill.sql](docs/attendance-auto-close-backfill.sql) |
 | Calendar | [calendar.sql](docs/calendar.sql) |
@@ -483,7 +497,6 @@ config/
   jwt.js                  Token signing, verification and hashing
   socketAuth.js           Socket tickets and private user rooms
   supabase.js             Private storage client
-  mailer.js               Temporary-password email delivery
   cache/                  Response caches, invalidation and metrics
   errorTracking.js        Request context and persisted diagnostics
   uploadLifecycle.js      Upload/storage/transaction lifecycle helpers
@@ -494,7 +507,7 @@ features/
   <feature>/controllers/  Request handlers and database operations
   feedback/               Feedback controller, storage and discussion rules
   map/                    Routing provider and viewer-location handling
-emails/                   React Email template
+services/accountSetupMail.js  Backend-only EmailJS transport
 docs/                     Feature notes and incremental SQL
 scripts/                  Migration helpers and dated SQL upgrades
 tests/                    Automated API/domain regression checks
@@ -567,7 +580,7 @@ Back up database records and private storage objects through the deployment's no
 | Invalid/expired session after deployment | Check matching frontend/backend access secrets, refresh records, HTTPS, and cookie behavior. |
 | Database errors | Check connection settings, database reachability, installed schema, and migration compatibility. |
 | Upload or download fails | Check bucket privacy/name, backend storage permissions, MIME/size rules, and service reachability. |
-| Temporary-password email fails | Check Resend credentials, sender configuration, and delivery results. |
+| Setup/reset email fails | Check safe backend delivery diagnostics (category and provider HTTP status), EmailJS service/template IDs, Account > Security non-browser API/private-key settings, CLIENT_URL, quota and delivery history. Keep created accounts; resend after one minute. Public recovery responses do not confirm delivery. See docs/account-invitations.md. |
 | Frontend cannot connect | Check `CLIENT_URL`, API base/version, the public origin, and reverse-proxy routing. |
 | Socket authentication fails | Obtain a fresh socket ticket and confirm the access session is still valid. |
 | Road route fails | Check saved coordinates and provider connectivity; use the returned Google Maps link. |

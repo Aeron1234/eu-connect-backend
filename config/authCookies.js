@@ -16,6 +16,10 @@ export function setAuthCookies(res, { accessToken, refreshToken }) {
   // Issue auth-path refresh cookies for both canonical and legacy API clients.
   // Next.js separately owns the browser cookies for its server-to-server flow.
   for (const prefix of API_PREFIXES) {
+    if (!refreshToken) {
+      res.clearCookie(REFRESH_COOKIE, { ...cookieOptions(), path: prefix + "/auth" });
+      continue;
+    }
     res.cookie(REFRESH_COOKIE, refreshToken, {
       ...cookieOptions(), path: prefix + "/auth", maxAge: REFRESH_TOKEN_TTL_MS,
     });
