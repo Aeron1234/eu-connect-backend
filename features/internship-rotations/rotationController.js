@@ -70,6 +70,7 @@ export async function getRotations(req, res) {
       rotations,
       internshipId: record.id,
       dateStarted: record.date_started,
+      // Kept as informational metadata for compatible readers, never a date cap.
       dateEnded: record.date_ended,
       canManage:
         req.verifiedUser.role === "student" &&

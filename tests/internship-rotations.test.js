@@ -45,11 +45,31 @@ test("rotations are opt-in across departments and reject ambiguous settings", ()
   for (const value of ["yes", [], {}, 2]) assert.throws(() => rotationEnabled(value), { status: 400 });
 });
 
-test("rotation validation accepts same-day assignments but rejects impossible and out-of-internship ranges", () => {
+test("rotation validation accepts same-day assignments but rejects impossible dates and pre-start ranges", () => {
   assert.equal(readRotation({ ...row, department_name: "  Housekeeping  " }, record).department_name, "Housekeeping");
   assert.equal(readRotation({ ...row, date_to: row.date_from }, record).date_to, row.date_from);
-  for (const change of [{ department_name: " " }, { date_from: "2026-02-30" }, { date_to: "2026-10-30" }, { date_to: "2100-01-01" }, { supervisor_name: "x".repeat(121) }, { notes: "x".repeat(1001) }]) {
+  for (const change of [{ department_name: " " }, { date_from: "2026-02-30" }, { date_to: "2026-10-30" }, { date_from: "1999-12-31" }, { supervisor_name: "x".repeat(121) }, { notes: "x".repeat(1001) }]) {
     assert.throws(() => readRotation({ ...row, ...change }, record), { status: 400 });
+  }
+});
+
+test("rotation dates are independent of the estimated internship end date", () => {
+  for (const date_ended of ["2026-10-31", null, "", "invalid-estimate"]) {
+    assert.equal(readRotation(row, { ...record, date_ended }).date_to, row.date_to);
+  }
+  assert.equal(readRotation({ ...row, date_to: "2100-01-01" }, record).date_to, "2100-01-01");
+  assert.throws(() => readRotation(row, { ...record, date_started: null }), { status: 400 });
+});
+
+test("ongoing owners can create and edit rotations beyond an estimated end while preserving lifecycle and overlap checks", async () => {
+  for (const editing of [false, true]) {
+    const state = mock({ current: { ...record, date_ended: "2026-10-31" } });
+    const request = req(), res = response(); request.body = row;
+    if (editing) { request.method = "PATCH"; request.params.rotationId = row.id; }
+    await mutateRotation(request, res);
+    assert.equal(res.code, 200); assert.equal(res.body.success, true); assert(state.events.includes("commit"));
+    assert(state.calls.some(call => call.sql.includes(editing ? "UPDATE internship_rotations" : "INSERT INTO internship_rotations")));
+    assert(state.calls.some(call => call.sql.includes("date_from <= ? AND date_to >= ?")));
   }
 });
 
@@ -115,9 +135,9 @@ test("narrative snapshots reject foreign, duplicate, disabled and non-overlappin
   assert.deepEqual(JSON.parse(await narrativeRotationSnapshot({ execute: async () => [[]] }, record, { rotation_ids: '["rotation-1"]' }, dates, JSON.stringify([row]))), [row]);
 });
 
-test("narrative create/edit persist validated snapshots inside the existing parent transaction", async () => {
+test("narrative create/edit beyond the estimated end persist validated snapshots inside the existing parent transaction", async () => {
   for (const action of [createWeeklyNarrative, editWeeklyNarrative]) {
-    const state = mock(), request = req(), res = response();
+    const state = mock({ current: { ...record, date_ended: "2026-10-31" } }), request = req(), res = response();
     request.query = { internshipId: record.id }; request.params.narrativeId = 1;
     request.body = { title: "Week", narrative: "Worked in two units", week_number: 1, date_from: row.date_from, date_to: row.date_to, rotation_ids: '["rotation-1"]' };
     await action(request, res); assert(res.body.success, JSON.stringify(res.body));
@@ -129,6 +149,14 @@ test("narrative create/edit persist validated snapshots inside the existing pare
     }
     assert(state.events.includes("commit")); assert.match(state.calls[0].sql, /FOR UPDATE/);
   }
+});
+
+test("finished records keep rotations beyond the estimate readable while assignment writes stay locked", async () => {
+  const current = { ...record, status: "finished", date_ended: "2026-10-31" };
+  mock({ current }); const read = response(); await getRotations(req(), read);
+  assert.equal(read.code, 200); assert.equal(read.body.canManage, false); assert.deepEqual(read.body.rotations, [row]);
+  const state = mock({ current }), write = response(), request = req(); request.body = row;
+  await mutateRotation(request, write); assert.equal(write.code, 409); assert(!state.events.includes("commit"));
 });
 
 test("migration defaults existing internships to opt-out and leaves historical narratives blank", () => {

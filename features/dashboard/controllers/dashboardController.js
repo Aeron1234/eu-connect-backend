@@ -264,12 +264,13 @@ function parseDashboardPage(value) {
 
 // List existing employer assignments, not pending supervisor_requests. The All filter
 // adds no status/deleted_at predicate; filtered pages use the requested record status.
-// Use count and page queries separately, with five rows and stable date/ID ordering.
+// Page five distinct students before fetching all matching placements. This keeps
+// repeated assignments together and applies status filters to each position.
 async function loadEmployerInternsPage(connection, employerId, { page = 1, status = "all" } = {}) {
   const statusFilter = status === "all" ? "" : " AND ir.status = ?";
   const params = status === "all" ? [employerId] : [employerId, status];
   const [[countRow]] = await connection.execute(
-    `SELECT COUNT(*) AS total FROM internship_records ir
+    `SELECT COUNT(DISTINCT ir.user_id) AS total FROM internship_records ir
      WHERE ir.employer_id = ?${statusFilter}`,
     params,
   );
@@ -277,6 +278,15 @@ async function loadEmployerInternsPage(connection, employerId, { page = 1, statu
   const totalPages = Math.max(1, Math.ceil(total / EMPLOYER_INTERNS_PAGE_SIZE));
   let interns = [];
   if (total && page <= totalPages) {
+    const [students] = await connection.execute(
+      `SELECT ir.user_id AS student_id FROM internship_records ir
+       WHERE ir.employer_id = ?${statusFilter}
+       GROUP BY ir.user_id
+       ORDER BY MAX(ir.date_started) DESC, ir.user_id DESC
+       LIMIT ? OFFSET ?`,
+      [...params, EMPLOYER_INTERNS_PAGE_SIZE, (page - 1) * EMPLOYER_INTERNS_PAGE_SIZE],
+    );
+    if (!students.length) return { interns, page, pageSize: EMPLOYER_INTERNS_PAGE_SIZE, total, totalPages };
     const [rows] = await connection.execute(
       `SELECT ir.id AS internship_id, ir.user_id AS student_id,
               ir.status, ir.internship_position, ir.date_started, ir.date_ended,
@@ -292,11 +302,23 @@ async function loadEmployerInternsPage(connection, employerId, { page = 1, statu
        )
        LEFT JOIN courses c ON c.id = sai.course_id
        WHERE ir.employer_id = ?${statusFilter}
-       ORDER BY ir.date_started DESC, ir.id DESC
-       LIMIT ? OFFSET ?`,
-      [...params, EMPLOYER_INTERNS_PAGE_SIZE, (page - 1) * EMPLOYER_INTERNS_PAGE_SIZE],
+         AND ir.user_id IN (${students.map(() => "?").join(",")})
+       ORDER BY ir.date_started DESC, ir.id DESC`,
+      [...params, ...students.map(student => student.student_id)],
     );
-    interns = rows;
+    const grouped = new Map();
+    for (const row of rows) {
+      if (!grouped.has(row.student_id)) grouped.set(row.student_id, {
+        student_id: row.student_id, first_name: row.first_name, last_name: row.last_name,
+        email: row.email, course_name: row.course_name, short_name: row.short_name, placements: [],
+      });
+      grouped.get(row.student_id).placements.push({
+        internship_id: row.internship_id, internship_position: row.internship_position,
+        status: row.status, date_started: row.date_started, date_ended: row.date_ended,
+        total_hours: row.total_hours, accumulated_hours: row.accumulated_hours,
+      });
+    }
+    interns = students.map(student => grouped.get(student.student_id)).filter(Boolean);
   }
   return { interns, page, pageSize: EMPLOYER_INTERNS_PAGE_SIZE, total, totalPages };
 }

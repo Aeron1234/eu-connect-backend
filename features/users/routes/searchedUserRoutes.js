@@ -1,4 +1,6 @@
 import { requireStudentDepartmentAccess } from "../../../config/studentProfileAccess.js";
+import { getEmployerSupervisionHistory } from "../controllers/employerSupervisionHistoryController.js";
+import { getHelpAdminContacts } from "../controllers/helpContactsController.js";
 import { cacheAttendanceHistory } from "../../../middleware/attendance-history-cache.js";
 import { cacheRoute } from "../../../middleware/cache-middleware.js";
 import express from "express";
@@ -29,6 +31,7 @@ import {
 } from "../controllers/searchedUserController.js";
 
 const searchedUserRoutes = express.Router();
+searchedUserRoutes.get("/help/admin-contacts", verifyUser, verifyRole(["student", "department_head"]), generalLimiter, getHelpAdminContacts);
 const cacheSearchedProfile = cacheRoute(30);
 // Head profile reads bypass this cache so their current student-record permission
 // is recomputed. Private tab routes apply their own guard before cache lookup.
@@ -41,6 +44,16 @@ function searchedProfileCache(req, res, next) {
 }
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
+
+// Basic completed-placement history is visible to every signed-in role. It does
+// not grant access to private student records, dashboard data or evaluations.
+searchedUserRoutes.get(
+  "/searched-user/:searchedUserId/supervised-interns",
+  verifyUser,
+  verifyRole(["student", "employer", "department_head", "admin"]),
+  paginationLimiter,
+  getEmployerSupervisionHistory,
+);
 
 searchedUserRoutes.get(
   "/searched-user/:searchedUserId",

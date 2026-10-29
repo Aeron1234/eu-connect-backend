@@ -65,7 +65,7 @@ function seed() {
   for (const [key, path] of [["alumni-a", "alumni-internships"], ["alumni-b", "alumni-internships"], ["directory-a", "company-directory"], ["directory-b", "company-directory"], ["profile", "account/user"]]) cache.set(key, { userId: key, path: base + path, body: {} });
 }
 function response() { return { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } }; }
-const data = { alumni_name: "Graduate", company_name: "Company", company_address: "City", industry: "IT", course_id: 1, batch_year: "2026", academic_year: "2025-2026", internship_position: "Intern", description: "Placement", date_started: "2025-08-01", date_ended: "2026-01-01", total_hours: 100, lat: 14, lon: 121, region_id: 1, semester: "1st", status: "ongoing" };
+const data = { alumni_name: "Graduate", company_name: "Company", company_address: "City", company_website: "https://company.example.test/", industry: "IT", course_id: 1, batch_year: "2026", academic_year: "2025-2026", internship_position: "Intern", description: "Placement", date_started: "2025-08-01", date_ended: "2026-01-01", total_hours: 100, lat: 14, lon: 121, region_id: 1, semester: "1st", status: "ongoing" };
 function request(role = "admin", body = data) {
   return { verifiedUser: { id: "actor", role, department_id: 1 }, params: { recordId: "record", internshipId: "record" }, body,
     app: { get: () => ({ to: () => ({ emit: () => { assert.ok(committed); assert.equal(cache.has("alumni-a"), false); emitted++; } }) }) } };

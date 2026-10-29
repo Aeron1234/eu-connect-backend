@@ -1,5 +1,6 @@
 import { rotationEnabled } from "../../internship-rotations/rotationPolicy.js";
 import { readPlacementCity } from "../placementCity.js";
+import { readCompanyWebsite } from "../companyWebsite.js";
 import { reportError } from "../../../config/errorTracking.js";
 import { getActivityLogUserName } from "../../../config/activityLogNames.js";
 import { attendanceHistoryCacheHit } from "../../../middleware/attendance-history-cache.js";
@@ -174,6 +175,9 @@ export const createInternshipRecord = async (req, res) => {
       });
     }
 
+    const website = readCompanyWebsite(data.company_website);
+    if (website.error) return res.status(400).json({ error: website.error });
+
     const city = readPlacementCity(data);
     if (city.error) return res.status(400).json({ error: city.error });
 
@@ -264,7 +268,7 @@ export const createInternshipRecord = async (req, res) => {
         data.date_ended,
         Number(data.total_hours),
         data.region_id,
-        data.company_website || null,
+        website.website,
         data.semester,
         city.fields.city_name,
         city.fields.province_name,
@@ -1405,7 +1409,7 @@ export const getInternshipRecordOverview = async (req, res) => {
     const [rows] = await connection.execute(
       `SELECT 
          ir.user_id AS student_id, ir.company_name, ir.internship_position, ir.status,
-         ir.company_address, ir.lat, ir.lon,
+         ir.company_address, ir.lat, ir.lon, ir.company_website,
          ir.date_started, ir.date_ended, ir.created_at,
          ir.total_hours, ir.accumulated_hours, ir.created_at,
          up.first_name, up.last_name,
@@ -1444,6 +1448,7 @@ export const getInternshipRecordOverview = async (req, res) => {
       course_name: data.course_name,
       company_name: data.company_name,
       company_address: data.company_address,
+      company_website: data.company_website ?? null,
       lat: data.lat,
       lon: data.lon,
       internship_position: data.internship_position,

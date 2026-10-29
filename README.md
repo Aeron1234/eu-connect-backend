@@ -32,7 +32,8 @@ The backend serves students, employers/company supervisors, department heads, re
 - JWT login, access-token verification, refresh-token rotation, logout, invitation onboarding, and password recovery links through EmailJS.
 - Account creation, profile management, account activation/deactivation, and academic reference data.
 - Every newly created account requires a valid email and username. The backend creates a pending account without an administrator-selected password and emails a one-use setup link. Pending accounts cannot sign in or refresh sessions. Existing accounts retain access. Apply `scripts/2026-10-29-account-invitations.sql`, configure the backend EmailJS service/template/keys, and deploy the matching frontend. Setup, resend, failure handling and a ready-to-copy email template are documented in [account-invitations.md](docs/account-invitations.md).
-- Internship record submission, pending edits, approval/rejection, restoration, completion, and authorized record details.
+- Internship record submission, pending edits, approval/rejection, restoration, completion, and authorized record details. New student submissions and pending edits require an official company website/social page (HTTP(S), up to 255 stored characters; bare domains normalize to HTTPS). The Overview response includes company_website, nullable for legacy records; the frontend shows a link or `-`. Deploy both applications; no SQL migration or environment change is needed.
+- Employer profile Info includes completed supervision history through GET `/api/v1/searched-user/:searchedUserId/supervised-interns?page=1`, available to all four authenticated roles. Validate the employer on every read; paginate five distinct students ordered by their latest placement end/start date and student ID, then fetch all their ongoing/finished, non-deleted placements. Deleted student accounts are excluded; current course comes from the latest academic row. Return only student names/IDs, course, company, position and dates, never email, attendance, scores or documents. Return one student entry with a placements array containing each position, company and date range, newest first; repeated students never split across pages. Responses are private/no-store; unknown/non-employer profiles return 404 and query failures remain errors. Student work endpoints and the employer dashboard retain their existing permissions. No SQL, package or environment changes; deploy the matching frontend.
 - Daily Time Records (DTR), geofence checks, breaks, duty resumption, clock-out, and automatic stale-shift closure.
 - Weekly narratives with coverage dates and authorized data for journal printing.
 - One summary report per internship, with memorabilia images and legacy attachment support.
@@ -287,7 +288,7 @@ Current workflow rules include:
 
 - Employers are excluded from announcements and the full calendar API.
 - Regular department heads post Department announcements; registrar heads and administrators post General announcements.
-- Supervision requests are answered through Notifications in the frontend. The employer dashboard's intern list includes assigned interns with `all`, `ongoing`, and `finished` filters.
+- Supervision requests are answered through Notifications in the frontend. The employer dashboard's intern list includes assigned interns with `all`, `ongoing`, and `finished` filters. Both overview and paginated responses return one entry per student with a `placements` array. Pagination counts five distinct students before fetching all matching positions, keeping repeated assignments together. Filters apply to positions; date, status and hours remain per internship. Pending request rows are not added. Summary stats keep their existing placement counts. Deploy the matching frontend; no SQL or environment changes.
 - Unanswered active supervisor-request notifications cannot be deleted; direct deletion attempts return `409`. Answered, cancelled/superseded, and obsolete requests can be dismissed.
 - Employer performance evaluations are hidden from students, including print and notification access.
 - Employers may post multiple performance evaluations per ongoing internship, without deleting earlier reviews. Student-authored supervisor evaluations still allow one active entry per internship. Both directions retain accepted-supervisor/start-date restrictions and author soft deletion; authorized staff retain deleted history and may permanently remove already-deleted copies. Apply `scripts/2026-10-29-multiple-performance-evaluations.sql` before deploying backend/frontend together. It drops only the performance unique index, preserves all rows/scores, and requires no environment or package changes. No automatic 200-hour milestone or per-department setting is enforced.
@@ -604,11 +605,18 @@ Apply `scripts/2026-10-27-internship-rotations.sql` before deploying both applic
 
 Authenticated routes under `/api/v1/internship-records/:internshipId/rotations`: GET reads timeline/settings/capabilities; PATCH `/settings` toggles tracking; POST creates, PATCH `/:rotationId` edits and DELETE `/:rotationId` soft-deletes. Existing API aliases use the normal router registry.
 
-Only the owning student writes. Pending/ongoing records can toggle; assignments require an enabled, ongoing internship. Reads allow the owner, Admin, the assigned employer and heads whose current database department matches the student. Writes lock the parent before status/date/overlap checks; narrative writes use the same lock. Disabling retains history; finalized records are read-only.
+Only the owning student writes. Pending/ongoing records can toggle; assignments require an enabled, ongoing internship. Reads allow the owner, Admin, the assigned employer and heads whose current database department matches the student. Writes lock the parent before status/date/overlap checks; narrative writes use the same lock. Rotation dates must be valid, ordered, on or after the internship start date, and non-overlapping. The estimated internship end date is not a deadline: rotation create/edit does not require or cap dates at date_ended. Disabling retains history; finalized records are read-only. Deploy the frontend and backend changes together; no SQL or environment update is needed for this policy adjustment.
 
 Narrative create/edit accepts optional JSON-array `rotation_ids`. IDs must belong to the internship and overlap coverage; existing saved IDs may retain a removed assignment snapshot. Omitted selections preserve snapshots on edit; [] clears them. Reads and printing use saved `rotation_assignments`, independent of later timeline changes. Overall supervision, hours and evaluation slots stay on the original internship.
 
 Tests: tests/internship-rotations.test.js, plus existing internship update/start-date/narrative/department-access checks.
+
+The connected-feature audit is documented in
+[Company rotation integrations](docs/company-rotations-integrations.md), including
+narrative selection, immutable saved assignments, post-estimate journal printing,
+finished history, profile restrictions, and cache/loading contracts. The audit
+adds integration regression coverage without changing attendance, evaluation,
+map-grouping or summary-report behavior.
 
 ### Internship rejection reasons
 
@@ -631,3 +639,9 @@ The mysql2 pool explicitly negotiates UTF8MB4_GENERAL_CI, matching the existing 
 ## DTR longitude storage
 
 Apply scripts/2026-10-29-dtr-longitude-range.sql to widen daily_time_records.lon_in and lon_out from DECIMAL(10,8) to DECIMAL(11,8). The previous type cannot store valid Philippine longitudes above 99.99999999. Latitude types, GPS validation, geofencing and hour calculations are unchanged. Coordinate storage range failures return a safe actionable 503 message, distinct from the 422 outside-area response; they do not imply the student is outside the attendance radius. Deploy the backend and apply the SQL separately. No live migration was executed.
+
+### User manuals and Help contracts (October 30, 2026)
+
+User-facing manuals live in the companion frontend under `components/help-ui/guides/`; its `docs/manual-audit.md` records the cross-repository source audit. The guides distinguish 24-hour invitations from 30-minute existing-account recovery, generic recovery confirmation from confirmed delivery, student hours-gated completion from staff completion, per-student intern pagination from placement statistics, and 10 MB student/50 MB supervisor uploads from the 25 MB non-PDF browser-preview cap. Rotation dates may extend beyond the estimated end while calendar to-dos still use the saved internship date range. Documentation changes do not alter these backend rules. No backend executable code, schema, package or environment changes are part of this manual audit.
+
+Help support directory: GET `/api/v1/help/admin-contacts` is authenticated and restricted to student/department_head. Return only the display name and usable email/contact_number of active, non-deleted admin accounts; omit admins without either. This is separate from account management and is private/no-store. Employers use Feedback & Concerns. Existing user/profile fields suffice; no migration or environment changes.

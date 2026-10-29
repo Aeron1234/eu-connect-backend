@@ -36,11 +36,13 @@ export function readRotation(body, record) {
   ) {
     throw rotationError("Enter a valid rotation start and end date.");
   }
-  const start = manilaCalendarDay(record.date_started),
-    end = manilaCalendarDay(record.date_ended);
-  if (!start || !end || from < start || to > end)
+  // date_ended is an estimate, not an assignment deadline. Keep the actual
+  // placement start as the lower bound; ongoing status and overlap checks live
+  // in the controller and still apply to every assignment mutation.
+  const start = manilaCalendarDay(record.date_started);
+  if (!start || from < start)
     throw rotationError(
-      "Rotation dates must fall within the internship's start and end dates.",
+      "Rotation dates must start on or after the internship start date.",
     );
   return {
     department_name: department,
@@ -96,6 +98,8 @@ export async function narrativeRotationSnapshot(
       "Enable company rotations before assigning them to a narrative.",
     );
   const [rows] = await connection.execute(
+    // Coverage matches assignments by overlap. The placement's estimated end
+    // does not limit narrative selection or change historical snapshots.
     `SELECT id, department_name, supervisor_name,
        DATE_FORMAT(date_from, '%Y-%m-%d') AS date_from, DATE_FORMAT(date_to, '%Y-%m-%d') AS date_to
      FROM internship_rotations WHERE internship_id = ? AND deleted_at IS NULL ORDER BY date_from, id`,

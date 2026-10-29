@@ -14,7 +14,7 @@ const { default: routes } = await import("../features/internship-records/routes/
 const { signAccessToken } = await import("../config/jwt.js");
 const originalGetConnection = db.getConnection;
 const originalExecute = db.execute;
-const valid = { company_name: "Updated Company", company_address: "Lucena City", internship_position: "Developer intern", company_website: "", description: "Development tasks", date_started: "2026-10-18", date_ended: "2026-12-31", total_hours: "200", region_id: "4", semester: "1st", lat: "13.94", lon: "121.61" };
+const valid = { company_name: "Updated Company", company_address: "Lucena City", internship_position: "Developer intern", company_website: "https://company.example.test/", description: "Development tasks", date_started: "2026-10-18", date_ended: "2026-12-31", total_hours: "200", region_id: "4", semester: "1st", lat: "13.94", lon: "121.61" };
 let record, calls, commits, rollbacks, releases, failWrite, affectedRows, validRegion;
 
 beforeEach(() => {
@@ -76,7 +76,7 @@ test("student updates the same pending record and invalidates affected caches af
   assert.equal(response.status, 200); assert.equal(body.success, true);
   assert.equal(body.record.id, "record-1"); assert.equal(body.record.status, "pending");
   assert.equal(body.record.company_name, valid.company_name); assert.equal(body.record.region_id, 4);
-  assert.equal(body.record.company_website, null); assert.equal(commits, 1); assert.equal(rollbacks, 0); assert.equal(releases, 1);
+  assert.equal(body.record.company_website, valid.company_website); assert.equal(commits, 1); assert.equal(rollbacks, 0); assert.equal(releases, 1);
   const update = calls.find((call) => call.sql.includes("UPDATE internship_records"));
   assert.match(update.sql, /user_id = \? AND status = 'pending' AND deleted_at IS NULL/);
   assert.deepEqual(update.params.slice(-2), ["record-1", "student-1"]);
@@ -122,6 +122,19 @@ test("invalid regions roll back without saving", async (t) => {
   const request = await client(t); validRegion = false;
   assert.equal((await request()).status, 400); assert.equal(commits, 0); assert.equal(rollbacks, 1);
   assert.ok(!calls.some((call) => call.sql.includes("UPDATE internship_records")));
+});
+
+test("pending edits require a usable company website and accept bare domains and official social pages", async (t) => {
+  const request = await client(t);
+  for (const company_website of ["", "  ", "undefined", "javascript:alert(1)", "mailto:company@example.test", "https://user:password@company.example.test", "not a website", [], "https://company.example.test/" + "x".repeat(255)]) {
+    const response = await request({ ...valid, company_website });
+    assert.equal(response.status, 400); assert.match((await response.json()).error, /company website/i);
+  }
+  assert.equal(calls.length, 0); assert.equal(commits, 0);
+  for (const [input, saved] of [[" www.company.example.test ", "https://www.company.example.test/"], ["https://www.facebook.com/company", "https://www.facebook.com/company"]]) {
+    const response = await request({ ...valid, company_website: input });
+    assert.equal(response.status, 200); assert.equal((await response.json()).record.company_website, saved);
+  }
 });
 
 test("status, owner, supervisor and accumulated hours are never taken from the request", async (t) => {
@@ -193,6 +206,17 @@ test("new internship creation saves city and province with the original placemen
   assert.equal(res.statusCode, 201); assert.equal(res.body.success, true);
   const insert = writes.find(row => row.sql.includes("INSERT INTO internship_records"));
   assert.match(insert.sql, /semester, city_name, province_name/);
+  assert.equal(insert.params[12], valid.company_website);
   assert.deepEqual(insert.params.slice(-4), ["Lucena City", "Quezon", 0, "student-1"]);
   assert.equal(commits, 1);
+});
+
+test("new internship submissions reject missing and unsafe company websites before any database write", async () => {
+  const { createInternshipRecord } = await import("../features/internship-records/controllers/internshipRecordControllers.js");
+  db.getConnection = async () => ({ release() {}, async execute() { assert.fail("invalid websites must not query or write"); } });
+  for (const company_website of [undefined, null, "", "  ", [], 123, "javascript:alert(1)", "data:text/html,test", "https://user:secret@company.example.test"]) {
+    const res = { statusCode: 200, status(value) { this.statusCode = value; return this; }, json(body) { this.body = body; return this; } };
+    await createInternshipRecord({ verifiedUser: { id: "student-1", role: "student", department_id: 1 }, body: { ...valid, company_website } }, res);
+    assert.equal(res.statusCode, 400); assert.match(res.body.error, /company website/i);
+  }
 });

@@ -1,5 +1,6 @@
 import { rotationEnabled } from "../../internship-rotations/rotationPolicy.js";
 import { readPlacementCity } from "../placementCity.js";
+import { readCompanyWebsite } from "../companyWebsite.js";
 import { db } from "../../../config/db.js";
 import { reportError } from "../../../config/errorTracking.js";
 import { getActivityLogUserName } from "../../../config/activityLogNames.js";
@@ -22,10 +23,9 @@ function readPlacement(body = {}) {
     }
     fields[name] = body[name].trim();
   }
-  if (body.company_website != null && typeof body.company_website !== "string") {
-    return { error: "Company website must be text." };
-  }
-  fields.company_website = body.company_website?.trim() || null;
+  const website = readCompanyWebsite(body.company_website);
+  if (website.error) return { error: website.error };
+  fields.company_website = website.website;
   if (!["1st", "2nd", "summer"].includes(fields.semester)) {
     return { error: "Select a valid semester." };
   }

@@ -77,9 +77,30 @@ test("restored intern pagination remains bounded without pending request rows", 
   const second = await invoke(getEmployerInternsPage, { status: "all", page: "2" });
   assert.equal(first.body.total, 8); assert.equal(first.body.totalPages, 2);
   assert.equal(first.body.interns.length, 5); assert.equal(second.body.interns.length, 3);
-  assert.equal(new Set([...first.body.interns, ...second.body.interns].map(row => row.internship_id)).size, 8);
+  assert.equal(new Set([...first.body.interns, ...second.body.interns].map(row => row.student_id)).size, 8);
   const beyond = await invoke(getEmployerInternsPage, { status: "all", page: "99" });
   assert.deepEqual(beyond.body.interns, []); assert.equal(beyond.body.total, 8);
+}));
+
+test("dashboard groups repeated assignments before pagination and filters individual positions", async () => fixture(async ({ add, invoke, sql }) => {
+  for (let i = 1; i <= 6; i++) add(i, { employer: "employer", requestStatus: "accepted", notification: false });
+  sql.exec("INSERT INTO internship_records VALUES('prior','student-1','employer','finished',NULL,'Support intern','2026-08-01','2026-09-01',100,103.6)");
+  sql.exec("INSERT INTO internship_records VALUES('foreign','student-1','other-employer','finished',NULL,'Other employer position','2026-08-01','2026-09-01',100,100)");
+  const first = await invoke(getEmployerInternsPage, { status: "all", page: "1" });
+  const second = await invoke(getEmployerInternsPage, { status: "all", page: "2" });
+  assert.equal(first.body.total, 6); assert.equal(first.body.totalPages, 2);
+  const students = [...first.body.interns, ...second.body.interns];
+  assert.equal(new Set(students.map(student => student.student_id)).size, 6);
+  const repeat = students.find(student => student.student_id === "student-1");
+  assert.equal(repeat.placements.length, 2);
+  assert.deepEqual(repeat.placements.map(placement => placement.status), ["ongoing", "finished"]);
+  assert.equal(repeat.placements[1].accumulated_hours, 103.6);
+  assert(!JSON.stringify(students).includes("Other employer position"));
+  const completed = await invoke(getEmployerInternsPage, { status: "finished" });
+  assert.equal(completed.body.total, 1);
+  assert.deepEqual(completed.body.interns[0].placements.map(placement => placement.internship_id), ["prior"]);
+  const ongoing = await invoke(getEmployerInternsPage, { status: "ongoing", page: "2" });
+  assert(ongoing.body.interns.every(student => student.placements.every(placement => placement.status === "ongoing")));
 }));
 
 test("unanswered active notification deletion is denied even through a direct API call", async () => fixture(async ({ add, invoke, sql }) => {

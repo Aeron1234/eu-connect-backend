@@ -44,3 +44,19 @@ test("print read rejects a record owned by another student", async () => {
   assert.equal(res.statusCode, 404);
   assert.equal(calls, 1);
 });
+
+test("journal reads retain saved rotation snapshots after the estimate without rebuilding the live timeline", async () => {
+  const snapshot = [{ id: "saved-rotation", department_name: "Housekeeping", date_from: "2026-11-01", date_to: "2026-11-07" }];
+  const narrative = { week_number: 4, title: "Extended placement", narrative: "Worked in housekeeping", date_from: "2026-11-01", date_to: "2026-11-07", rotation_assignments: JSON.stringify(snapshot) };
+  const calls = [];
+  db.execute = async (sql, params) => {
+    calls.push({ sql, params });
+    if (sql.includes("FROM internship_records")) return [[{ id: "record-1", company_name: "Company", student_name: "Student", date_ended: "2026-10-31", status: "finished" }]];
+    return [[narrative]];
+  };
+  const res = response(); await getWeeklyNarrativesForPrint({ verifiedUser: { id: "student-1" }, params: { internshipId: "record-1" } }, res);
+  assert.equal(res.statusCode, 200); assert.deepEqual(res.body.narratives, [narrative]);
+  assert.deepEqual(JSON.parse(res.body.narratives[0].rotation_assignments), snapshot);
+  assert.equal(calls.length, 2); assert.deepEqual(calls[1].params, ["record-1", "student-1"]);
+  assert.match(calls[1].sql, /rotation_assignments/); assert.doesNotMatch(calls[1].sql, /internship_rotations/);
+});
