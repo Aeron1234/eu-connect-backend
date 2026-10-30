@@ -6,6 +6,14 @@ export function targetedSchoolAccess(alias, viewer) {
   return `EXISTS (SELECT 1 FROM users audience_user JOIN roles audience_role ON audience_role.id=audience_user.role_id WHERE audience_user.id=${viewer} AND audience_user.deleted_at IS NULL AND (audience_user.id=${alias}.author_id OR audience_role.role='admin' OR (audience_role.role='student' AND EXISTS (SELECT 1 FROM announcement_student_tags atag WHERE atag.announcement_id=${alias}.public_id AND atag.student_id=audience_user.id)) OR (audience_role.role='department_head' AND EXISTS (SELECT 1 FROM announcement_student_tags atag JOIN student_academic_info asi ON asi.id=(SELECT MAX(alatest.id) FROM student_academic_info alatest WHERE alatest.user_id=atag.student_id) JOIN dept_heads_background_info ah ON ah.department_id=asi.department_id WHERE atag.announcement_id=${alias}.public_id AND ah.user_id=audience_user.id))))`;
 }
 export async function saveSchoolAudience(connection, id, value) {
+  // Tags always identify a restricted school audience, even if a stale client
+  // submits broad mode. Reuse the persisted tags after saveStudentTags.
+  const [selectedTags] = await connection.execute('SELECT student_id FROM announcement_student_tags WHERE announcement_id=? LIMIT 1', [id]);
+  if (selectedTags.length) {
+    if (value !== undefined) { try { employerVisibility(value); } catch { throw invalid('Choose a valid announcement audience.'); } }
+    await connection.execute('UPDATE announcements SET tagged_students_only=1 WHERE public_id=?', [id]);
+    return true;
+  }
   if (value !== undefined) {
     let targeted;
     try { targeted = employerVisibility(value); } catch { throw invalid('Choose a valid announcement audience.'); }

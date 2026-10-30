@@ -23,3 +23,12 @@ The authenticated `/announcements/tag-students?search=...` lookup is for admins/
 The separate `employer_tagged_only` flag is intentional: deleting a tagged student's account/last join row must never make a restricted post visible to all employers. Employer feed/inbox/count routes bypass server route caches to recheck current supervision on each read; school-role cache behavior stays unchanged. Opening a notification still verifies recipient ownership and live post access. School category permissions, employer read-only access and the Calendar exclusion remain intact.
 
 SQL order: existing public UUID + visibility migrations, then the October 31 migration, then backend, then frontend. No live database changes are performed by the implementation. The SQL is not meant to be rerun after its column already exists; inspect schema before a repeated deployment.
+
+### Automatic tagged audience
+
+Tags always force tagged_students_only=1 on create/edit using persisted tags, even when a stale client submits broad mode. Existing tagged posts require scripts/2026-10-31-tagged-announcements-default-private.sql after the earlier tag-table and targeted-audience migrations; it updates only the audience flag, with no schema change or new notifications. Live feed/direct/calendar/inbox guards enforce the restricted audience. Keep author/admin viewing, involved student/head notifications and optional current-supervisor sharing. Broad posts must have no tags.
+
+
+### Announcement mutation reliability
+
+Announcement mutations: edit recipient reconciliation compares live eligible users before and after the write under the announcement lock, independently of existing alerts. Ordinary edits must not recreate dismissed notifications; only newly eligible recipients are notified. Remove out-of-audience UUID and legacy numeric-link alerts. Pin accepts only numeric/string 0 or 1; admin may pin any existing post, heads must pass fresh DB department/Registrar and targeted viewing checks. Pin commits before silent announcements_changed events; socket failures do not report the saved pin as failed. Existing client listeners refresh announcement, notification and calendar queries. No new SQL/schema/env settings are needed for these mutation fixes; earlier tagging migrations remain required.

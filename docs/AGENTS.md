@@ -1542,3 +1542,12 @@ The companion frontend shares Help/page instructions through role-filtered guide
 - Employer announcement access is now opt-in: apply scripts/2026-10-30-announcement-employer-visibility.sql, then deploy matching apps. visible_to_employers defaults to 0 for old/new posts; only allowed authors can change it. Employer feed/pinned/count/direct links and notification opens recheck the current flag, including Department posts. Grant alerts only on first visibility transition; revoke employer alerts and emit announcements_changed after commit. School department scope/category rules and employer Calendar exclusion remain. Never allow employer mutations.
 
 Department-category announcement cards and expanded content show the author department name and acronym to employer and admin viewers. The API adds nullable author_department_name/author_department_code to pinned, regular, direct-link and update responses using the author's current department assignment, consistent with existing feed scope. Missing details display a dash; General posts omit the label. No additional migration or environment changes; deploy both applications.
+
+### Automatic tagged audience
+
+Tags always force tagged_students_only=1 on create/edit using persisted tags, even when a stale client submits broad mode. Existing tagged posts require scripts/2026-10-31-tagged-announcements-default-private.sql after the earlier tag-table and targeted-audience migrations; it updates only the audience flag, with no schema change or new notifications. Live feed/direct/calendar/inbox guards enforce the restricted audience. Keep author/admin viewing, involved student/head notifications and optional current-supervisor sharing. Broad posts must have no tags.
+
+
+### Announcement mutation reliability
+
+Announcement mutations: edit recipient reconciliation compares live eligible users before and after the write under the announcement lock, independently of existing alerts. Ordinary edits must not recreate dismissed notifications; only newly eligible recipients are notified. Remove out-of-audience UUID and legacy numeric-link alerts. Pin accepts only numeric/string 0 or 1; admin may pin any existing post, heads must pass fresh DB department/Registrar and targeted viewing checks. Pin commits before silent announcements_changed events; socket failures do not report the saved pin as failed. Existing client listeners refresh announcement, notification and calendar queries. No new SQL/schema/env settings are needed for these mutation fixes; earlier tagging migrations remain required.

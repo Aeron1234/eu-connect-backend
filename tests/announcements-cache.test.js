@@ -72,6 +72,8 @@ beforeEach(() => {
     },
     async query() { return [{ affectedRows: 1 }]; },
     async execute(sql, params) {
+      if (sql.includes('SELECT student_id FROM announcement_student_tags')) return [[]];
+      if (sql.includes('SELECT tagged_students_only FROM announcements')) return [[{tagged_students_only:0}]];
       if (sql.includes("r.role='employer'") || sql === "SELECT id FROM users" || sql.includes("SELECT DISTINCT user_id AS id FROM notifications")) return [[]];
       if (sql.includes("INSERT INTO activity_logs")) activityLog = params;
       if (sql.includes("INSERT INTO announcements") || sql.includes("UPDATE announcements")) {
@@ -106,7 +108,7 @@ function seed() {
 function response() { return { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } }; }
 function request(data = {}) {
   return { verifiedUser: { id: "author", role: "department_head", department_code: "REG" }, params: { announcementId },
-    body: { category_id: 1, title: "New", content: "Content", is_pinned: pinned, ...data },
+    body: { category_id: 1, title: "New", content: "Content", is_pinned: pinned ? 1 : 0, ...data },
     app: { get: () => ({ to: () => ({ emit: () => { assert.ok(committed); assert.equal(cache.has("feed-a"), false); emitted++; } }) }) } };
 }
 
@@ -338,7 +340,7 @@ test("create/edit/delete/pin/unpin clear all feeds after commit and before notif
     assert.ok(res.statusCode < 300); assert.ok(committed); assert.equal(cache.has("feed-a"), false); assert.equal(cache.has("feed-b"), false);
     assert.ok(cache.has("categories")); assert.ok(cache.has("profile"));
   }
-  assert.equal(emitted, 2);
+  assert.equal(emitted, 3); // Creation plus two silent pin refreshes; ordinary edits do not re-alert.
 });
 
 test("new announcements expose a UUID and store it in recipient notifications", async () => {
@@ -376,7 +378,7 @@ test("general-to-department edit evicts previously visible content before socket
   seed(); categoryName = "Department"; const res = response();
   const req = request({ category_id: 2 }); req.verifiedUser.department_code = "CCS";
   await announcements.updateAnnouncement(req, res);
-  assert.equal(res.statusCode, 200); assert.equal(cache.has("feed-a"), false); assert.equal(emitted, 1);
+  assert.equal(res.statusCode, 200); assert.equal(cache.has("feed-a"), false); assert.equal(emitted, 0); // A narrower audience adds nobody in this fixture.
 });
 
 test("event date is saved, can be cleared, and invalid calendar dates are rejected", async () => {

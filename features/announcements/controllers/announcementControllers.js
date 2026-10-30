@@ -497,9 +497,6 @@ export const updateAnnouncement = async (req, res) => {
       return res.status(400).json({ error: rangeError });
     }
 
-    const wasDepartmentCategory =
-      existingRows[0].category_name === "Department";
-
     // Resolve what the NEW category will actually be (COALESCE semantics —
     // if category_id wasn't sent, it stays whatever it currently is).
     let newCategoryName = existingRows[0].category_name;
@@ -515,7 +512,7 @@ export const updateAnnouncement = async (req, res) => {
       newCategoryName = newCategoryRows[0].name;
     }
 
-    const willBeDepartmentCategory = newCategoryName === "Department";
+
 
     if (role === "department_head") {
       const allowedCategory = req.verifiedUser.department_code === "REG" ? "General" : "Department";
@@ -537,6 +534,11 @@ export const updateAnnouncement = async (req, res) => {
       });
     }
 
+    // Snapshot the eligible audience under the parent lock, independently of
+    // whether an individual previously dismissed their notification.
+    const previousSchool = await schoolRecipients(connection,announcementId);
+    const previousEmployers = await employerRecipients(connection,announcementId);
+    const previousRecipientIds = new Set([...previousSchool,...previousEmployers.allowed].map(row=>row.id));
     const [result] = await connection.execute(
       `UPDATE announcements 
        SET 
@@ -584,52 +586,17 @@ export const updateAnnouncement = async (req, res) => {
       [announcementId],
     );
 
-    // Ordinary edits do not create new notifications. A transition from a non-Department
-    // category into Department creates alerts for the newly resolved department audience.
-    // This also supports older posts whose categories predate current posting restrictions.
+    // Only newly eligible audience members receive an alert after an edit.
     let recipients = [];
 
-    if (!wasDepartmentCategory && willBeDepartmentCategory) {
-      const [deptHeadRows] = await connection.execute(
-        `SELECT department_id FROM dept_heads_background_info WHERE user_id = ? LIMIT 1`,
-        [userId],
-      );
-      const departmentId = deptHeadRows[0]?.department_id ?? null;
-
-      [recipients] = await connection.execute(
-        `SELECT u.id
-         FROM users u
-         INNER JOIN roles r ON r.id = u.role_id
-         LEFT JOIN (
-           SELECT sai1.*
-           FROM student_academic_info AS sai1
-           INNER JOIN (
-             SELECT user_id, MAX(id) AS max_id
-             FROM student_academic_info
-             GROUP BY user_id
-           ) AS latest ON sai1.user_id = latest.user_id AND sai1.id = latest.max_id
-         ) sai ON sai.user_id = u.id
-         LEFT JOIN dept_heads_background_info dhbi ON dhbi.user_id = u.id
-         WHERE u.id != ?
-           AND r.role != 'employer'
-           AND (
-             r.role NOT IN ('student', 'department_head')
-             OR (r.role = 'student' AND sai.department_id = ?)
-             OR (r.role = 'department_head' AND dhbi.department_id = ?)
-           )`,
-        [userId, departmentId, departmentId],
-      );
-
-    }
-
-    const [employerAudience] = await connection.execute('SELECT id FROM users');
+    const [refreshViewers] = await connection.execute('SELECT id FROM users');
     const employerScope = await employerRecipients(connection,announcementId);
     const desired=[...await schoolRecipients(connection,announcementId),...employerScope.allowed];
-    const [notices]=await connection.execute("SELECT DISTINCT user_id AS id FROM notifications WHERE type='announcement' AND link_uuid=?",[announcementId]);
+    const [notices]=await connection.execute("SELECT DISTINCT user_id AS id FROM notifications WHERE type='announcement' AND (link_uuid=? OR link=(SELECT CAST(id AS CHAR) FROM announcements WHERE public_id=?))",[announcementId,announcementId]);
     const notified=new Set(notices.map(row=>row.id));
     const desiredIds=new Set(desired.map(row=>row.id));
     for(const notice of notices) if(!desiredIds.has(notice.id)) await connection.execute("DELETE FROM notifications WHERE type='announcement' AND (link_uuid=? OR link=(SELECT CAST(id AS CHAR) FROM announcements WHERE public_id=?)) AND user_id=?",[announcementId,announcementId,notice.id]);
-    recipients=desired.filter(row=>!notified.has(row.id));
+    recipients=desired.filter(row=>!previousRecipientIds.has(row.id) && !notified.has(row.id));
     if (recipients.length > 0) {
       const senderName = `${updatedData[0].first_name} ${updatedData[0].last_name}`;
       await connection.query(
@@ -661,7 +628,7 @@ export const updateAnnouncement = async (req, res) => {
             title: updatedData[0].title,
             visible_to_employers: visibleToEmployers,
             became_department_category:
-              !wasDepartmentCategory && willBeDepartmentCategory,
+              existingRows[0].category_name !== 'Department' && newCategoryName === 'Department',
             recipient_count: recipients.length,
           }),
         ],
@@ -679,8 +646,8 @@ export const updateAnnouncement = async (req, res) => {
 
     invalidateActivityLogsCache();
 
-    for (const employer of employerAudience) {
-      req.app.get("socketio").to(`user-${employer.id}`).emit("announcements_changed", { id: announcementId });
+    for (const viewer of refreshViewers) {
+      req.app.get("socketio").to(`user-${viewer.id}`).emit("announcements_changed", { id: announcementId });
     }
 
     if (recipients.length > 0) {
@@ -810,21 +777,39 @@ export const togglePinAnnouncement = async (req, res) => {
     const { is_pinned } = req.body; // The form submits the target 0/1 state, rather than a toggle instruction
     const { role } = req.verifiedUser;
 
-    // Only admin/department_head roles pass this guard; pinning here is role-based
-    // and does not apply the author's ownership check used by text edits.
+    // Pinning is available to staff within their viewing scope, without requiring
+    // authorship. The locked lookup below applies the current audience restriction.
     if (role !== "admin" && role !== "department_head") {
       return res
         .status(403)
         .json({ error: "Only authorized staff can pin announcements." });
     }
 
+    if (![0, 1, '0', '1'].includes(is_pinned)) {
+      return res.status(400).json({error:'Pinned status must be 0 or 1.'});
+    }
+
     await connection.beginTransaction();
+
+    // Heads may pin only a post they can currently read. Resolve their department
+    // from the database, including Registrar's General-only scope, not JWT claims.
+    const [allowed] = await connection.execute(`SELECT a.public_id FROM announcements a
+      JOIN announcement_categories ac ON ac.id=a.category_id
+      WHERE a.public_id=? AND (?='admin' OR EXISTS (
+        SELECT 1 FROM dept_heads_background_info pin_head JOIN departments pin_dept ON pin_dept.id=pin_head.department_id
+        WHERE pin_head.user_id=? AND (pin_dept.code!='REG' OR ac.name='General') AND (
+          (a.tagged_students_only=1 AND ${targetedSchoolAccess('a','?')}) OR
+          (a.tagged_students_only=0 AND (ac.name!='Department' OR EXISTS (
+            SELECT 1 FROM dept_heads_background_info pin_author WHERE pin_author.user_id=a.author_id AND pin_author.department_id=pin_head.department_id
+          )))
+        ))) FOR UPDATE`,[announcementId,role,req.verifiedUser.id,req.verifiedUser.id]);
+    if(!allowed.length){await connection.rollback();return res.status(404).json({error:'Announcement not found or inaccessible.'});}
 
     const [result] = await connection.execute(
       `UPDATE announcements 
        SET is_pinned = ? 
        WHERE public_id = ?`,
-      [is_pinned, announcementId],
+      [Number(is_pinned), announcementId],
     );
 
     if (result.affectedRows === 0) {
@@ -832,10 +817,16 @@ export const togglePinAnnouncement = async (req, res) => {
       return res.status(404).json({ error: "Announcement not found." });
     }
 
+    const [viewers] = await connection.execute('SELECT id FROM users WHERE deleted_at IS NULL');
     await connection.commit();
     invalidateAnnouncementsCache();
 
-    // Pin changes invalidate the feed cache; no dedicated pin socket event is emitted.
+    // Refresh viewer-scoped feeds without sending notification toasts. A socket
+    // outage after commit must not turn a successful write into a reported failure.
+    for(const viewer of viewers) {
+      try { req.app.get('socketio')?.to(`user-${viewer.id}`).emit('announcements_changed',{id:announcementId}); }
+      catch(error) { reportError('Announcement pin refresh:',error); }
+    }
 
     res.status(200).json({
       success: true,

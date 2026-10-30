@@ -6,7 +6,7 @@ import cache from "../config/cache/cache.js";
 import { getUnreadNotificationCount, openAnnouncementNotification } from '../features/notifications/controllers/notificationControllers.js';
 import { getCalendarMonth } from '../features/calendar/controllers/calendarControllers.js';
 import { getAnnouncementTagStudents } from '../features/announcements/studentTags.js';
-import { createAnnouncement, updateAnnouncement, getAllAnnouncements, getAnnouncementById } from "../features/announcements/controllers/announcementControllers.js";
+import { createAnnouncement, updateAnnouncement, getAllAnnouncements, getAnnouncementById, togglePinAnnouncement } from "../features/announcements/controllers/announcementControllers.js";
 
 after(async () => { cache.close(); await db.end(); });
 const taggedStudent = '00000000-0000-4000-8000-000000000001';
@@ -213,7 +213,7 @@ test('targeted audience restricts school feed/direct/calendar and notifies only 
   sql.prepare('INSERT INTO student_academic_info VALUES(10,?,1)').run(taggedStudent);
   sql.prepare("INSERT INTO internship_records VALUES(?,'employer','ongoing',NULL)").run(taggedStudent);
   sql.exec('CREATE TABLE calendar_schedules(id TEXT,created_by TEXT,department_id INTEGER,title TEXT,description TEXT,starts_on TEXT,ends_on TEXT);');
-  const body={category_id:1,title:'Private notice',content:'Private',event_date:'2026-10-31',visible_to_employers:1,tagged_students_only:1,tagged_student_ids:[taggedStudent]};
+  const body={category_id:1,title:'Private notice',content:'Private',event_date:'2026-10-31',visible_to_employers:1,tagged_students_only:0,tagged_student_ids:[taggedStudent]};
   const created=await invoke(createAnnouncement,{body});assert.equal(created.statusCode,201);
   const announcementId=created.body.id;
   assert.deepEqual(sql.prepare('SELECT user_id FROM notifications WHERE link_uuid=? ORDER BY user_id').all(announcementId).map(r=>r.user_id),['employer','head',taggedStudent].sort());
@@ -229,9 +229,9 @@ test('targeted audience restricts school feed/direct/calendar and notifies only 
   const count=await invoke(getUnreadNotificationCount,{role:'student',id:'student'});assert.equal(count.body.unreadCount,0);
   const notice=sql.prepare("SELECT id FROM notifications WHERE user_id='student'").get();
   assert.equal((await invoke(openAnnouncementNotification,{role:'student',id:'student',params:{notificationId:String(notice.id)}})).statusCode,403);
-  // Widening the audience informs newly included people; narrowing removes their alerts.
+  // A stale client cannot widen a post while its student tags remain.
   assert.equal((await invoke(updateAnnouncement,{params:{announcementId},body:{tagged_students_only:0}})).statusCode,200);
-  assert.equal((await invoke(getAnnouncementById,{role:'student',id:'student',params:{announcementId}})).statusCode,200);
+  assert.equal((await invoke(getAnnouncementById,{role:'student',id:'student',params:{announcementId}})).statusCode,404);
   assert.equal((await invoke(updateAnnouncement,{params:{announcementId},body:{tagged_students_only:1}})).statusCode,200);
   assert.equal(sql.prepare("SELECT COUNT(*) n FROM notifications WHERE user_id='student' AND link_uuid=?").get(announcementId).n,0);
 }));
@@ -248,4 +248,35 @@ test('targeted audience requires a tag and cannot clear its last tag without swi
   assert.equal(created.statusCode,201);
   assert.equal((await invoke(updateAnnouncement,{params:{announcementId:created.body.id},body:{tagged_student_ids:[]}})).statusCode,400);
   assert.equal(sql.prepare('SELECT COUNT(*) n FROM announcement_student_tags').get().n,1);
+}));
+
+test('ordinary edits never recreate a dismissed alert; pinning validates flags and current viewing scope',async()=>fixture(async({sql,invoke,emissions})=>{
+  const created=await invoke(createAnnouncement,{body:{category_id:1,title:'General',content:'Body'}});
+  const announcementId=created.body.id;
+  sql.prepare("DELETE FROM notifications WHERE user_id='student' AND link_uuid=?").run(announcementId);
+  const before=emissions.length;
+  assert.equal((await invoke(updateAnnouncement,{params:{announcementId},body:{title:'Corrected text'}})).statusCode,200);
+  assert.equal(sql.prepare("SELECT COUNT(*) n FROM notifications WHERE user_id='student' AND link_uuid=?").get(announcementId).n,0);
+  assert(!emissions.slice(before).some(row=>row.event==='new_notification'));
+  for(const value of [true,false,null,2,'yes','',undefined])assert.equal((await invoke(togglePinAnnouncement,{params:{announcementId},body:{is_pinned:value}})).statusCode,400);
+  const pinStart=emissions.length;
+  assert.equal((await invoke(togglePinAnnouncement,{role:'department_head',id:'head',params:{announcementId},body:{is_pinned:'1'}})).statusCode,200);
+  assert.equal(sql.prepare('SELECT is_pinned FROM announcements WHERE public_id=?').get(announcementId).is_pinned,1);
+  assert(emissions.slice(pinStart).every(row=>row.event==='announcements_changed'));
+  assert(emissions.length>pinStart);
+  const department=await invoke(createAnnouncement,{role:'department_head',id:'head',body:{category_id:2,title:'Dept',content:'Body'}});
+  assert.equal((await invoke(togglePinAnnouncement,{role:'department_head',id:'other-head',department_id:1,params:{announcementId:department.body.id},body:{is_pinned:1}})).statusCode,404);
+  assert.equal((await invoke(togglePinAnnouncement,{role:'admin',id:'author',params:{announcementId:department.body.id},body:{is_pinned:1}})).statusCode,200);
+}));
+
+test('pinning a targeted post denies unrelated heads and Registrar Department access',async()=>fixture(async({sql,invoke})=>{
+  sql.prepare('INSERT INTO users(id,role_id) VALUES(?,3)').run(taggedStudent);
+  sql.prepare('INSERT INTO user_profiles VALUES(?,?,?)').run(taggedStudent,'Tagged','Student');
+  sql.prepare('INSERT INTO student_academic_info VALUES(10,?,1)').run(taggedStudent);
+  sql.prepare("INSERT INTO internship_records VALUES(?,'employer','ongoing',NULL)").run(taggedStudent);
+  const created=await invoke(createAnnouncement,{body:{category_id:1,title:'Targeted',content:'Body',tagged_student_ids:[taggedStudent]}});
+  for(const [id,status] of [['head',200],['other-head',404]])assert.equal((await invoke(togglePinAnnouncement,{role:'department_head',id,params:{announcementId:created.body.id},body:{is_pinned:1}})).statusCode,status);
+  sql.exec("INSERT INTO departments VALUES(3,'Registrar','REG'); UPDATE dept_heads_background_info SET department_id=3 WHERE user_id='other-head';");
+  const dept=await invoke(createAnnouncement,{role:'department_head',id:'head',body:{category_id:2,title:'Dept',content:'Body'}});
+  assert.equal((await invoke(togglePinAnnouncement,{role:'department_head',id:'other-head',department_code:'CCS',params:{announcementId:dept.body.id},body:{is_pinned:1}})).statusCode,404);
 }));
