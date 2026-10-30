@@ -4,7 +4,14 @@ import { invalidateNotificationsCache } from "../../../config/cache/notification
 import { db } from "../../../config/db.js";
 
 function notificationVisibility(role, prefix = "") {
-  if (role === "employer") return `${prefix}type NOT IN ('announcement', 'calendar_schedule')`;
+  if (role === "employer") {
+    const owner = prefix || "notifications.";
+    return `${prefix}type != 'calendar_schedule' AND (${prefix}type != 'announcement' OR EXISTS (
+      SELECT 1 FROM announcements shared_announcement
+      WHERE shared_announcement.visible_to_employers = 1
+        AND (shared_announcement.public_id = ${owner}link_uuid OR CAST(shared_announcement.id AS CHAR) = ${owner}link)
+    ))`;
+  }
   if (role === "student") return `${prefix}type NOT IN ('evaluation_submitted', 'evaluation_deleted') AND ${prefix}type NOT IN ('feedback_mentioned', 'feedback_reply', 'feedback_status')`;
   return "1 = 1";
 }
@@ -162,9 +169,6 @@ export const getAllNotifications = async (req, res) => {
 // Resolve target existence and category access at click time. Cached inbox rows
 // may outlive the announcement; legacy numeric links and UUID links are supported.
 export const openAnnouncementNotification = async (req, res) => {
-  if (req.verifiedUser?.role === "employer") {
-    return res.status(403).json({ success: false, state: "unavailable", error: "Announcements are not available to employer accounts." });
-  }
   const notificationId = req.params.notificationId;
   if (!/^[1-9]\d*$/.test(notificationId)) {
     return res.status(400).json({ error: "Invalid notification ID." });
@@ -199,7 +203,7 @@ export const openAnnouncementNotification = async (req, res) => {
     let announcement = null;
     if (hasUuid || hasLegacyId) {
       const [rows] = await connection.execute(
-        `SELECT a.public_id, ac.name AS category,
+        `SELECT a.public_id, a.visible_to_employers, ac.name AS category,
                 authorDept.department_id AS author_department_id
            FROM announcements a
            LEFT JOIN announcement_categories ac ON ac.id = a.category_id
@@ -230,8 +234,9 @@ export const openAnnouncementNotification = async (req, res) => {
       viewerDepartmentId != null &&
       String(announcement.author_department_id) === String(viewerDepartmentId)
     );
-    if (!announcement.category ||
-        (announcement.category === "Department" && !canSeeDepartmentPost)) {
+    if (!announcement.category || (role === "employer"
+      ? Number(announcement.visible_to_employers) !== 1
+      : (announcement.category === "Department" && !canSeeDepartmentPost))) {
       await connection.rollback();
       return res.status(403).json({
         success: false,

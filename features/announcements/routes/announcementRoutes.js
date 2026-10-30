@@ -25,7 +25,7 @@ const upload = multer({ storage: storage });
 announcementRoutes.get(
   "/announcements/categories",
   verifyUser,
-  verifyRole(["student", "department_head", "admin"]),
+  verifyRole(["student", "employer", "department_head", "admin"]),
   generalLimiter,
   cacheRoute(300),
   getAnnouncementCategories,
@@ -34,7 +34,7 @@ announcementRoutes.get(
 announcementRoutes.get(
   "/announcements/history",
   verifyUser,
-  verifyRole(["student", "department_head", "admin"]),
+  verifyRole(["student", "employer", "department_head", "admin"]),
   paginationLimiter,
   cacheRoute(30),
   getAllAnnouncements,
@@ -43,7 +43,7 @@ announcementRoutes.get(
 announcementRoutes.get(
   "/announcements/:announcementId",
   verifyUser,
-  verifyRole(["student", "department_head", "admin"]),
+  verifyRole(["student", "employer", "department_head", "admin"]),
   generalLimiter,
   getAnnouncementById,
 );

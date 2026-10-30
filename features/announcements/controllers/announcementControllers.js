@@ -4,6 +4,7 @@ import { invalidateNotificationsCache } from "../../../config/cache/notification
 import { invalidateActivityLogsCache } from "../../../config/cache/activityLogsCache.js";
 import { db } from "../../../config/db.js";
 import { randomUUID } from "node:crypto";
+import { employerVisibility } from "../employerVisibility.js";
 
 function isValidEventDate(value) {
   if (!/^[1-9]\d{3}-\d{2}-\d{2}$/.test(value)) return false;
@@ -30,7 +31,6 @@ function eventRangeError(start, end) {
 }
 
 export const getAnnouncementCategories = async (req, res) => {
-  if (req.verifiedUser?.role === "employer") return res.status(403).json({ error: "Announcements are not available to employer accounts." });
   try {
     const [rows] = await db.execute(`SELECT * FROM announcement_categories`);
 
@@ -43,7 +43,6 @@ export const getAnnouncementCategories = async (req, res) => {
 };
 
 export const getAllAnnouncements = async (req, res) => {
-  if (req.verifiedUser?.role === "employer") return res.status(403).json({ error: "Announcements are not available to employer accounts." });
   try {
     const {
       id: userId,
@@ -73,11 +72,11 @@ export const getAllAnnouncements = async (req, res) => {
       params.push(searchParam, searchParam);
     }
 
-    // Employers are rejected before this query. Registrar heads are restricted to
-    // General above; other allowed viewers can read non-Department posts.
-    // Department visibility always applies, independently of search/category filters:
-    // admins see all, while other viewers must match the author's department.
-    filterClauses.push(
+    // Employer opt-in is independent of academic department scope. Other readers
+    // retain the existing category/department rules, including registrar restrictions.
+    if (role === "employer") filterClauses.push("a.visible_to_employers = 1");
+    else {
+      filterClauses.push(
       `(
         ac.name != 'Department'
         OR (
@@ -86,7 +85,8 @@ export const getAllAnnouncements = async (req, res) => {
         )
       )`,
     );
-    params.push(role, role, viewerDepartmentId);
+      params.push(role, role, viewerDepartmentId);
+    }
 
     const whereString = `AND ${filterClauses.join(" AND ")}`;
 
@@ -98,7 +98,7 @@ export const getAllAnnouncements = async (req, res) => {
       SELECT a.public_id AS id, a.author_id, a.title, a.content,
              DATE_FORMAT(a.event_date, '%Y-%m-%d') AS event_date,
              DATE_FORMAT(a.event_end_date, '%Y-%m-%d') AS event_end_date,
-             a.is_pinned, a.created_at, a.updated_at,
+             a.visible_to_employers, a.is_pinned, a.created_at, a.updated_at,
              r.role, up.first_name, up.last_name,
              ac.id AS category_id, ac.name AS category, ac.color, ac.text_color
       FROM announcements AS a
@@ -123,7 +123,7 @@ export const getAllAnnouncements = async (req, res) => {
       SELECT a.public_id AS id, a.author_id, a.title, a.content,
              DATE_FORMAT(a.event_date, '%Y-%m-%d') AS event_date,
              DATE_FORMAT(a.event_end_date, '%Y-%m-%d') AS event_end_date,
-             a.is_pinned, a.created_at, a.updated_at,
+             a.visible_to_employers, a.is_pinned, a.created_at, a.updated_at,
              r.role, up.first_name, up.last_name,
              ac.id AS category_id, ac.name AS category, ac.color, ac.text_color,
              (${countQuery}) AS total_regular
@@ -176,7 +176,6 @@ export const getAllAnnouncements = async (req, res) => {
 // rules as the feed, returning the public ID. The board still loads preceding
 // feed pages to preserve the card's pinned/regular position.
 export const getAnnouncementById = async (req, res) => {
-  if (req.verifiedUser?.role === "employer") return res.status(403).json({ error: "Announcements are not available to employer accounts." });
   const { announcementId } = req.params;
   const isLegacyId = /^[1-9]\d*$/.test(announcementId);
   const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(announcementId);
@@ -192,7 +191,7 @@ export const getAnnouncementById = async (req, res) => {
       `SELECT a.public_id AS id, a.author_id, a.title, a.content,
               DATE_FORMAT(a.event_date, '%Y-%m-%d') AS event_date,
               DATE_FORMAT(a.event_end_date, '%Y-%m-%d') AS event_end_date,
-              a.is_pinned, a.created_at, a.updated_at,
+              a.visible_to_employers, a.is_pinned, a.created_at, a.updated_at,
               r.role, up.first_name, up.last_name,
               ac.id AS category_id, ac.name AS category, ac.color, ac.text_color
        FROM announcements a
@@ -203,10 +202,9 @@ export const getAnnouncementById = async (req, res) => {
        LEFT JOIN dept_heads_background_info authorDept ON authorDept.user_id = a.author_id
        WHERE ${isLegacyId ? "a.id" : "a.public_id"} = ?
          ${isRegistrar ? "AND ac.name = 'General'" : ""}
-         AND (ac.name != 'Department'
-              OR (? != 'employer' AND (? = 'admin' OR authorDept.department_id = ?)))
+         AND ${role === "employer" ? "a.visible_to_employers = 1" : "(ac.name != 'Department' OR (? != 'employer' AND (? = 'admin' OR authorDept.department_id = ?)))"}
        LIMIT 1`,
-      [announcementId, role, role, departmentId],
+      role === "employer" ? [announcementId] : [announcementId, role, role, departmentId],
     );
     if (!rows.length) return res.status(404).json({ error: "Announcement not found." });
     return res.json(rows[0]);
@@ -228,6 +226,9 @@ export const createAnnouncement = async (req, res) => {
     const category_id = parseInt(data.category_id);
     const eventDate = parseEventDate(data.event_date);
     const eventEndDate = parseEventDate(data.event_end_date);
+    let visibleToEmployers;
+    try { visibleToEmployers = employerVisibility(data.visible_to_employers); }
+    catch (error) { return res.status(400).json({ error: error.message }); }
 
     if (!category_id || !title || !content) {
       return res.status(400).json({
@@ -285,10 +286,10 @@ export const createAnnouncement = async (req, res) => {
     const publicId = randomUUID();
     const [result] = await connection.execute(
       `
-        INSERT INTO announcements (public_id, author_id, category_id, title, content, event_date, event_end_date)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO announcements (public_id, author_id, category_id, title, content, event_date, event_end_date, visible_to_employers)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `,
-      [publicId, userId, category_id, title, content, eventDate, eventEndDate],
+      [publicId, userId, category_id, title, content, eventDate, eventEndDate, visibleToEmployers],
     );
 
     if (result.affectedRows === 0) {
@@ -296,16 +297,15 @@ export const createAnnouncement = async (req, res) => {
       return res.status(400).json({ error: "Posting announcement failed." });
     }
 
-    // Employers never receive announcements. Department posts also scope
-    // students and department heads to the author's department.
+    // School audiences keep their scope; opted-in posts additionally notify employers.
     let recipients;
 
     if (!isDepartmentCategory) {
       [recipients] = await connection.execute(
         `SELECT u.id FROM users u
          JOIN roles r ON r.id = u.role_id
-         WHERE u.id != ? AND r.role != 'employer'`,
-        [userId],
+         WHERE u.id != ? AND (r.role != 'employer' OR ? = 1)`,
+        [userId, visibleToEmployers],
       );
     } else {
       const [deptHeadRows] = await connection.execute(
@@ -330,13 +330,12 @@ export const createAnnouncement = async (req, res) => {
          ) sai ON sai.user_id = u.id
          LEFT JOIN dept_heads_background_info dhbi ON dhbi.user_id = u.id
          WHERE u.id != ?
-           AND r.role != 'employer'
-           AND (
+           AND ((r.role != 'employer' AND (
              r.role NOT IN ('student', 'department_head')
              OR (r.role = 'student' AND sai.department_id = ?)
              OR (r.role = 'department_head' AND dhbi.department_id = ?)
-           )`,
-        [userId, departmentId, departmentId],
+           )) OR (r.role = 'employer' AND ? = 1))`,
+        [userId, departmentId, departmentId, visibleToEmployers],
       );
     }
 
@@ -371,6 +370,7 @@ export const createAnnouncement = async (req, res) => {
             title,
             event_date: eventDate,
             event_end_date: eventEndDate,
+            visible_to_employers: visibleToEmployers,
             recipient_count: recipients.length,
           }),
         ],
@@ -424,6 +424,10 @@ export const updateAnnouncement = async (req, res) => {
     const finalCategoryId = category_id ? Number(category_id) : null;
     const hasEventDate = Object.hasOwn(req.body, "event_date");
     const hasEventEndDate = Object.hasOwn(req.body, "event_end_date");
+    const hasEmployerVisibility = Object.hasOwn(req.body, "visible_to_employers");
+    let visibleToEmployers;
+    try { visibleToEmployers = employerVisibility(req.body.visible_to_employers); }
+    catch (error) { return res.status(400).json({ error: error.message }); }
     const eventDate = parseEventDate(event_date);
     const eventEndDate = parseEventDate(event_end_date);
 
@@ -443,7 +447,7 @@ export const updateAnnouncement = async (req, res) => {
     // Lock the author's current row before resolving partial updates, validating the
     // combined date range and detecting a change into Department scope.
     const [existingRows] = await connection.execute(
-      `SELECT a.category_id, ac.name AS category_name, a.title,
+      `SELECT a.category_id, ac.name AS category_name, a.title, a.visible_to_employers,
               DATE_FORMAT(a.event_date, '%Y-%m-%d') AS event_date,
               DATE_FORMAT(a.event_end_date, '%Y-%m-%d') AS event_end_date
        FROM announcements a
@@ -459,6 +463,9 @@ export const updateAnnouncement = async (req, res) => {
         error: "Announcement not found or unauthorized to edit.",
       });
     }
+
+    const previousEmployerVisibility = Number(existingRows[0].visible_to_employers) === 1;
+    if (!hasEmployerVisibility) visibleToEmployers = previousEmployerVisibility ? 1 : 0;
 
     // Omitted dates normally keep their saved values. Clearing the start also clears
     // an omitted end; validate the merged range before writing either field.
@@ -521,13 +528,14 @@ export const updateAnnouncement = async (req, res) => {
          content = COALESCE(?, content), 
          event_date = IF(? = 1, ?, event_date),
          event_end_date = IF(? = 1, ?, event_end_date),
+         visible_to_employers = ?,
          updated_at = CURRENT_TIMESTAMP
        WHERE public_id = ? AND author_id = ?`,
       [
         finalCategoryId, title || null, content || null,
         hasEventDate ? 1 : 0, eventDate,
         writeEventEndDate ? 1 : 0, nextEventEndDate,
-        announcementId, userId,
+        visibleToEmployers, announcementId, userId,
       ],
     );
 
@@ -589,22 +597,33 @@ export const updateAnnouncement = async (req, res) => {
         [userId, departmentId, departmentId],
       );
 
-      if (recipients.length > 0) {
-        const senderName = `${updatedData[0].first_name} ${updatedData[0].last_name}`;
-        const values = recipients.map((r) => [
-          r.id,
-          userId,
-          "announcement",
-          "New Announcement",
-          `Posted by ${senderName}`,
-          announcementId,
-        ]);
+    }
 
-        await connection.query(
-          `INSERT INTO notifications (user_id, sender_id, type, title, message, link_uuid) VALUES ?`,
-          [values],
-        );
-      }
+    let employerAudience = [];
+    if (previousEmployerVisibility || visibleToEmployers) {
+      [employerAudience] = await connection.execute(
+        "SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id WHERE r.role = 'employer' AND u.id != ?", [userId]);
+    }
+    if (visibleToEmployers && !previousEmployerVisibility) {
+      const [newEmployers] = await connection.execute(
+        `SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id
+         WHERE r.role = 'employer' AND u.id != ? AND NOT EXISTS (
+           SELECT 1 FROM notifications n WHERE n.user_id = u.id AND n.type = 'announcement' AND n.link_uuid = ?
+         )`, [userId, announcementId]);
+      recipients.push(...newEmployers);
+    } else if (!visibleToEmployers && previousEmployerVisibility) {
+      await connection.execute(
+        `DELETE FROM notifications WHERE type = 'announcement' AND
+           (link_uuid = ? OR link = (SELECT CAST(id AS CHAR) FROM announcements WHERE public_id = ?))
+           AND user_id IN (SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id WHERE r.role = 'employer')`,
+        [announcementId, announcementId]);
+    }
+    recipients = [...new Map(recipients.map(recipient => [recipient.id, recipient])).values()];
+    if (recipients.length > 0) {
+      const senderName = `${updatedData[0].first_name} ${updatedData[0].last_name}`;
+      await connection.query(
+        "INSERT INTO notifications (user_id, sender_id, type, title, message, link_uuid) VALUES ?",
+        [recipients.map(recipient => [recipient.id, userId, "announcement", "New Announcement", `Posted by ${senderName}`, announcementId])]);
     }
 
     try {
@@ -612,6 +631,7 @@ export const updateAnnouncement = async (req, res) => {
       if (category_id !== undefined) changedFields.push("category_id");
       if (title !== undefined) changedFields.push("title");
       if (content !== undefined) changedFields.push("content");
+      if (hasEmployerVisibility) changedFields.push("visible_to_employers");
       if (hasEventDate) changedFields.push("event_date");
       if (writeEventEndDate) changedFields.push("event_end_date");
 
@@ -627,6 +647,7 @@ export const updateAnnouncement = async (req, res) => {
           JSON.stringify({
             changed_fields: changedFields,
             title: updatedData[0].title,
+            visible_to_employers: visibleToEmployers,
             became_department_category:
               !wasDepartmentCategory && willBeDepartmentCategory,
             recipient_count: recipients.length,
@@ -645,6 +666,10 @@ export const updateAnnouncement = async (req, res) => {
     invalidateNotificationsCache();
 
     invalidateActivityLogsCache();
+
+    for (const employer of employerAudience) {
+      req.app.get("socketio").to(`user-${employer.id}`).emit("announcements_changed", { id: announcementId });
+    }
 
     if (recipients.length > 0) {
       const io = req.app.get("socketio");

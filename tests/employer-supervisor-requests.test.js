@@ -16,6 +16,7 @@ async function fixture(run) {
     CREATE TABLE user_profiles (user_id TEXT, first_name TEXT, last_name TEXT);
     CREATE TABLE student_academic_info (id INTEGER PRIMARY KEY, user_id TEXT, course_id INTEGER);
     CREATE TABLE courses (id INTEGER PRIMARY KEY, course_name TEXT, short_name TEXT);
+    CREATE TABLE announcements (id INTEGER, public_id TEXT, visible_to_employers INTEGER DEFAULT 0);
     CREATE TABLE notifications (id INTEGER PRIMARY KEY, user_id TEXT, sender_id TEXT, type TEXT, title TEXT, message TEXT, link TEXT, link_uuid TEXT, is_read INTEGER DEFAULT 0, created_at TEXT);
     INSERT INTO courses VALUES (1,'Computer Science','BSCS'),(2,'Hospitality','BSHM');
   `);
@@ -117,6 +118,20 @@ test("unanswered active notification deletion is denied even through a direct AP
   const answered = await invoke(getAllNotifications);
   assert.equal(answered.body.data[0].actionable, false); assert.equal(answered.body.data[0].can_delete, true);
   assert.equal((await invoke(deleteNotification, {}, "employer", { notificationId: "1" })).statusCode, 200);
+}));
+
+test("employer inbox counts and rows follow current announcement visibility without exposing calendar alerts", async () => fixture(async ({ invoke, sql }) => {
+  sql.exec(`INSERT INTO announcements VALUES(1,'shared-general',1),(2,'private',0),(3,'shared-department',1);
+    INSERT INTO notifications VALUES(1,'employer',NULL,'announcement','Shared','Visible',NULL,'shared-general',0,'2026-10-30'),
+      (2,'employer',NULL,'announcement','Private','Hidden',NULL,'private',0,'2026-10-30'),
+      (3,'employer',NULL,'announcement','Department','Visible',NULL,'shared-department',0,'2026-10-30'),
+      (4,'employer',NULL,'calendar_schedule','Calendar','Hidden',NULL,NULL,0,'2026-10-30');`);
+  let res = await invoke(getAllNotifications);
+  assert.equal(res.body.totalRecords, 2); assert.equal(res.body.unreadCount, 2);
+  assert.deepEqual(res.body.data.map(row => row.title).sort(), ["Department", "Shared"]);
+  sql.exec("UPDATE announcements SET visible_to_employers=0 WHERE id=1");
+  res = await invoke(getAllNotifications);
+  assert.equal(res.body.totalRecords, 1); assert.equal(res.body.unreadCount, 1);
 }));
 
 test("declined, cancelled, obsolete and ordinary alerts can be deleted", async () => fixture(async ({ add, invoke, sql }) => {

@@ -35,19 +35,20 @@ beforeEach(() => {
     if (sql.includes("SELECT * FROM announcement_categories")) return [mode === "empty" ? [] : [{ id: 1, name: "General" }]];
     if (sql.includes("LIMIT 1") && (sql.includes("WHERE a.public_id = ?") || sql.includes("WHERE a.id = ?"))) {
       const [target, role, duplicateRole, department] = params;
+      const employer = sql.includes("a.visible_to_employers = 1");
       assert.equal(duplicateRole, role);
-      assert.ok(sql.includes("authorDept.department_id = ?"));
+      assert.ok(sql.includes("authorDept.department_id = ?") || sql.includes("a.visible_to_employers = 1"));
       const row = fixtures.find((item) => String(sql.includes("WHERE a.id = ?") ? item.id : item.public_id) === String(target));
       return [row && (!sql.includes("ac.name = 'General'") || row.category === "General") &&
-        (row.category !== "Department" || (role !== "employer" && (role === "admin" || row.department === department)))
+        (employer ? row.visible_to_employers === 1 : (row.category !== "Department" || (role !== "employer" && (role === "admin" || row.department === department))))
         ? [{ ...row, id: row.public_id }] : []];
     }
-    assert.ok(sql.includes("authorDept.department_id = ?"));
+    assert.ok(sql.includes("authorDept.department_id = ?") || sql.includes("a.visible_to_employers = 1"));
     const regular = sql.includes("LIMIT ? OFFSET ?");
     const filters = regular ? params.slice((params.length - 2) / 2, -2) : params;
     const [role, duplicateRole, department] = filters.slice(-3);
     assert.equal(duplicateRole, role);
-    let rows = mode === "empty" ? [] : fixtures.filter(row => row.category !== "Department" || (role !== "employer" && (role === "admin" || row.department === department)));
+    let rows = mode === "empty" ? [] : fixtures.filter(row => sql.includes("a.visible_to_employers = 1") ? row.visible_to_employers === 1 : row.category !== "Department" || (role !== "employer" && (role === "admin" || row.department === department)));
     if (sql.includes("ac.name = 'General'")) rows = rows.filter(row => row.category === "General");
     let index = 0;
     if (sql.includes("ac.name = ?")) { const category = filters[index++]; rows = rows.filter(row => row.category === category); }
@@ -118,18 +119,13 @@ test("feed caches for 30 seconds and categories for five minutes", async (t) => 
   }
 });
 
-test("employers cannot read announcement feeds, categories or links even after allowed readers prime caches", async t => {
+test("employers have separate read caches and cannot resolve unshared announcement links", async t => {
   const get = await client(t);
   for (const path of ["history", "categories", fixtures[0].public_id, "1"]) {
     assert.equal((await get(path)).status, 200);
-    const before = calls;
-    assert.equal((await get(path, "employer")).status, 403);
-    assert.equal(calls, before);
-  }
-  for (const handler of [announcements.getAllAnnouncements, announcements.getAnnouncementCategories, announcements.getAnnouncementById]) {
-    const before = calls, res = response();
-    await handler({ verifiedUser: { role: "employer" } }, res);
-    assert.equal(res.statusCode, 403); assert.equal(calls, before);
+    const employer = await get(path, "employer");
+    assert.equal(employer.status, ["history", "categories"].includes(path) ? 200 : 404);
+    if (path === "history") { const body = await employer.json(); assert.deepEqual(body.pinned, []); assert.deepEqual(body.regular, []); }
   }
 });
 
@@ -151,6 +147,44 @@ test("ordinary department heads keep viewing General posts but cannot create or 
   const req = request(); req.verifiedUser.department_code = "CCS"; delete req.body.category_id;
   const res = response(); await announcements.updateAnnouncement(req, res);
   assert.equal(res.statusCode, 403); // Omitting the category cannot retain a legacy General post.
+});
+
+test("employer feeds and direct links expose only explicitly shared General/Department posts", async t => {
+  fixtures[1].visible_to_employers = 1;
+  const get = await client(t);
+  const body = await (await get("history", "employer")).json();
+  assert.deepEqual(body.pinned, []); assert.equal(body.totalRecords, 1);
+  assert.deepEqual(body.regular.map(row => row.public_id), [fixtures[1].public_id]);
+  assert.equal((await get(fixtures[1].public_id, "employer")).status, 200);
+  assert.equal((await get(fixtures[2].public_id, "employer")).status, 404);
+});
+
+test("employers still cannot create, edit, pin or delete announcements", async t => {
+  const get = await client(t);
+  const history = await get("history", "employer");
+  const before = calls;
+  for (const [method, path] of [["POST", "/announcement/new"], ["PATCH", `/announcements/${announcementId}`], ["PATCH", `/announcements/pin/${announcementId}`], ["DELETE", `/announcement/${announcementId}`]]) {
+    const url = new URL(history.url); url.pathname = `/api/v1${path}`;
+    const res = await fetch(url, { method, headers: { Authorization: `Bearer ${signAccessToken({ id: "employer", role: "employer" })}` } });
+    assert.equal(res.status, 403);
+  }
+  assert.equal(calls, before);
+});
+
+test("employer visibility defaults off, persists explicit create/edit values and rejects malformed flags", async () => {
+  for (const [handler, slot] of [[announcements.createAnnouncement, 7], [announcements.updateAnnouncement, 7]]) {
+    for (const [value, expected] of [[undefined, 0], ["0", 0], ["1", 1], [true, 1]]) {
+      seed();
+      const res = response(); await handler(request(value === undefined ? {} : { visible_to_employers: value }), res);
+      assert(res.statusCode < 300); assert.equal(announcementWrite.params[slot], expected);
+    }
+    const res = response(); await handler(request({ visible_to_employers: "everyone" }), res);
+    assert.equal(res.statusCode, 400);
+  }
+  existingEventDates.visible_to_employers = 1;
+  seed();
+  const res = response(); await announcements.updateAnnouncement(request({ title: "Only title" }), res);
+  assert.equal(res.statusCode, 200); assert.equal(announcementWrite.params[7], 1);
 });
 
 test("General and department announcement recipient queries exclude employers before notification and socket delivery", async () => {
@@ -204,7 +238,7 @@ test("UUID and legacy announcement links load only posts visible to the viewer",
   assert.equal((await (await get(uuid, "student", 1)).json()).id, uuid);
   assert.equal((await get("2", "student", 1)).status, 200);
   assert.equal((await get(uuid, "student", 2)).status, 404);
-  assert.equal((await get(uuid, "employer", 1)).status, 403);
+  assert.equal((await get(uuid, "employer", 1)).status, 404);
   assert.equal((await get(uuid, "admin", null)).status, 200);
   assert.equal((await get("not-an-id", "student", 1)).status, 400);
 });

@@ -63,7 +63,7 @@ test("employers cannot open previously delivered General or Department announcem
   for (const category of ["General", "Department"]) {
     const { res, calls, committed } = await invoke({ role: "employer", announcement: { public_id: uuid, category, author_department_id: 1 } });
     assert.equal(res.statusCode, 403); assert.equal(res.body.state, "unavailable");
-    assert.equal(calls.length, 0); assert.equal(committed, false);
+    assert.equal(calls.length, 2); assert.equal(committed, false);
   }
 });
 
@@ -117,4 +117,11 @@ test("a lookup failure leaves the notification intact", async () => {
   assert.equal(res.statusCode, 500);
   assert.equal(rolledBack, true);
   assert.equal(calls.some(({ sql }) => sql.includes("DELETE FROM notifications")), false);
+});
+
+test("employers can open opted-in General and Department announcements", async () => {
+ for (const category of ["General", "Department"]) {
+  const { res, committed } = await invoke({ role: "employer", announcement: { public_id: uuid, category, author_department_id: 2, visible_to_employers: 1 } });
+  assert.equal(res.statusCode, 200); assert.equal(committed, true);
+ }
 });

@@ -77,20 +77,17 @@ Use a single template for invitations and recovery:
 - From Email: the connected service's authenticated/default sender; do not set
   an unrelated address from application input.
 
-Suggested HTML body (normal double-brace variables):
+The maintained HTML body is [emailjs-account-template.html](emailjs-account-template.html). Open the Code Editor under Edit Content, replace the HTML with that file, choose Apply Changes, then Save the template. Keep the To Email and Subject variables above and the authenticated default sender. The same HTML supports invitations and recovery without backend or environment changes.
 
-```html
-<div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;padding:24px">
-  <h2 style="color:#800000">{{heading}}</h2>
-  <p>Hello {{username}},</p>
-  <p>{{instructions}}</p>
-  <p>Your EU-Connect username is <strong>{{username}}</strong>.</p>
-  <p><a href="{{setup_url}}" style="display:inline-block;background:#800000;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none">Set password</a></p>
-  <p>This link expires in {{expiry_text}} and works once.</p>
-  <p>After saving your password, sign in with your username and new password.</p>
-  <p>If the link expires, request another email through Forgot Password or ask your administrator to resend your invitation.</p>
-</div>
-```
+The design uses an EU monogram, restrained maroon accents, a letter-style heading, account details, a password action and a visible copyable URL. It uses inline email-compatible tables and system fonts without remote images, scripts, tracking pixels or external font requests. Keep normal double-brace variables: heading, username, instructions, expiry_text and setup_url. Never paste a real token into the maintained file or preview examples.
+
+An EmailJS dashboard save updates future emails; a Git change alone does not update EmailJS. Previously delivered messages keep their old content. Inspect Desktop and Mobile previews before saving. Preview variables are not real account tokens. Do not send test mail to other users without authorization.
+
+### Spam placement
+
+A more specific design does not guarantee inbox delivery. Gmail's similarity warning does not establish that the HTML layout alone caused classification. Sender reputation, authentication, links and recipient feedback also matter. Preserve the connected mailbox's authenticated/default From Email rather than impersonating a school-domain address. For a message known to be legitimate, the recipient can use Report not spam. Check Gmail's message details/authentication and provider delivery history if classification continues.
+
+References: [Gmail spam guidance](https://support.google.com/mail/answer/1366858) and [message authentication](https://support.google.com/mail/answer/180707).
 
 The backend supplies every parameter. The password itself is never emailed.
 Do not add passwords, raw template HTML supplied by clients, or credentials to
