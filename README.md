@@ -29,6 +29,16 @@ The backend serves students, employers/company supervisors, department heads, re
 
 ## Features
 
+### Bulk DTR Location Assignment
+
+All DTR location management controllers and routes now belong to `features/dtr-locations`, including the existing student lookup and individual profile assignment/removal endpoints. Their API URLs, authorization and behavior remain unchanged; attendance itself stays in `features/dtr`.
+
+The paired frontend `/dtr-locations` page manages one or up to 100 ongoing internship assignments. Admins have department/dependent course filters; non-Registrar heads are scoped to current department and course; employers to their assigned ongoing interns. APIs recheck scope before scoped pin grouping and again under transaction locks on save. Reuse `dtr_locations` for overrides, the existing attendance checks and `dtr_location_set` notifications. Changed students receive instructions; staff actions group one notice per assigned employer. Unexpected database failures roll back assignments and notification writes together; inaccessible/stale selections receive individual failure results.
+
+See [API, relationships and deployment details](features/dtr-locations/README.md). First run [the read-only schema verification migration](scripts/2026-10-30-bulk-dtr-locations.sql). No schema changes/backfill, environment variables or dependencies are required for the inspected database. Deploy frontend/backend together. Never import a historical full database dump to install this feature.
+
+### Other features
+
 - JWT login, access-token verification, refresh-token rotation, logout, invitation onboarding, and password recovery links through EmailJS.
 - Account creation, profile management, account activation/deactivation, and academic reference data.
 - Every newly created account requires a valid email and username. The backend creates a pending account without an administrator-selected password and emails a one-use setup link. Pending accounts cannot sign in or refresh sessions. Existing accounts retain access. Apply `scripts/2026-10-29-account-invitations.sql`, configure the backend EmailJS service/template/keys, and deploy the matching frontend. Setup, resend, failure handling and a ready-to-copy email template are documented in [account-invitations.md](docs/account-invitations.md).
@@ -651,3 +661,5 @@ The branded EmailJS invitation/recovery body is maintained in [emailjs-account-t
 ### Optional employer announcement audience (October 30, 2026)
 
 Apply backend `scripts/2026-10-30-announcement-employer-visibility.sql` first, then deploy both applications. It adds `announcements.visible_to_employers TINYINT(1) NOT NULL DEFAULT 0`, keeping all existing posts hidden from employers. Allowed authors can opt in on create/edit; flagged General or Department posts are visible to all employers, independent of academic department. Employers have read-only feed, pinned/search/filter and notification-link access. School audiences and posting categories remain unchanged. Granting visibility creates employer alerts; revoking it removes employer announcement alerts and refreshes viewer-scoped caches after commit. Ordinary edits do not duplicate employer alerts. Calendar access is unchanged. No package or environment updates are required.
+
+Department-category announcement cards and expanded content show the author department name and acronym to employer and admin viewers. The API adds nullable author_department_name/author_department_code to pinned, regular, direct-link and update responses using the author's current department assignment, consistent with existing feed scope. Missing details display a dash; General posts omit the label. No additional migration or environment changes; deploy both applications.

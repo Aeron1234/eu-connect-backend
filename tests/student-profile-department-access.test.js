@@ -19,6 +19,7 @@ const { default: weekly } = await import("../features/weekly-narratives/routes/w
 const { default: daily } = await import("../features/narratives/routes/narrativeRoutes.js");
 const { default: evaluations } = await import("../features/evaluations/routes/studentEvaluationRoutes.js");
 const { signAccessToken } = await import("../config/jwt.js");
+const { default: locations } = await import('../features/dtr-locations/dtrLocationRoutes.js');
 const original = db.getConnection;
 let database, scopeError, scopeReads, privateReads;
 
@@ -45,7 +46,7 @@ beforeEach(() => {
 });
 after(async () => { db.getConnection = original; cache.close(); await db.end(); });
 async function client(t) {
-  const app = express(); app.use(express.json()); mountApiRoutes(app, [users, weekly, daily, evaluations]);
+  const app = express(); app.use(express.json()); mountApiRoutes(app, [users, weekly, daily, evaluations, locations]);
   const server = app.listen(0, "127.0.0.1"); await once(server, "listening");
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
   t.after(() => database.close());

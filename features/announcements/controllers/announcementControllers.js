@@ -100,6 +100,8 @@ export const getAllAnnouncements = async (req, res) => {
              DATE_FORMAT(a.event_end_date, '%Y-%m-%d') AS event_end_date,
              a.visible_to_employers, a.is_pinned, a.created_at, a.updated_at,
              r.role, up.first_name, up.last_name,
+             CASE WHEN ac.name = 'Department' THEN postingDepartment.name END AS author_department_name,
+             CASE WHEN ac.name = 'Department' THEN postingDepartment.code END AS author_department_code,
              ac.id AS category_id, ac.name AS category, ac.color, ac.text_color
       FROM announcements AS a
       INNER JOIN users AS u ON a.author_id = u.id
@@ -107,6 +109,7 @@ export const getAllAnnouncements = async (req, res) => {
       INNER JOIN user_profiles AS up ON a.author_id = up.user_id
       INNER JOIN announcement_categories AS ac ON a.category_id = ac.id
       ${departmentJoin}
+      LEFT JOIN departments postingDepartment ON postingDepartment.id = authorDept.department_id
       WHERE a.is_pinned = 1 ${whereString}
       ORDER BY a.created_at DESC
     `;
@@ -125,6 +128,8 @@ export const getAllAnnouncements = async (req, res) => {
              DATE_FORMAT(a.event_end_date, '%Y-%m-%d') AS event_end_date,
              a.visible_to_employers, a.is_pinned, a.created_at, a.updated_at,
              r.role, up.first_name, up.last_name,
+             CASE WHEN ac.name = 'Department' THEN postingDepartment.name END AS author_department_name,
+             CASE WHEN ac.name = 'Department' THEN postingDepartment.code END AS author_department_code,
              ac.id AS category_id, ac.name AS category, ac.color, ac.text_color,
              (${countQuery}) AS total_regular
       FROM announcements AS a
@@ -133,6 +138,7 @@ export const getAllAnnouncements = async (req, res) => {
       INNER JOIN user_profiles AS up ON a.author_id = up.user_id
       INNER JOIN announcement_categories AS ac ON a.category_id = ac.id
       ${departmentJoin}
+      LEFT JOIN departments postingDepartment ON postingDepartment.id = authorDept.department_id
       WHERE a.is_pinned = 0 ${whereString}
       ORDER BY a.created_at DESC
       LIMIT ? OFFSET ?
@@ -193,6 +199,8 @@ export const getAnnouncementById = async (req, res) => {
               DATE_FORMAT(a.event_end_date, '%Y-%m-%d') AS event_end_date,
               a.visible_to_employers, a.is_pinned, a.created_at, a.updated_at,
               r.role, up.first_name, up.last_name,
+             CASE WHEN ac.name = 'Department' THEN postingDepartment.name END AS author_department_name,
+             CASE WHEN ac.name = 'Department' THEN postingDepartment.code END AS author_department_code,
               ac.id AS category_id, ac.name AS category, ac.color, ac.text_color
        FROM announcements a
        JOIN users u ON u.id = a.author_id
@@ -200,6 +208,7 @@ export const getAnnouncementById = async (req, res) => {
        JOIN user_profiles up ON up.user_id = a.author_id
        JOIN announcement_categories ac ON ac.id = a.category_id
        LEFT JOIN dept_heads_background_info authorDept ON authorDept.user_id = a.author_id
+       LEFT JOIN departments postingDepartment ON postingDepartment.id = authorDept.department_id
        WHERE ${isLegacyId ? "a.id" : "a.public_id"} = ?
          ${isRegistrar ? "AND ac.name = 'General'" : ""}
          AND ${role === "employer" ? "a.visible_to_employers = 1" : "(ac.name != 'Department' OR (? != 'employer' AND (? = 'admin' OR authorDept.department_id = ?)))"}
@@ -551,12 +560,16 @@ export const updateAnnouncement = async (req, res) => {
               DATE_FORMAT(a.event_date, '%Y-%m-%d') AS event_date,
               DATE_FORMAT(a.event_end_date, '%Y-%m-%d') AS event_end_date,
               ac.name AS category, ac.color AS category_bg, ac.text_color AS category_fg,
+              CASE WHEN ac.name = 'Department' THEN postingDepartment.name END AS author_department_name,
+             CASE WHEN ac.name = 'Department' THEN postingDepartment.code END AS author_department_code,
               up.first_name, up.last_name, r.role
        FROM announcements a
        JOIN announcement_categories ac ON a.category_id = ac.id
        JOIN user_profiles up ON a.author_id = up.user_id
        JOIN users u ON a.author_id = u.id
        JOIN roles r ON u.role_id = r.id
+       LEFT JOIN dept_heads_background_info authorDept ON authorDept.user_id = a.author_id
+       LEFT JOIN departments postingDepartment ON postingDepartment.id = authorDept.department_id
        WHERE a.public_id = ?`,
       [announcementId],
     );

@@ -24,6 +24,7 @@ import accountRoutes from "./features/accounts/routes/accountRoutes.js";
 import rotationRoutes from "./features/internship-rotations/rotationRoutes.js";
 import internshipRecordRoutes from "./features/internship-records/routes/internshipRecordRoutes.js";
 import dtrRoutes from "./features/dtr/routes/dtrRoutes.js";
+import dtrLocationRoutes from "./features/dtr-locations/dtrLocationRoutes.js";
 import narrativeRoutes from "./features/narratives/routes/narrativeRoutes.js";
 import fileRoutes from "./features/documents/routes/fileRoutes.js";
 import notificationRoutes from "./features/notifications/routes/notificationRoutes.js";
@@ -114,6 +115,7 @@ mountApiRoutes(app, [
   rotationRoutes,
   internshipRecordRoutes,
   dtrRoutes,
+  dtrLocationRoutes,
   narrativeRoutes,
   weeklyNarrativeRoutes,
   summaryReportRoutes,

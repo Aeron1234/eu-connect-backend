@@ -16,6 +16,7 @@ async function fixture(run) {
     CREATE TABLE user_profiles(user_id TEXT, first_name TEXT, last_name TEXT);
     CREATE TABLE announcement_categories(id INTEGER, name TEXT, color TEXT, text_color TEXT);
     CREATE TABLE dept_heads_background_info(user_id TEXT, department_id INTEGER);
+    CREATE TABLE departments(id INTEGER PRIMARY KEY, name TEXT, code TEXT);
     CREATE TABLE student_academic_info(id INTEGER, user_id TEXT, department_id INTEGER);
     CREATE TABLE announcements(id INTEGER PRIMARY KEY AUTOINCREMENT, public_id TEXT, author_id TEXT, category_id INTEGER,
       title TEXT, content TEXT, event_date TEXT, event_end_date TEXT, visible_to_employers INTEGER NOT NULL DEFAULT 0,
@@ -27,6 +28,7 @@ async function fixture(run) {
     INSERT INTO user_profiles SELECT id,id,'User' FROM users;
     INSERT INTO announcement_categories VALUES(1,'General','red','white'),(2,'Department','blue','white');
     INSERT INTO dept_heads_background_info VALUES('head',1),('other-head',2);
+    INSERT INTO departments VALUES(1,'College of Computer Studies','CCS'),(2,'Other Department','OTHER');
     INSERT INTO student_academic_info VALUES(1,'student',1),(2,'other-student',2);`);
   const original = { execute: db.execute, getConnection: db.getConnection };
   const execute = async (statement, params = []) => {
@@ -65,10 +67,20 @@ test("opted-in General and Department announcements notify employers without bro
       if (category_id === 2) { assert(recipients.includes("student")); assert(!recipients.includes("other-student")); assert(!recipients.includes("other-head")); }
       const item = await invoke(getAnnouncementById, { role: "employer", id: "employer", params: { announcementId: created.body.id } });
       assert.equal(item.statusCode, visible_to_employers ? 200 : 404);
+      if (visible_to_employers) {
+        assert.equal(item.body.author_department_name, category_id === 2 ? "College of Computer Studies" : null);
+        assert.equal(item.body.author_department_code, category_id === 2 ? "CCS" : null);
+      }
     }
   }
   const feed = await invoke(getAllAnnouncements, { role: "employer", id: "employer", query: { search: "Shared" } });
   assert.equal(feed.body.totalRecords, 2); assert(feed.body.regular.every(row => row.visible_to_employers === 1));
+  assert.equal(feed.body.regular.find(row => row.category === "Department").author_department_code, "CCS");
+  sql.exec("UPDATE announcements SET is_pinned=1 WHERE category_id=2 AND visible_to_employers=1");
+  const pinned = await invoke(getAllAnnouncements, { role: "admin" });
+  assert.equal(pinned.body.pinned[0].author_department_name, "College of Computer Studies");
+  const updated = await invoke(updateAnnouncement, { role: "department_head", id: "head", params: { announcementId: pinned.body.pinned[0].id }, body: { title: "Updated Department notice" } });
+  assert.equal(updated.statusCode, 200); assert.equal(updated.body.data.author_department_code, "CCS");
 }));
 
 test("author edits grant/revoke employer access without duplicate alerts or removing school notifications", async () => fixture(async ({ sql, invoke, emissions }) => {

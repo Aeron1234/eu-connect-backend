@@ -21,9 +21,6 @@ import {
   getSearchedUser,
   getSearchedStudentDTRs,
   getSearchedStudentFiles,
-  setSearchedStudentDtrLocation,
-  removeSearchedStudentDtrLocation,
-  getSearchedStudentDtrLocation,
   uploadFileToSearchedStudent,
   deleteSearchedStudentFile,
   downloadSearchedStudentInternshipFile,
@@ -74,33 +71,11 @@ searchedUserRoutes.get(
   getSearchedStudentDTRs,
 );
 
-searchedUserRoutes.get(
-  "/searched-user/set-dtr-location/:studentId",
-  verifyUser,
-  verifyRole(["employer", "department_head", "admin"]),
-  generalLimiter,
-  requireStudentDepartmentAccess,
-  getSearchedStudentDtrLocation,
-);
 
-searchedUserRoutes.put(
-  "/searched-user/set-dtr-location/:searchedUserId",
-  verifyUser,
-  verifyRole(["employer", "department_head", "admin"]),
-  upload.none(),
-  strictLimiter,
-  requireStudentDepartmentAccess,
-  setSearchedStudentDtrLocation,
-);
 
-searchedUserRoutes.delete(
-  "/searched-user/set-dtr-location/:searchedUserId",
-  verifyUser,
-  verifyRole(["employer", "department_head", "admin"]),
-  strictLimiter,
-  requireStudentDepartmentAccess,
-  removeSearchedStudentDtrLocation,
-);
+
+
+
 
 searchedUserRoutes.get(
   "/searched-user/files/:searchedUserId",
