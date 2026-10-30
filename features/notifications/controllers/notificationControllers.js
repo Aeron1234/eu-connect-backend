@@ -1,3 +1,4 @@
+import { employerAnnouncementAccess, targetedSchoolAccess } from '../../announcements/studentTags.js';
 import { pendingSupervisorRequestSql } from "../../../config/supervisorRequestEligibility.js";
 import { reportError } from "../../../config/errorTracking.js";
 import { invalidateNotificationsCache } from "../../../config/cache/notificationsCache.js";
@@ -8,12 +9,14 @@ function notificationVisibility(role, prefix = "") {
     const owner = prefix || "notifications.";
     return `${prefix}type != 'calendar_schedule' AND (${prefix}type != 'announcement' OR EXISTS (
       SELECT 1 FROM announcements shared_announcement
-      WHERE shared_announcement.visible_to_employers = 1
+      WHERE ${employerAnnouncementAccess('shared_announcement', `${owner}user_id`)}
         AND (shared_announcement.public_id = ${owner}link_uuid OR CAST(shared_announcement.id AS CHAR) = ${owner}link)
     ))`;
   }
-  if (role === "student") return `${prefix}type NOT IN ('evaluation_submitted', 'evaluation_deleted') AND ${prefix}type NOT IN ('feedback_mentioned', 'feedback_reply', 'feedback_status')`;
-  return "1 = 1";
+  const owner = prefix || 'notifications.';
+  const targeting = ` AND (${prefix}type!='announcement' OR NOT EXISTS (SELECT 1 FROM announcements ta WHERE ta.tagged_students_only=1 AND (ta.public_id=${owner}link_uuid OR CAST(ta.id AS CHAR)=${owner}link) AND NOT ${targetedSchoolAccess('ta',`${owner}user_id`)}))`;
+  if (role === "student") return `${prefix}type NOT IN ('evaluation_submitted', 'evaluation_deleted') AND ${prefix}type NOT IN ('feedback_mentioned', 'feedback_reply', 'feedback_status')${targeting}`;
+  return "1 = 1" + targeting;
 }
 
 export const getUnreadNotificationCount = async (req, res) => {
@@ -203,14 +206,14 @@ export const openAnnouncementNotification = async (req, res) => {
     let announcement = null;
     if (hasUuid || hasLegacyId) {
       const [rows] = await connection.execute(
-        `SELECT a.public_id, a.visible_to_employers, ac.name AS category,
+        `SELECT a.public_id, a.tagged_students_only, (${targetedSchoolAccess('a','?')}) AS targeted_allowed, a.visible_to_employers, (${employerAnnouncementAccess('a', '?')}) AS employer_allowed, ac.name AS category,
                 authorDept.department_id AS author_department_id
            FROM announcements a
            LEFT JOIN announcement_categories ac ON ac.id = a.category_id
            LEFT JOIN dept_heads_background_info authorDept ON authorDept.user_id = a.author_id
           WHERE ${hasUuid ? "a.public_id" : "a.id"} = ?
           LIMIT 1`,
-        [hasUuid ? uuid : legacyId],
+        [userId, userId, hasUuid ? uuid : legacyId],
       );
       announcement = rows[0] ?? null;
     }
@@ -235,8 +238,8 @@ export const openAnnouncementNotification = async (req, res) => {
       String(announcement.author_department_id) === String(viewerDepartmentId)
     );
     if (!announcement.category || (role === "employer"
-      ? Number(announcement.visible_to_employers) !== 1
-      : (announcement.category === "Department" && !canSeeDepartmentPost))) {
+      ? Number(announcement.employer_allowed) !== 1
+      : (Number(announcement.tagged_students_only) === 1 ? Number(announcement.targeted_allowed) !== 1 : (announcement.category === "Department" && !canSeeDepartmentPost)))) {
       await connection.rollback();
       return res.status(403).json({
         success: false,

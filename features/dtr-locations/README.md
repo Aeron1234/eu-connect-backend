@@ -7,14 +7,14 @@ Frontend: `/dtr-locations`. Canonical APIs (also mounted under the compatibility
 | Method | Endpoint | Contract |
 | --- | --- | --- |
 | GET | `/api/v1/dtr-locations/students` | Ten ongoing internship rows/page, current assignment or company fallback, scoped department/course choices |
-| GET | `/api/v1/dtr-locations/pins` | All custom locations in the authorized current filters, grouped by eight-decimal coordinates; independent of table pagination |
+| GET | `/api/v1/dtr-locations/pins` | All custom and company-default locations in the authorized current filters, grouped by eight-decimal coordinates; independent of table pagination |
 | POST | `/api/v1/dtr-locations/assign` | 1–100 distinct `internshipIds`, `lat`, `lon`, optional `radius_meter` (150), `address`, `label` |
 
 ## Authorization and relationships
 
 All endpoints require a verified admin, department head or employer token. Admin sees all ongoing, nondeleted internships of nondeleted users. Heads are resolved against `dept_heads_background_info` joined to `departments` on every request; missing membership and department code `REG` deny access. A student's **latest** `student_academic_info` row determines their department/course. Employers must match the ongoing record's `employer_id` (the accepted supervision assignment). Student roles cannot use this tool. Both reads and writes apply scope; grouping happens only after authorization, so shared physical sites do not expose other students.
 
-Reads accept `search` (student first/last name, max 100 literal characters). Admin accepts `departmentId` and `courseId`; non-Registrar heads accept only `courseId`; employer accepts neither. Course choices use the selected department within role scope, independent of the name search. Department choices come from accessible ongoing interns. Invalid/unsupported filters return 400. Page numbers are validated, clamped to available pages; ordering is last name, first name, internship ID. Responses are private/no-store, with no server route cache. Pins show custom overrides, not company fallback pins.
+Reads accept `search` (student first/last name, max 100 literal characters). Admin accepts `departmentId` and `courseId`; non-Registrar heads accept only `courseId`; employer accepts neither. Course choices use the selected department within role scope, independent of the name search. Department choices come from accessible ongoing interns. Invalid/unsupported filters return 400. Page numbers are validated, clamped to available pages; ordering is last name, first name, internship ID. Responses are private/no-store, with no server route cache. Pins show effective custom or company-default locations, not company fallback pins.
 
 ## Save, attendance and notifications
 

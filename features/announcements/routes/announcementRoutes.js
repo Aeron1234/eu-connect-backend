@@ -1,3 +1,4 @@
+import { getAnnouncementTagStudents } from '../studentTags.js';
 import { cacheRoute } from "../../../middleware/cache-middleware.js";
 import express from "express";
 import multer from "multer";
@@ -19,6 +20,11 @@ import {
 } from "../../../middleware/rateLimiter.js";
 
 const announcementRoutes = express.Router();
+
+function historyCache(req, res, next) {
+  res.set('Cache-Control', 'private, no-store'); return next();
+}
+announcementRoutes.get('/announcements/tag-students', verifyUser, verifyRole(['admin','department_head']), generalLimiter, getAnnouncementTagStudents);
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
@@ -36,7 +42,7 @@ announcementRoutes.get(
   verifyUser,
   verifyRole(["student", "employer", "department_head", "admin"]),
   paginationLimiter,
-  cacheRoute(30),
+  historyCache,
   getAllAnnouncements,
 );
 

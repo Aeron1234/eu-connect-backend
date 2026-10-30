@@ -30,7 +30,7 @@ test('populated history page carries the original regular count and hides its SQ
   const { res, calls } = await invoke({ category: 'Department', search: 'Intern', page: '2' }, (_, __, call) =>
     call === 1 ? pinned : regular);
   assert.equal(calls.length, 2);
-  const filters = ['Department', '%Intern%', '%Intern%', 'student', 'student', 7];
+  const filters = ['Department', '%Intern%', '%Intern%', 'student', 'student', 7, 'viewer'];
   assert.deepEqual(calls[0].params, filters);
   assert.deepEqual(calls[1].params, [...filters, ...filters, 10, 10]);
   assert.match(calls[1].sql, /\(\s*SELECT COUNT\(\*\) AS total[\s\S]*\) AS total_regular/);
@@ -45,7 +45,7 @@ test('empty history page retains count semantics even on page one', async () => 
   const { res, calls } = await invoke({}, (_, __, call) =>
     call === 3 ? [{ total: 4 }] : []);
   assert.equal(calls.length, 3);
-  assert.deepEqual(calls[2].params, ['student', 'student', 7]);
+  assert.deepEqual(calls[2].params, ['student', 'student', 7, 'viewer']);
   assert.doesNotMatch(calls[2].sql, /INNER JOIN users|INNER JOIN user_profiles/);
   assert.deepEqual(res.body, { pinned: [], regular: [], totalPages: 1,
     totalRecords: 4, currentPage: 1, currentRegularCount: 0 });

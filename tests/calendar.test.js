@@ -36,7 +36,7 @@ test("month feed reads the full date range and scopes announcement and schedule 
   await getCalendarMonth({ verifiedUser: { id: "student", role: "student", department_id: 7 }, query: { month: "2026-10" } }, res);
   assert.equal(res.statusCode, 200);
   assert.equal(calls.length, 4);
-  assert.deepEqual(calls[0].params, ["2026-11-01", "2026-10-01", "student", 7]);
+  assert.deepEqual(calls[0].params, ["2026-11-01", "2026-10-01", "student", 7, "student"]);
   assert.match(calls[0].sql, /a\.event_date < \? AND COALESCE\(a\.event_end_date, a\.event_date\) >= \?/);
   assert.match(calls[0].sql, /DATE_FORMAT\(a\.event_end_date, '%Y-%m-%d'\) AS event_end_date/);
   assert.match(calls[0].sql, /author_dept\.department_id = \?/);

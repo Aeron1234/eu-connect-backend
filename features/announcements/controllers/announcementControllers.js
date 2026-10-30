@@ -1,3 +1,4 @@
+import { employerAnnouncementAccess, tagProjection, saveStudentTags, employerRecipients, targetedSchoolAccess, saveSchoolAudience, schoolRecipients } from '../studentTags.js';
 import { reportError } from "../../../config/errorTracking.js";
 import { invalidateAnnouncementsCache } from "../../../config/cache/announcementsCache.js";
 import { invalidateNotificationsCache } from "../../../config/cache/notificationsCache.js";
@@ -74,18 +75,18 @@ export const getAllAnnouncements = async (req, res) => {
 
     // Employer opt-in is independent of academic department scope. Other readers
     // retain the existing category/department rules, including registrar restrictions.
-    if (role === "employer") filterClauses.push("a.visible_to_employers = 1");
+    if (role === "employer") { filterClauses.push(employerAnnouncementAccess('a', '?')); params.push(userId); }
     else {
       filterClauses.push(
-      `(
+      `((a.tagged_students_only=0 AND (
         ac.name != 'Department'
         OR (
           ? != 'employer'
           AND (? = 'admin' OR authorDept.department_id = ?)
         )
-      )`,
+      )) OR (a.tagged_students_only=1 AND ${targetedSchoolAccess('a','?')}))`,
     );
-      params.push(role, role, viewerDepartmentId);
+      params.push(role, role, viewerDepartmentId, userId);
     }
 
     const whereString = `AND ${filterClauses.join(" AND ")}`;
@@ -98,7 +99,7 @@ export const getAllAnnouncements = async (req, res) => {
       SELECT a.public_id AS id, a.author_id, a.title, a.content,
              DATE_FORMAT(a.event_date, '%Y-%m-%d') AS event_date,
              DATE_FORMAT(a.event_end_date, '%Y-%m-%d') AS event_end_date,
-             a.visible_to_employers, a.is_pinned, a.created_at, a.updated_at,
+             a.visible_to_employers, a.employer_tagged_only, a.tagged_students_only, ${tagProjection}, a.is_pinned, a.created_at, a.updated_at,
              r.role, up.first_name, up.last_name,
              CASE WHEN ac.name = 'Department' THEN postingDepartment.name END AS author_department_name,
              CASE WHEN ac.name = 'Department' THEN postingDepartment.code END AS author_department_code,
@@ -126,7 +127,7 @@ export const getAllAnnouncements = async (req, res) => {
       SELECT a.public_id AS id, a.author_id, a.title, a.content,
              DATE_FORMAT(a.event_date, '%Y-%m-%d') AS event_date,
              DATE_FORMAT(a.event_end_date, '%Y-%m-%d') AS event_end_date,
-             a.visible_to_employers, a.is_pinned, a.created_at, a.updated_at,
+             a.visible_to_employers, a.employer_tagged_only, a.tagged_students_only, ${tagProjection}, a.is_pinned, a.created_at, a.updated_at,
              r.role, up.first_name, up.last_name,
              CASE WHEN ac.name = 'Department' THEN postingDepartment.name END AS author_department_name,
              CASE WHEN ac.name = 'Department' THEN postingDepartment.code END AS author_department_code,
@@ -197,7 +198,7 @@ export const getAnnouncementById = async (req, res) => {
       `SELECT a.public_id AS id, a.author_id, a.title, a.content,
               DATE_FORMAT(a.event_date, '%Y-%m-%d') AS event_date,
               DATE_FORMAT(a.event_end_date, '%Y-%m-%d') AS event_end_date,
-              a.visible_to_employers, a.is_pinned, a.created_at, a.updated_at,
+              a.visible_to_employers, a.employer_tagged_only, a.tagged_students_only, ${tagProjection}, a.is_pinned, a.created_at, a.updated_at,
               r.role, up.first_name, up.last_name,
              CASE WHEN ac.name = 'Department' THEN postingDepartment.name END AS author_department_name,
              CASE WHEN ac.name = 'Department' THEN postingDepartment.code END AS author_department_code,
@@ -211,9 +212,9 @@ export const getAnnouncementById = async (req, res) => {
        LEFT JOIN departments postingDepartment ON postingDepartment.id = authorDept.department_id
        WHERE ${isLegacyId ? "a.id" : "a.public_id"} = ?
          ${isRegistrar ? "AND ac.name = 'General'" : ""}
-         AND ${role === "employer" ? "a.visible_to_employers = 1" : "(ac.name != 'Department' OR (? != 'employer' AND (? = 'admin' OR authorDept.department_id = ?)))"}
+         AND ${role === "employer" ? employerAnnouncementAccess('a', '?') : `((a.tagged_students_only=0 AND (ac.name != 'Department' OR (? != 'employer' AND (? = 'admin' OR authorDept.department_id = ?)))) OR (a.tagged_students_only=1 AND ${targetedSchoolAccess('a','?')}))`}
        LIMIT 1`,
-      role === "employer" ? [announcementId] : [announcementId, role, role, departmentId],
+      role === "employer" ? [announcementId, req.verifiedUser.id] : [announcementId, role, role, departmentId, req.verifiedUser.id],
     );
     if (!rows.length) return res.status(404).json({ error: "Announcement not found." });
     return res.json(rows[0]);
@@ -306,6 +307,10 @@ export const createAnnouncement = async (req, res) => {
       return res.status(400).json({ error: "Posting announcement failed." });
     }
 
+    let targeted;
+    try { await saveStudentTags(connection, req.verifiedUser, publicId, data.tagged_student_ids); targeted=await saveSchoolAudience(connection,publicId,data.tagged_students_only); }
+    catch (error) { if (error.status !== 400) throw error; await connection.rollback(); return res.status(400).json({ error: error.message, success: false }); }
+
     // School audiences keep their scope; opted-in posts additionally notify employers.
     let recipients;
 
@@ -348,6 +353,9 @@ export const createAnnouncement = async (req, res) => {
       );
     }
 
+    const employerScope = await employerRecipients(connection, publicId);
+    const allowedEmployerIds = new Set(employerScope.allowed.map(row => row.id));
+    recipients = targeted ? [...await schoolRecipients(connection,publicId), ...employerScope.allowed] : recipients.filter(row => !employerScope.all.has(row.id) || allowedEmployerIds.has(row.id));
     if (recipients.length > 0) {
       const values = recipients.map((r) => [
         r.id,
@@ -555,8 +563,10 @@ export const updateAnnouncement = async (req, res) => {
       });
     }
 
+    try { await saveStudentTags(connection, req.verifiedUser, announcementId, req.body.tagged_student_ids); await saveSchoolAudience(connection,announcementId,req.body.tagged_students_only); }
+    catch (error) { if (error.status !== 400) throw error; await connection.rollback(); return res.status(400).json({ error: error.message, success: false }); }
     const [updatedData] = await connection.execute(
-      `SELECT a.*,
+      `SELECT a.*, ${tagProjection},
               DATE_FORMAT(a.event_date, '%Y-%m-%d') AS event_date,
               DATE_FORMAT(a.event_end_date, '%Y-%m-%d') AS event_end_date,
               ac.name AS category, ac.color AS category_bg, ac.text_color AS category_fg,
@@ -612,26 +622,14 @@ export const updateAnnouncement = async (req, res) => {
 
     }
 
-    let employerAudience = [];
-    if (previousEmployerVisibility || visibleToEmployers) {
-      [employerAudience] = await connection.execute(
-        "SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id WHERE r.role = 'employer' AND u.id != ?", [userId]);
-    }
-    if (visibleToEmployers && !previousEmployerVisibility) {
-      const [newEmployers] = await connection.execute(
-        `SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id
-         WHERE r.role = 'employer' AND u.id != ? AND NOT EXISTS (
-           SELECT 1 FROM notifications n WHERE n.user_id = u.id AND n.type = 'announcement' AND n.link_uuid = ?
-         )`, [userId, announcementId]);
-      recipients.push(...newEmployers);
-    } else if (!visibleToEmployers && previousEmployerVisibility) {
-      await connection.execute(
-        `DELETE FROM notifications WHERE type = 'announcement' AND
-           (link_uuid = ? OR link = (SELECT CAST(id AS CHAR) FROM announcements WHERE public_id = ?))
-           AND user_id IN (SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id WHERE r.role = 'employer')`,
-        [announcementId, announcementId]);
-    }
-    recipients = [...new Map(recipients.map(recipient => [recipient.id, recipient])).values()];
+    const [employerAudience] = await connection.execute('SELECT id FROM users');
+    const employerScope = await employerRecipients(connection,announcementId);
+    const desired=[...await schoolRecipients(connection,announcementId),...employerScope.allowed];
+    const [notices]=await connection.execute("SELECT DISTINCT user_id AS id FROM notifications WHERE type='announcement' AND link_uuid=?",[announcementId]);
+    const notified=new Set(notices.map(row=>row.id));
+    const desiredIds=new Set(desired.map(row=>row.id));
+    for(const notice of notices) if(!desiredIds.has(notice.id)) await connection.execute("DELETE FROM notifications WHERE type='announcement' AND (link_uuid=? OR link=(SELECT CAST(id AS CHAR) FROM announcements WHERE public_id=?)) AND user_id=?",[announcementId,announcementId,notice.id]);
+    recipients=desired.filter(row=>!notified.has(row.id));
     if (recipients.length > 0) {
       const senderName = `${updatedData[0].first_name} ${updatedData[0].last_name}`;
       await connection.query(
@@ -645,6 +643,7 @@ export const updateAnnouncement = async (req, res) => {
       if (title !== undefined) changedFields.push("title");
       if (content !== undefined) changedFields.push("content");
       if (hasEmployerVisibility) changedFields.push("visible_to_employers");
+      if (Object.hasOwn(req.body,"tagged_student_ids")) changedFields.push("tagged_student_ids");
       if (hasEventDate) changedFields.push("event_date");
       if (writeEventEndDate) changedFields.push("event_end_date");
 

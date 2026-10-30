@@ -219,7 +219,7 @@ export async function getDtrLocationPins(req, res) {
     // Apply scope BEFORE grouping. A shared physical site never exposes another
     // department's or supervisor's students in counts or popup membership.
     const [rows] = await connection.execute(
-      `SELECT ${columns} ${joins} WHERE ${scope.where.join(" AND ")} AND dl.id IS NOT NULL ORDER BY p.last_name, p.first_name, ir.id`,
+      `SELECT ${columns} ${joins} WHERE ${scope.where.join(" AND ")} ORDER BY p.last_name, p.first_name, ir.id`,
       scope.params,
     );
     res.json({

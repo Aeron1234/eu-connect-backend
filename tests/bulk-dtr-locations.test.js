@@ -82,17 +82,18 @@ test('admin sees all ongoing interns, dependent courses, stable paging and group
   assert.deepEqual(nursing.body.courses.map(c => c.short_name), ['BSN']);
   assert.equal(nursing.body.students.length, 2);
   const pins = await call(getDtrLocationPins, req());
-  assert.equal(pins.body.locations.length, 1); assert.equal(pins.body.locations[0].students.length, 2);
+  assert.equal(pins.body.locations.length, 1); assert.equal(pins.body.locations[0].students.length, 13);
   assert.equal(first.body.students[1].company_location.radius_meters, 150);
 });
 test('head reads and shared-pin membership are scoped by current department, not JWT claims', async () => {
   const head = await call(getDtrLocationStudents, req('department_head', 'head'));
   assert.equal(head.body.pagination.total, 11);
   const pins = await call(getDtrLocationPins, req('department_head', 'head'));
-  assert.deepEqual(pins.body.locations[0].students.map(s => s.user_id), ['s1']);
+  assert.equal(pins.body.locations[0].students.length, 11);
+  assert(pins.body.locations[0].students.every(s => Number(s.user_id.slice(1)) <= 11));
   database.prepare('INSERT INTO student_academic_info VALUES(100,?,?,?)').run('s1', 2, 2);
   const moved = await call(getDtrLocationPins, req('department_head', 'head'));
-  assert.equal(moved.body.locations.length, 0);
+  assert.equal(moved.body.locations[0].students.length, 10);
 });
 test('Registrar, missing department and student roles cannot read or write', async () => {
   for (const request of [req('department_head', 'registrar'), req('department_head', 'missing'), req('student', 's1')]) {
@@ -137,7 +138,7 @@ test('assignment moves membership between pins and supports a single-student pin
   await save('admin', [id(1)]);
   const pins = await call(getDtrLocationPins, req());
   assert.equal(pins.body.locations.length, 2);
-  assert(pins.body.locations.every(g => g.students.length === 1));
+  assert.deepEqual(pins.body.locations.map(g => g.students.length).sort((a,b) => a-b), [1,12]);
 });
 test('separate supervisors receive one notice each and bulk size does not add per-student SQL round trips', async () => {
   database.prepare('UPDATE internship_records SET employer_id=? WHERE id=?').run('other-employer', id(3));

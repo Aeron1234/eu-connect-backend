@@ -54,17 +54,17 @@ function response() {
   return { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
 }
 
-test("notification GET reuses data, isolates users/page/limit/scope and keeps auth checks", async (t) => {
+test("notification GET rechecks live audiences and isolates users/page/limit/scope", async (t) => {
   const get = await client(t);
   const first = await (await get()).json();
   assert.equal(first.unreadCount, 2); assert.equal(first.data[0].actionable, true);
-  assert.deepEqual(await (await get()).json(), first); assert.equal(queries, 2);
+  assert.deepEqual(await (await get()).json(), first); assert.equal(queries, 4);
   const bob = await (await get(url, "bob")).json(); assert.equal(bob.data[0].sender.first_name, "bob");
   for (const query of ["?page=2", "?limit=20", "?scope=requests"]) assert.equal((await get(url + query)).status, 200);
-  assert.equal(queries, 10);
+  assert.equal(queries, 12);
   assert.equal((await get(url, null)).status, 401);
   assert.equal((await get(url, "alice", "invalid-role")).status, 403);
-  assert.equal(queries, 10);
+  assert.equal(queries, 12);
 });
 
 test("employer inbox lists, pagination, unread badges and cached reads exclude legacy announcements", async t => {
@@ -74,7 +74,7 @@ test("employer inbox lists, pagination, unread badges and cached reads exclude l
   const statements = [];
   connection.execute = async (sql, params) => {
     statements.push(sql);
-    const visible = rows.filter(row => !sql.includes("type NOT IN ('announcement'") || !["announcement", "calendar_schedule"].includes(row.type));
+    const visible = rows.filter(row => !sql.includes("shared_announcement") || !["announcement", "calendar_schedule"].includes(row.type));
     if (sql.includes("AS all_total")) return [[{ all_total: visible.length, request_total: 1, unread_count: visible.length }]];
     if (sql.includes("AS unread_count")) return [[{ unread_count: visible.length }]];
     return [visible.slice(params.at(-1), params.at(-1) + params.at(-2))];
@@ -86,12 +86,12 @@ test("employer inbox lists, pagination, unread badges and cached reads exclude l
     if (role === "employer") assert(first.data.every(row => row.type !== "announcement"));
     const before = statements.length;
     assert.deepEqual(await (await get(url, "alice", role)).json(), first);
-    assert.equal(statements.length, before);
+    assert.equal(statements.length, before + 2);
     assert.deepEqual(await (await get(url + "/unread-count", "alice", role)).json(), { unreadCount: total });
   }
 });
 
-test("unread-count GET runs only a recipient count and caches it separately", async (t) => {
+test("unread-count GET rechecks recipient visibility without caching", async (t) => {
   const get = await client(t);
   const countUrl = url + "/unread-count";
   const sql = [];
@@ -104,22 +104,21 @@ test("unread-count GET runs only a recipient count and caches it separately", as
   assert.deepEqual(await (await get(countUrl)).json(), { unreadCount: 2 });
   assert.deepEqual(await (await get(countUrl)).json(), { unreadCount: 2 });
   assert.deepEqual(await (await get(countUrl, "bob")).json(), { unreadCount: 5 });
-  assert.equal(sql.length, 2);
+  assert.equal(sql.length, 3);
   assert.ok(sql.every(({ statement }) =>
     statement.includes("WHERE user_id = ? AND is_read = 0") &&
-    !statement.includes("JOIN") && !statement.includes("LIMIT")));
+    !statement.includes("LIMIT")));
   assert.equal((await get(countUrl, null)).status, 401);
   assert.equal((await get(countUrl, "alice", "invalid-role")).status, 403);
-  assert.equal(sql.length, 2);
+  assert.equal(sql.length, 3);
 
   const countKeys = cache.keys().filter((key) =>
     cache.get(key)?.path === countUrl);
-  assert.equal(countKeys.length, 2);
-  const expiry = cache.getTtl(countKeys[0]);
-  assert.ok(expiry > Date.now() + 14000 && expiry <= Date.now() + 15000);
+  assert.equal(countKeys.length, 0);
+
 
   assert.equal((await get(url + "/1", "alice", "student", "PATCH")).status, 200);
-  assert.equal(cache.keys().filter((key) => cache.get(key)?.path === countUrl).length, 1);
+  assert.equal(cache.keys().filter((key) => cache.get(key)?.path === countUrl).length, 0);
   invalidateNotificationsCache();
   assert.equal(cache.keys().length, 0);
 });
@@ -238,10 +237,9 @@ test("evaluation purge invalidates notifications only after commit and does not 
   } finally { console.error = log; }
 });
 
-test("notification TTL is 15 seconds and broadcasts clear every inbox", async (t) => {
+test("notification reads stay uncached and broadcast invalidation remains safe", async (t) => {
   const get = await client(t); await get();
-  const expiry = cache.getTtl(cache.keys()[0]);
-  assert.ok(expiry > Date.now() + 14000 && expiry <= Date.now() + 15000);
+  assert.equal(cache.keys().length, 0);
   await get(url, "bob"); invalidateNotificationsCache();
   assert.equal(cache.keys().length, 0);
 });

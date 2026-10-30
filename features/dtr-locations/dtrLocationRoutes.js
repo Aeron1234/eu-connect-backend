@@ -1,17 +1,30 @@
-import multer from 'multer';
-import { requireStudentDepartmentAccess } from '../../config/studentProfileAccess.js';
-import { getMySettedDtrLocation, getSearchedStudentDtrLocation, setSearchedStudentDtrLocation, removeSearchedStudentDtrLocation } from './individualDtrLocationController.js';
-import express from 'express';
-import { verifyUser } from '../../middleware/verifyUser.js';
-import { verifyRole } from '../../middleware/verifyRole.js';
-import { generalLimiter, strictLimiter } from '../../middleware/rateLimiter.js';
-import { getDtrLocationStudents, getDtrLocationPins, assignDtrLocations } from './dtrLocationController.js';
+import multer from "multer";
+import { requireStudentDepartmentAccess } from "../../config/studentProfileAccess.js";
+import {
+  getMySettedDtrLocation,
+  getSearchedStudentDtrLocation,
+  setSearchedStudentDtrLocation,
+  removeSearchedStudentDtrLocation,
+} from "./individualDtrLocationController.js";
+import express from "express";
+import { verifyUser } from "../../middleware/verifyUser.js";
+import { verifyRole } from "../../middleware/verifyRole.js";
+import { generalLimiter, strictLimiter } from "../../middleware/rateLimiter.js";
+import {
+  getDtrLocationStudents,
+  getDtrLocationPins,
+  assignDtrLocations,
+} from "./dtrLocationController.js";
 
 const router = express.Router();
-router.use('/dtr-locations', verifyUser, verifyRole(['admin', 'department_head', 'employer']));
-router.get('/dtr-locations/students', generalLimiter, getDtrLocationStudents);
-router.get('/dtr-locations/pins', generalLimiter, getDtrLocationPins);
-router.post('/dtr-locations/assign', strictLimiter, assignDtrLocations);
+router.use(
+  "/dtr-locations",
+  verifyUser,
+  verifyRole(["admin", "department_head", "employer"]),
+);
+router.get("/dtr-locations/students", generalLimiter, getDtrLocationStudents);
+router.get("/dtr-locations/pins", generalLimiter, getDtrLocationPins);
+router.post("/dtr-locations/assign", strictLimiter, assignDtrLocations);
 // Keep legacy URLs and their original guards/limiters for deployed clients.
 const upload = multer({ storage: multer.memoryStorage() });
 router.get(
