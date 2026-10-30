@@ -36,7 +36,7 @@ beforeEach(() => {
     if (sql.includes("LIMIT 1") && (sql.includes("WHERE a.public_id = ?") || sql.includes("WHERE a.id = ?"))) {
       const [target, role, duplicateRole, department] = params;
       const employer = sql.includes("a.visible_to_employers = 1");
-      assert.equal(duplicateRole, role);
+      if (!sql.includes("a.visible_to_employers = 1")) assert.equal(duplicateRole, role);
       assert.ok(sql.includes("authorDept.department_id = ?") || sql.includes("a.visible_to_employers = 1"));
       const row = fixtures.find((item) => String(sql.includes("WHERE a.id = ?") ? item.id : item.public_id) === String(target));
       return [row && (!sql.includes("ac.name = 'General'") || row.category === "General") &&
@@ -46,8 +46,8 @@ beforeEach(() => {
     assert.ok(sql.includes("authorDept.department_id = ?") || sql.includes("a.visible_to_employers = 1"));
     const regular = sql.includes("LIMIT ? OFFSET ?");
     const filters = regular ? params.slice((params.length - 2) / 2, -2) : params;
-    const [role, duplicateRole, department] = filters.slice(-3);
-    assert.equal(duplicateRole, role);
+    const [role, duplicateRole, department] = filters.slice(-4);
+    if (!sql.includes("a.visible_to_employers = 1")) assert.equal(duplicateRole, role);
     let rows = mode === "empty" ? [] : fixtures.filter(row => sql.includes("a.visible_to_employers = 1") ? row.visible_to_employers === 1 : row.category !== "Department" || (role !== "employer" && (role === "admin" || row.department === department)));
     if (sql.includes("ac.name = 'General'")) rows = rows.filter(row => row.category === "General");
     let index = 0;
@@ -72,6 +72,7 @@ beforeEach(() => {
     },
     async query() { return [{ affectedRows: 1 }]; },
     async execute(sql, params) {
+      if (sql.includes("r.role='employer'") || sql === "SELECT id FROM users" || sql.includes("SELECT DISTINCT user_id AS id FROM notifications")) return [[]];
       if (sql.includes("INSERT INTO activity_logs")) activityLog = params;
       if (sql.includes("INSERT INTO announcements") || sql.includes("UPDATE announcements")) {
         announcementWrite = { sql, params };
@@ -109,12 +110,13 @@ function request(data = {}) {
     app: { get: () => ({ to: () => ({ emit: () => { assert.ok(committed); assert.equal(cache.has("feed-a"), false); emitted++; } }) }) } };
 }
 
-test("feed caches for 30 seconds and categories for five minutes", async (t) => {
+test("feed reads stay live while categories cache for five minutes", async (t) => {
   const get = await client(t);
   for (const [path, ttl, queries] of [["history", 30000, 2], ["categories", 300000, 1]]) {
     const before = calls; const first = await get(path); assert.equal(first.status, 200);
-    const body = await first.json(); assert.deepEqual(await (await get(path)).json(), body); assert.equal(calls, before + queries);
+    const body = await first.json(); assert.deepEqual(await (await get(path)).json(), body); assert.equal(calls, before + (path === "history" ? queries * 2 : queries));
     const key = cache.keys().find(key => cache.get(key).path === base + path);
+    if(path === "history") { assert.equal(key,undefined); continue; }
     const remaining = cache.getTtl(key) - Date.now(); assert.ok(remaining > ttl - 5000 && remaining <= ttl);
   }
 });
@@ -193,6 +195,7 @@ test("General and department announcement recipient queries exclude employers be
     const execute = connection.execute, query = connection.query;
     let recipientSql, notificationRows; const rooms = [];
     connection.execute = async (sql, params) => {
+      if (sql.includes("r.role='employer'")) return [sql.includes('JOIN announcements a') ? [] : [{ id:'employer' }]];
       if (sql.includes("FROM users u") && sql.includes("JOIN roles r")) {
         recipientSql = sql;
         return [[{ id: "student" }, ...(!sql.includes("r.role != 'employer'") ? [{ id: "employer" }] : [])]];
@@ -220,12 +223,12 @@ test("ordinary department heads can create department posts and convert a legacy
   }
 });
 
-test("role, user and department keys preserve announcement visibility on hits", async (t) => {
+test("live role, user and department checks preserve announcement visibility", async (t) => {
   const get = await client(t);
   for (const [role, department, ids] of [["student", 1, [2]], ["student", 2, [3]], ["department_head", 1, [2]], ["admin", 1, [2, 3]]]) {
     const path = "history?category=Department";
     const first = await (await get(path, role, department)).json(); assert.deepEqual(first.regular.map(row => row.id), ids);
-    const before = calls; assert.deepEqual(await (await get(path, role, department)).json(), first); assert.equal(calls, before);
+    const before = calls; assert.deepEqual(await (await get(path, role, department)).json(), first); assert.equal(calls, before + 2);
   }
   const before = calls; await get("history?category=Department", "student", 1, "other"); assert.equal(calls, before + 2);
   assert.equal((await get("history", "unknown")).status, 403); assert.equal((await get("categories", "student", 1, null)).status, 401);
@@ -243,7 +246,7 @@ test("UUID and legacy announcement links load only posts visible to the viewer",
   assert.equal((await get("not-an-id", "student", 1)).status, 400);
 });
 
-test("REG department heads only receive General announcements on feeds, cached reads and direct links", async (t) => {
+test("REG department heads only receive General announcements on live feeds and direct links", async (t) => {
   fixtures.push({ id: 4, public_id: "42038a27-bc63-4506-9c4f-20ffbe88396c", category: "General", department: null, is_pinned: false, title: "General regular" });
   const get = await client(t);
   const ordinary = await (await get("history", "department_head", 1, "head", "CCS")).json();
@@ -255,7 +258,7 @@ test("REG department heads only receive General announcements on feeds, cached r
   assert.equal(first.totalRecords, 1);
   const before = calls;
   assert.deepEqual(await (await get("history", "department_head", 1, "head", "REG")).json(), first);
-  assert.equal(calls, before);
+  assert.equal(calls, before + 2);
 
   const restricted = await (await get("history?category=Department", "department_head", 1, "head", "REG")).json();
   assert.deepEqual(restricted.pinned, []);
@@ -325,7 +328,7 @@ test("search/category/page variants remain separate, including pinned and regula
   for (const [path, queries] of [["history", 2], ["history?page=2", 3], ["history?search=Dept", 2], ["history?category=General", 3], ["history?category=Department", 2]]) {
     const before = calls; const res = await get(path); assert.equal(res.status, 200); assert.equal(calls, before + queries);
     const data = await res.json(); assert.ok(Array.isArray(data.pinned)); assert.ok(Array.isArray(data.regular));
-    await get(path); assert.equal(calls, before + queries);
+    await get(path); assert.equal(calls, before + queries * 2);
   }
 });
 
@@ -335,7 +338,7 @@ test("create/edit/delete/pin/unpin clear all feeds after commit and before notif
     assert.ok(res.statusCode < 300); assert.ok(committed); assert.equal(cache.has("feed-a"), false); assert.equal(cache.has("feed-b"), false);
     assert.ok(cache.has("categories")); assert.ok(cache.has("profile"));
   }
-  assert.equal(emitted, 1);
+  assert.equal(emitted, 2);
 });
 
 test("new announcements expose a UUID and store it in recipient notifications", async () => {
@@ -502,7 +505,7 @@ test("category invalidation clears both joined feed data and category lookups", 
   seed(); invalidateAnnouncementCategoriesCache(); assert.deepEqual(cache.keys(), ["profile"]);
 });
 
-test("failed reads are not cached; null categories and empty feeds are cached", async (t) => {
+test("failed reads are not cached; categories cache and empty feeds stay live", async (t) => {
   const get = await client(t); const error = console.error; const log = console.log;
   try {
     console.error = () => {}; console.log = () => {}; mode = "read-error";
@@ -512,7 +515,7 @@ test("failed reads are not cached; null categories and empty feeds are cached", 
   mode = "empty";
   assert.equal(await (await get("categories")).json(), null);
   assert.deepEqual((await (await get("history")).json()).regular, []);
-  const before = calls; await get("history"); await get("categories"); assert.equal(calls, before);
+  const before = calls; await get("history"); await get("categories"); assert.equal(calls, before + 3);
 });
 
 test("registrar heads can only create or edit General; regular heads can only use Department", async () => {

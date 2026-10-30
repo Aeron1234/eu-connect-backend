@@ -1,3 +1,4 @@
+import { targetedSchoolAccess } from '../../announcements/studentTags.js';
 import { reportError } from "../../../config/errorTracking.js";
 import { db } from "../../../config/db.js";
 import { invalidateNotificationsCache } from "../../../config/cache/notificationsCache.js";
@@ -55,9 +56,9 @@ export async function getCalendarMonth(req, res) {
          LEFT JOIN dept_heads_background_info author_dept ON author_dept.user_id = a.author_id
         WHERE a.event_date < ? AND COALESCE(a.event_end_date, a.event_date) >= ?
           ${isRegistrar ? "AND ac.name = 'General'" : ""}
-          AND (ac.name != 'Department' OR ? = 'admin' OR author_dept.department_id = ?)
+          AND ((a.tagged_students_only=0 AND (ac.name != 'Department' OR ? = 'admin' OR author_dept.department_id = ?)) OR (a.tagged_students_only=1 AND ${targetedSchoolAccess('a','?')}))
         ORDER BY a.event_date, a.id`,
-      [until, from, viewer.role, departmentId],
+      [until, from, viewer.role, departmentId, viewer.id],
     );
 
     // Include any schedule overlapping the month, even if it starts before the first.

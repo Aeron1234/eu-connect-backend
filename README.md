@@ -29,6 +29,16 @@ The backend serves students, employers/company supervisors, department heads, re
 
 ## Features
 
+### Company analytics and Registrar reporting dashboard
+
+`GET /api/v1/analytics/companies` provides admin/non-Registrar-head company rankings, distinct student/company counts, distribution, trends, status report and separate zero-match companies. Heads are scoped from current DB department membership; Registrar/student/employer access is denied. `/api/v1/registrar/dashboard` is current-Registrar-only and summarizes already authorized Annex C drafts/submissions and Annex D coverage, not popularity or private review queues. Both APIs are private/no-store consistent snapshots. See [definitions, permissions and setup](features/analytics/README.md).
+
+Run [the read-only verification migration](scripts/2026-10-31-company-analytics.sql) before deploying backend then frontend. Existing schema/indexes supply the data: no ALTER/CREATE, backfill, env or dependency changes. Academic-year semantics match existing SIPP; company grouping is normalized name across branches, with current academic membership. Aggregate frontend CSV/print export does not grant ordinary heads access to Registrar's official Annex exports.
+
+Announcements now offer a **Tagged students only** audience: only tagged students, their department heads, the author and admins can view it. Notify involved students/heads and opted-in supervisors; admins retain access without automatic alerts. Broad department/General mode remains the default. Run `scripts/2026-10-31-targeted-announcement-audience.sql` after the student-tag migration and before paired deployment. Targeting is enforced on feed/direct/notification/calendar reads; history and inbox reads are private/no-store for live audience checks. See `features/announcements/README.md`.
+
+Announcement authors can now tag ongoing students. With Visible to employers checked, tags restrict employer access/notifications to their current supervising employers; no tags retains all-employer sharing. Normal school visibility is unchanged. Run [the student-tag migration](scripts/2026-10-31-announcement-student-tags.sql) before deploying both repositories. See [announcement contracts](features/announcements/README.md) for permissions, edit behavior, live supervision checks and setup. No new environment variables or packages.
+
 ### Bulk DTR Location Assignment
 
 All DTR location management controllers and routes now belong to `features/dtr-locations`, including the existing student lookup and individual profile assignment/removal endpoints. Their API URLs, authorization and behavior remain unchanged; attendance itself stays in `features/dtr`.
@@ -587,7 +597,7 @@ Back up database records and private storage objects through the deployment's no
 
 | Symptom | Check |
 | --- | --- |
-| Missing JWT-secret startup error | Configure all three signing secrets before starting the process. |
+| Missing JWT-secret startup error | Start from the backend directory with all three signing secrets configured. Keep `import "dotenv/config"` first in `server.js`, before route imports: JWT/socket modules read settings during module evaluation. Changing import order does not require rotating existing secrets. |
 | Invalid/expired session after deployment | Check matching frontend/backend access secrets, refresh records, HTTPS, and cookie behavior. |
 | Database errors | Check connection settings, database reachability, installed schema, and migration compatibility. |
 | Upload or download fails | Check bucket privacy/name, backend storage permissions, MIME/size rules, and service reachability. |

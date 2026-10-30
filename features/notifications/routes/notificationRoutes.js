@@ -1,4 +1,4 @@
-import { cacheRoute } from "../../../middleware/cache-middleware.js";
+
 import express from "express";
 import multer from "multer";
 import { verifyUser } from "../../../middleware/verifyUser.js";
@@ -15,12 +15,17 @@ import { generalLimiter, paginationLimiter } from "../../../middleware/rateLimit
 
 const notificationRoutes = express.Router();
 
+function inboxCache(req, res, next) {
+  // Supervisor changes must be reflected by the live announcement predicate.
+  res.set('Cache-Control', 'private, no-store'); return next();
+}
+
 notificationRoutes.get(
   "/notifications/unread-count",
   verifyUser,
   verifyRole(["student", "employer", "department_head", "admin"]),
   generalLimiter,
-  cacheRoute(15),
+  inboxCache,
   getUnreadNotificationCount,
 );
 
@@ -29,7 +34,7 @@ notificationRoutes.get(
   verifyUser,
   verifyRole(["student", "employer", "department_head", "admin"]),
   paginationLimiter,
-  cacheRoute(15),
+  inboxCache,
   getAllNotifications,
 );
 

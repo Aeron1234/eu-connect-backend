@@ -24,11 +24,12 @@ export function sameDtrLocation(row, location) {
 export function groupDtrLocations(students) {
   const groups = new Map();
   for (const student of students) {
-    if (!student.location) continue;
-    const { lat, lon } = student.location;
+    const location = student.location || student.company_location;
+    if (!location || !Number.isFinite(Number(location.lat)) || !Number.isFinite(Number(location.lon)) || Math.abs(Number(location.lat)) > 90 || Math.abs(Number(location.lon)) > 180) continue;
+    const { lat, lon } = location;
     const key = `${Number(lat).toFixed(8)},${Number(lon).toFixed(8)}`;
-    if (!groups.has(key)) groups.set(key, { key, lat, lon, address: student.location.address, students: [] });
-    groups.get(key).students.push(student);
+    if (!groups.has(key)) groups.set(key, { key, lat, lon, address: location.address, students: [] });
+    groups.get(key).students.push({ ...student, location, location_source: student.location ? 'custom' : 'company_default' });
   }
   return [...groups.values()];
 }

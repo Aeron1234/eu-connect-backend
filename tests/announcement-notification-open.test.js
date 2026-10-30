@@ -74,7 +74,7 @@ test("legacy numeric notification links resolve to the public UUID", async () =>
   assert.equal(res.statusCode, 200);
   assert.equal(res.body.announcementId, uuid);
   assert.match(calls[1].sql, /WHERE a\.id = \?/);
-  assert.deepEqual(calls[1].params, ["7"]);
+  assert.deepEqual(calls[1].params, ["recipient", "recipient", "7"]);
   assert.equal(calls.some(({ sql }) => sql.includes("UPDATE notifications")), false);
 });
 
@@ -121,7 +121,7 @@ test("a lookup failure leaves the notification intact", async () => {
 
 test("employers can open opted-in General and Department announcements", async () => {
  for (const category of ["General", "Department"]) {
-  const { res, committed } = await invoke({ role: "employer", announcement: { public_id: uuid, category, author_department_id: 2, visible_to_employers: 1 } });
+  const { res, committed } = await invoke({ role: "employer", announcement: { public_id: uuid, category, author_department_id: 2, visible_to_employers: 1, employer_allowed: 1 } });
   assert.equal(res.statusCode, 200); assert.equal(committed, true);
  }
 });

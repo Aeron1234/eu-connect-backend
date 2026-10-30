@@ -1,8 +1,8 @@
+// Load local environment settings before routes evaluate JWT/socket configuration.
+import "dotenv/config";
 import { mountApiRoutes } from "./config/api.js";
 import dns from "node:dns";
 dns.setDefaultResultOrder("ipv4first");
-
-import "dotenv/config";
 
 import express from "express";
 import cors from "cors";
@@ -15,9 +15,15 @@ import { registerMapLocationSockets } from "./features/map/mapLocationSockets.js
 import { registerNotificationSockets } from "./config/socketAuth.js";
 import { autoCloseStaleShifts } from "./config/autoCloseStaleShifts.js";
 import { refreshTokensCleanUp } from "./config/refreshTokensCleanUp.js";
-import { errorTrackingContext, purgeOldErrorEvents, reportBackgroundError, reportError } from "./config/errorTracking.js";
+import {
+  errorTrackingContext,
+  purgeOldErrorEvents,
+  reportBackgroundError,
+  reportError,
+} from "./config/errorTracking.js";
 
 import { cleanupFeedbackFiles } from "./features/feedback/feedbackController.js";
+import analyticsRoutes from "./features/analytics/analyticsRoutes.js";
 import feedbackRoutes from "./features/feedback/routes/feedbackRoutes.js";
 import announcementRoutes from "./features/announcements/routes/announcementRoutes.js";
 import accountRoutes from "./features/accounts/routes/accountRoutes.js";
@@ -62,8 +68,12 @@ function exitAfterFatal(label, error) {
     process.exit(1);
   }
 }
-process.on("unhandledRejection", (reason) => exitAfterFatal("Unhandled Rejection", reason));
-process.on("uncaughtException", (err) => exitAfterFatal("Uncaught Exception", err));
+process.on("unhandledRejection", (reason) =>
+  exitAfterFatal("Unhandled Rejection", reason),
+);
+process.on("uncaughtException", (err) =>
+  exitAfterFatal("Uncaught Exception", err),
+);
 
 const app = express();
 const httpServer = createServer(app);
@@ -108,6 +118,7 @@ app.get("/", (req, res) => {
 
 // Routes
 mountApiRoutes(app, [
+  analyticsRoutes,
   feedbackRoutes,
   authRoutes,
   announcementRoutes,
@@ -152,7 +163,8 @@ app.use((err, req, res, next) => {
   }
   const status = err.status >= 400 && err.status < 600 ? err.status : 500;
   res.status(status).json({
-    message: status >= 500 ? "Internal server error" : err.message || "Request failed",
+    message:
+      status >= 500 ? "Internal server error" : err.message || "Request failed",
     requestId: res.getHeader("X-Request-ID"),
   });
 });
@@ -199,8 +211,11 @@ cron.schedule("15 3 * * *", async () => {
 // Every five minutes: retry due feedback storage-cleanup rows. The durable queue
 // survives requests/restarts; each drain has its own bounded batch.
 cron.schedule("*/5 * * * *", async () => {
-  try { await cleanupFeedbackFiles(); }
-  catch (error) { reportBackgroundError("feedbackFileCleanup", error); }
+  try {
+    await cleanupFeedbackFiles();
+  } catch (error) {
+    reportBackgroundError("feedbackFileCleanup", error);
+  }
 });
 
 // Port Configuration
