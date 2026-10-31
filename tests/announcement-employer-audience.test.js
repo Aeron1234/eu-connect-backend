@@ -39,6 +39,13 @@ async function fixture(run) {
     INSERT INTO student_academic_info VALUES(1,'student',1),(2,'other-student',2);`);
   const original = { execute: db.execute, getConnection: db.getConnection };
   const execute = async (statement, params = []) => {
+    // The production MariaDB rejects the nested latest-academic scalar query
+    // when it is planned inside the announcement audience predicate. SQLite
+    // accepts it, so reproduce that provider constraint in this fixture.
+    if (statement.includes('announcement_student_tags') &&
+        /\(\s*SELECT\s+MAX\([^)]*\)\s+FROM\s+student_academic_info/i.test(statement)) {
+      throw Object.assign(new Error("MariaDB does not support this nested audience subquery"), { code: 'ER_NOT_SUPPORTED_YET' });
+    }
     const query = sql.prepare(statement.replace(/\s+FOR UPDATE/g, "").replaceAll("JSON_ARRAYAGG", "json_group_array"));
     if (statement.trim().startsWith("SELECT")) return [query.all(...params.map(value => value ?? null))];
     return [{ affectedRows: Number(query.run(...params).changes) }];
@@ -234,6 +241,35 @@ test('targeted audience restricts school feed/direct/calendar and notifies only 
   assert.equal((await invoke(getAnnouncementById,{role:'student',id:'student',params:{announcementId}})).statusCode,404);
   assert.equal((await invoke(updateAnnouncement,{params:{announcementId},body:{tagged_students_only:1}})).statusCode,200);
   assert.equal(sql.prepare("SELECT COUNT(*) n FROM notifications WHERE user_id='student' AND link_uuid=?").get(announcementId).n,0);
+}));
+
+test('targeted recipients and live access follow the tagged student’s latest department', async () => fixture(async ({ sql, invoke }) => {
+  sql.prepare('INSERT INTO users(id,role_id) VALUES(?,3)').run(taggedStudent);
+  sql.prepare('INSERT INTO user_profiles VALUES(?,?,?)').run(taggedStudent, 'Tagged', 'Student');
+  sql.prepare('INSERT INTO student_academic_info VALUES(10,?,1)').run(taggedStudent);
+  sql.prepare('INSERT INTO student_academic_info VALUES(11,?,2)').run(taggedStudent);
+  sql.prepare("INSERT INTO internship_records VALUES(?,NULL,'ongoing',NULL)").run(taggedStudent);
+
+  const created = await invoke(createAnnouncement, { body: {
+    category_id: 1, title: 'Current department', content: 'Body',
+    tagged_student_ids: [taggedStudent],
+  } });
+  assert.equal(created.statusCode, 201);
+  const announcementId = created.body.id;
+  assert.deepEqual(
+    sql.prepare('SELECT user_id FROM notifications WHERE link_uuid=? ORDER BY user_id')
+      .all(announcementId).map(row => row.user_id),
+    ['other-head', taggedStudent].sort(),
+  );
+  const view = id => invoke(getAnnouncementById, {
+    role: 'department_head', id, params: { announcementId },
+  });
+  assert.equal((await view('head')).statusCode, 404);
+  assert.equal((await view('other-head')).statusCode, 200);
+
+  sql.prepare('INSERT INTO student_academic_info VALUES(12,?,1)').run(taggedStudent);
+  assert.equal((await view('head')).statusCode, 200);
+  assert.equal((await view('other-head')).statusCode, 404);
 }));
 
 test('targeted audience requires a tag and cannot clear its last tag without switching back to the usual audience',async()=>fixture(async({sql,invoke})=>{

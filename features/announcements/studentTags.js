@@ -3,7 +3,39 @@ import { employerVisibility } from './employerVisibility.js';
 
 // One viewer parameter; current database roles/departments authorize targeted reads.
 export function targetedSchoolAccess(alias, viewer) {
-  return `EXISTS (SELECT 1 FROM users audience_user JOIN roles audience_role ON audience_role.id=audience_user.role_id WHERE audience_user.id=${viewer} AND audience_user.deleted_at IS NULL AND (audience_user.id=${alias}.author_id OR audience_role.role='admin' OR (audience_role.role='student' AND EXISTS (SELECT 1 FROM announcement_student_tags atag WHERE atag.announcement_id=${alias}.public_id AND atag.student_id=audience_user.id)) OR (audience_role.role='department_head' AND EXISTS (SELECT 1 FROM announcement_student_tags atag JOIN student_academic_info asi ON asi.id=(SELECT MAX(alatest.id) FROM student_academic_info alatest WHERE alatest.user_id=atag.student_id) JOIN dept_heads_background_info ah ON ah.department_id=asi.department_id WHERE atag.announcement_id=${alias}.public_id AND ah.user_id=audience_user.id))))`;
+  // MariaDB can reject a correlated scalar MAX subquery nested inside an EXISTS
+  // while planning a larger audience query. A left anti-join selects the latest
+  // academic row without a nested subquery; role-gated joins keep the fanout
+  // limited to tagged students for department-head viewers.
+  return `EXISTS (
+    SELECT 1 FROM users audience_user
+    JOIN roles audience_role ON audience_role.id=audience_user.role_id
+    LEFT JOIN announcement_student_tags direct_tag
+      ON direct_tag.announcement_id=${alias}.public_id
+      AND direct_tag.student_id=audience_user.id
+      AND audience_role.role='student'
+    LEFT JOIN dept_heads_background_info audience_head
+      ON audience_head.user_id=audience_user.id
+      AND audience_role.role='department_head'
+    LEFT JOIN announcement_student_tags department_tag
+      ON department_tag.announcement_id=${alias}.public_id
+      AND audience_role.role='department_head'
+    LEFT JOIN student_academic_info tagged_academic
+      ON tagged_academic.user_id=department_tag.student_id
+    LEFT JOIN student_academic_info newer_academic
+      ON newer_academic.user_id=tagged_academic.user_id
+      AND newer_academic.id>tagged_academic.id
+    WHERE audience_user.id=${viewer}
+      AND audience_user.deleted_at IS NULL
+      AND (
+        audience_user.id=${alias}.author_id
+        OR audience_role.role='admin'
+        OR (audience_role.role='student' AND direct_tag.student_id IS NOT NULL)
+        OR (audience_role.role='department_head'
+          AND audience_head.department_id=tagged_academic.department_id
+          AND newer_academic.id IS NULL)
+      )
+  )`;
 }
 export async function saveSchoolAudience(connection, id, value) {
   // Tags always identify a restricted school audience, even if a stale client
@@ -32,7 +64,65 @@ export async function saveSchoolAudience(connection, id, value) {
   return false;
 }
 export async function schoolRecipients(connection, id) {
-  const [rows] = await connection.execute(`SELECT DISTINCT u.id FROM users u JOIN roles r ON r.id=u.role_id JOIN announcements a ON a.public_id=? JOIN announcement_categories ac ON ac.id=a.category_id LEFT JOIN dept_heads_background_info author_dept ON author_dept.user_id=a.author_id WHERE u.id!=a.author_id AND u.deleted_at IS NULL AND r.role!='employer' AND ((a.tagged_students_only=1 AND r.role!='admin' AND ${targetedSchoolAccess('a','u.id')}) OR (a.tagged_students_only=0 AND (ac.name!='Department' OR r.role='admin' OR (r.role='student' AND EXISTS (SELECT 1 FROM student_academic_info sa WHERE sa.id=(SELECT MAX(latest.id) FROM student_academic_info latest WHERE latest.user_id=u.id) AND sa.department_id=author_dept.department_id)) OR (r.role='department_head' AND EXISTS (SELECT 1 FROM dept_heads_background_info h WHERE h.user_id=u.id AND h.department_id=author_dept.department_id)))))`, [id]);
+  const [announcements] = await connection.execute(`
+    SELECT a.author_id, a.tagged_students_only, ac.name AS category_name,
+           author_dept.department_id AS author_department_id
+    FROM announcements a
+    JOIN announcement_categories ac ON ac.id=a.category_id
+    LEFT JOIN dept_heads_background_info author_dept ON author_dept.user_id=a.author_id
+    WHERE a.public_id=?
+  `, [id]);
+  const announcement = announcements[0];
+  if (!announcement) return [];
+
+  if (Number(announcement.tagged_students_only) === 1) {
+    // Select students directly and current heads through the latest academic
+    // row. Separate simple queries avoid MariaDB's unsupported nested-subquery
+    // rewrite in the former recipient SELECT.
+    const [students] = await connection.execute(`
+      SELECT DISTINCT u.id
+      FROM announcement_student_tags tag
+      JOIN users u ON u.id=tag.student_id
+      JOIN roles r ON r.id=u.role_id
+      WHERE tag.announcement_id=? AND u.deleted_at IS NULL
+        AND u.id<>? AND r.role='student'
+    `, [id, announcement.author_id]);
+    const [heads] = await connection.execute(`
+      SELECT DISTINCT u.id
+      FROM announcement_student_tags tag
+      JOIN student_academic_info academic ON academic.user_id=tag.student_id
+      LEFT JOIN student_academic_info newer
+        ON newer.user_id=academic.user_id AND newer.id>academic.id
+      JOIN dept_heads_background_info head ON head.department_id=academic.department_id
+      JOIN users u ON u.id=head.user_id
+      JOIN roles r ON r.id=u.role_id
+      WHERE tag.announcement_id=? AND newer.id IS NULL
+        AND u.deleted_at IS NULL AND u.id<>? AND r.role='department_head'
+    `, [id, announcement.author_id]);
+    return [...new Map([...students, ...heads].map(row => [row.id, row])).values()];
+  }
+
+  if (announcement.category_name !== 'Department') {
+    const [rows] = await connection.execute(`
+      SELECT u.id FROM users u JOIN roles r ON r.id=u.role_id
+      WHERE u.id<>? AND u.deleted_at IS NULL AND r.role<>'employer'
+    `, [announcement.author_id]);
+    return rows;
+  }
+
+  const [rows] = await connection.execute(`
+    SELECT DISTINCT u.id
+    FROM users u
+    JOIN roles r ON r.id=u.role_id
+    LEFT JOIN student_academic_info academic ON academic.user_id=u.id
+    LEFT JOIN student_academic_info newer
+      ON newer.user_id=academic.user_id AND newer.id>academic.id
+    LEFT JOIN dept_heads_background_info head ON head.user_id=u.id
+    WHERE u.id<>? AND u.deleted_at IS NULL
+      AND (r.role='admin'
+        OR (r.role='student' AND newer.id IS NULL AND academic.department_id=?)
+        OR (r.role='department_head' AND head.department_id=?))
+  `, [announcement.author_id, announcement.author_department_id, announcement.author_department_id]);
   return rows;
 }
 const invalid = message => Object.assign(new Error(message), { status: 400 });
