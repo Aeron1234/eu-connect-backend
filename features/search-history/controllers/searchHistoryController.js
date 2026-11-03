@@ -14,9 +14,10 @@ export const searchUsers = async (req, res) => {
   let connection;
   try {
     connection = await db.getConnection();
-    const searchTerm = `%${q.trim()}%`;
+    const searchTerm = `%${q.trim().replace(/\s+/g, " ")}%`;
 
-    // Search names and internship/employer company text, returning at most ten rows.
+    // Match either name part or the full display name, plus internship/employer
+    // company text, returning at most ten rows.
     // Academic labels use the greatest student_academic_info ID per user; this search
     // does not itself authorize private tabs on a matched profile.
     const query = `
@@ -62,12 +63,14 @@ export const searchUsers = async (req, res) => {
         LEFT JOIN employer_background_info ebi ON up.user_id = ebi.user_id
         WHERE up.first_name LIKE ? 
           OR up.last_name LIKE ? 
+          OR CONCAT_WS(' ', up.first_name, up.last_name) LIKE ?
           OR ir.company_name LIKE ?
           OR ebi.company_name LIKE ?
         LIMIT 10;
     `;
 
     const [users] = await connection.execute(query, [
+      searchTerm,
       searchTerm,
       searchTerm,
       searchTerm,

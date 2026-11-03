@@ -11,7 +11,7 @@ function response() {
   };
 }
 
-test("user search keeps four substring matches, latest-academic semantics and response shape", async () => {
+test("user search matches full names as well as name parts and companies", async () => {
   const original = db.getConnection;
   const calls = [];
   let releases = 0;
@@ -33,12 +33,17 @@ test("user search keeps four substring matches, latest-academic semantics and re
     assert.equal(res.statusCode, 200);
     assert.deepEqual(res.body, { success: true, users });
     assert.equal(calls.length, 1);
-    assert.deepEqual(calls[0].params, ["%Ana%", "%Ana%", "%Ana%", "%Ana%"]);
+    assert.deepEqual(calls[0].params, Array(5).fill("%Ana%"));
     assert.match(calls[0].sql, /SELECT sai1\.user_id, sai1\.course_id, sai1\.department_id/);
     assert.match(calls[0].sql, /MAX\(id\) AS max_id/);
-    assert.match(calls[0].sql, /up\.first_name LIKE \?\s+OR up\.last_name LIKE \?\s+OR ir\.company_name LIKE \?\s+OR ebi\.company_name LIKE \?/);
+    assert.match(calls[0].sql, /up\.first_name LIKE \?\s+OR up\.last_name LIKE \?\s+OR CONCAT_WS\(' ', up\.first_name, up\.last_name\) LIKE \?\s+OR ir\.company_name LIKE \?\s+OR ebi\.company_name LIKE \?/);
     assert.match(calls[0].sql, /LIMIT 10/);
-    assert.equal(releases, 1);
+
+    const fullName = response();
+    await searchUsers({ query: { q: "  Antonio   Pascual  " } }, fullName);
+    assert.equal(fullName.statusCode, 200);
+    assert.deepEqual(calls[1].params, Array(5).fill("%Antonio Pascual%"));
+    assert.equal(releases, 2);
   } finally {
     db.getConnection = original;
   }

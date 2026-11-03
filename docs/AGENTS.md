@@ -24,6 +24,8 @@ Use `features/announcements/studentTags.js` as the single live employer-visibili
 
 Tag search/save scopes use current DB academic/head membership; regular heads tag their department, admins/Registrar heads can tag all ongoing interns. Up to 100 distinct student UUIDs; validate at write, persist tags with the post in the transaction, preserve omitted tags on edit. De-duplicate supervisor recipients, remove old employer notifications when scope shrinks, notify newly eligible employers only, emit after commit. Employer feed/inbox/count reads bypass route caches for live supervision authorization. Apply `scripts/2026-10-31-announcement-student-tags.sql` before backend/frontend deployment; no env/package changes. Read `features/announcements/README.md`; keep role manuals accurate.
 
+The feed and direct-post `tagProjection` includes `tagged_student_ids` and `tagged_students` (ID/name pairs) for posts the caller may already read. The frontend uses these IDs for tagged-name profile links; do not remove the projection or loosen post visibility to support the card. Search Users in `features/search-history/controllers/searchHistoryController.js` collapses repeated query whitespace and matches `CONCAT_WS(' ', first_name, last_name)` as well as either name part and company text. Keep the ten-result limit and separate searched-profile authorization; a search hit alone grants no private tabs. No schema/environment change is needed for these read/UI fixes.
+
 ## Bulk DTR locations (October 30, 2026)
 
 Location controller/route ownership is consolidated in `features/dtr-locations`: `individualDtrLocationController.js` holds student lookup and profile lookup/set/remove; `dtrLocationRoutes.js` registers both legacy individual endpoints and bulk endpoints. Preserve `/dtr/setted-location` and `/searched-user/set-dtr-location/...` contracts and original guards/limiters. Do not move clock-in/out, breaks or attendance history out of `features/dtr`. Tests importing individual location handlers must use the new module; route fixtures must mount the location router. No frontend/SQL/environment changes are required for this relocation.
@@ -1061,9 +1063,11 @@ application.
 
 ## Query optimization: Priority 1, phase 7 (user search; installed)
 
-`GET /eu-connect/api/search-users` retains its four `%term%` name/company
-conditions, all joins, latest-academic-row selection, and `LIMIT 10`. The
-latest-academic derived table now selects only `user_id`, `course_id`, and
+The earlier optimization of `GET /eu-connect/api/search-users` retained its
+then-four `%term%` name/company conditions, all joins, latest-academic-row
+selection, and `LIMIT 10`. The later full-name fix adds a fifth condition on
+`CONCAT_WS(' ', first_name, last_name)` and normalizes repeated query whitespace.
+The latest-academic derived table selects only `user_id`, `course_id`, and
 `department_id` instead of `sai1.*`. This reduces its intermediate row width
 without changing the result. The live schema already has a `(user_id, id)`
 academic index. Six old/new live query pairs returned identical ordered rows;
