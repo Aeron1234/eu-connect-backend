@@ -45,6 +45,8 @@ All DTR location management controllers and routes now belong to `features/dtr-l
 
 The paired frontend `/dtr-locations` page manages one or up to 100 ongoing internship assignments. Admins have department/dependent course filters; non-Registrar heads are scoped to current department and course; employers to their assigned ongoing interns. APIs recheck scope before scoped pin grouping and again under transaction locks on save. Reuse `dtr_locations` for overrides, the existing attendance checks and `dtr_location_set` notifications. Changed students receive instructions; staff actions group one notice per assigned employer. Unexpected database failures roll back assignments and notification writes together; inaccessible/stale selections receive individual failure results.
 
+The bulk page can reuse the existing temporary student Share location stream. `dtr_location:watch` authorizes the specific ongoing student/internship for the staff viewer and excludes Registrar heads. The streamed coordinates are not persisted; copying them into a bulk draft still requires the normal assignment confirmation.
+
 See [API, relationships and deployment details](features/dtr-locations/README.md). First run [the read-only schema verification migration](scripts/2026-10-30-bulk-dtr-locations.sql). No schema changes/backfill, environment variables or dependencies are required for the inspected database. Deploy frontend/backend together. Never import a historical full database dump to install this feature.
 
 ### Other features

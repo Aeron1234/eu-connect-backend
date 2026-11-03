@@ -5,7 +5,8 @@ import { createLiveDtrLocationService } from "../config/liveDtrLocation.js";
 function setup(ttlMs = 60_000) {
   const users = new Map([
     ["student", "student"], ["employer", "employer"], ["other-employer", "employer"],
-    ["head", "department_head"], ["other-head", "department_head"], ["admin", "admin"],
+    ["head", "department_head"], ["other-head", "department_head"],
+    ["registrar-head", "department_head"], ["admin", "admin"],
   ]);
   const database = {
     async execute(sql, params) {
@@ -14,7 +15,8 @@ function setup(ttlMs = 60_000) {
       if (sql.includes("SELECT ir.employer_id")) {
         if (params[1] !== "internship" || params[2] !== "student") return [[]];
         return [[{ employer_id: "employer", department_id: 7,
-          head_department_id: params[0] === "head" ? 7 : 8 }]];
+          head_department_id: ["head", "registrar-head"].includes(params[0]) ? 7 : 8,
+          head_department_code: params[0] === "registrar-head" ? "REG" : "CCS" }]];
       }
       throw new Error(`Unexpected query: ${sql}`);
     },
@@ -60,9 +62,11 @@ test("only the student's authorized staff can receive a temporary position", asy
   const admin = connect("admin");
   const outsider = connect("other-employer");
   const wrongHead = connect("other-head");
+  const registrarHead = connect("registrar-head");
 
   assert.equal((await outsider.request("dtr_location:watch", request)).ok, false);
   assert.equal((await wrongHead.request("dtr_location:watch", request)).ok, false);
+  assert.equal((await registrarHead.request("dtr_location:watch", request)).ok, false);
   for (const viewer of [employer, head, admin]) {
     assert.deepEqual(await viewer.request("dtr_location:watch", request), { ok: true, location: null });
   }

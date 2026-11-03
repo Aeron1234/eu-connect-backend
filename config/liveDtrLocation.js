@@ -133,12 +133,13 @@ export function createLiveDtrLocationService({ database = db, now = Date.now, tt
         }
         const [records] = await database.execute(
           `SELECT ir.employer_id, sai.department_id,
-                  dhbi.department_id AS head_department_id
+                  dhbi.department_id AS head_department_id, head_department.code AS head_department_code
            FROM internship_records ir
            LEFT JOIN student_academic_info sai ON sai.id = (
              SELECT MAX(latest.id) FROM student_academic_info latest WHERE latest.user_id = ir.user_id
            )
            LEFT JOIN dept_heads_background_info dhbi ON dhbi.user_id = ?
+           LEFT JOIN departments head_department ON head_department.id = dhbi.department_id
            WHERE ir.id = ? AND ir.user_id = ? AND ir.status = 'ongoing'
              AND ir.deleted_at IS NULL LIMIT 1`,
           [userId, internshipId, studentId],
@@ -146,7 +147,7 @@ export function createLiveDtrLocationService({ database = db, now = Date.now, tt
         const record = records[0];
         const permitted = record && (role === "admin" ||
           (role === "employer" && String(record.employer_id) === userId) ||
-          (role === "department_head" && record.department_id != null &&
+          (role === "department_head" && record.head_department_code !== "REG" && record.department_id != null &&
             String(record.department_id) === String(record.head_department_id)));
         if (!permitted || !socket.connected || generation !== watchGeneration) {
           acknowledge({ ok: false, error: "Access denied or internship is no longer active." });

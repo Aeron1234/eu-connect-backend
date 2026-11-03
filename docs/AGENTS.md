@@ -34,6 +34,8 @@ Reuse the existing unique `dtr_locations.internship_id`; no group table or histo
 
 `dtr_location_set` reuses the existing enum. Student links are `/student`, employer links `/dtr-locations`; existing legacy notifications remain supported. Verified sockets use only existing user rooms; send `dtr_locations_changed` to the actor. Invalidate notification/activity caches after commit. Existing attendance reads consume the same override/fallback and retain clock-in/out geofence/start-date rules. Run the read-only `scripts/2026-10-30-bulk-dtr-locations.sql` verification migration first; inspected schema needs no ALTER/backfill, packages or env changes. Read `features/dtr-locations/README.md`; maintain matching frontend/help manuals and deploy both repositories together.
 
+The bulk UI also watches one student's temporary Share location stream at a time through `config/liveDtrLocation.js`. Keep the watched room scoped to the authorized ongoing student/internship and reject Registrar heads even if a department ID matches. Renewed watches recheck current membership/supervision. The live pin is never persisted until a separate individual or bulk assignment succeeds.
+
 ## Current documentation status (October 28, 2026)
 
 The optimization reports below are historical. Their test counts, data sizes and next-work lists are not current deployment verification. Use README.md and mounted source for present contracts. Incremental SQL and regression tests now exist; historical database inspection does not authorize live database access.
