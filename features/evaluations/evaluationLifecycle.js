@@ -6,15 +6,6 @@ import { invalidateActivityLogsCache } from '../../config/cache/activityLogsCach
 import { invalidateRouteCache } from '../../config/cache/cache.js';
 import { evaluationReadScope } from './evaluationAccess.js';
 
-// Student-authored supervisor evaluations retain one active entry per internship.
-// Call while holding the internship row lock to serialize competing submissions;
-// soft-deleted history does not block replacement. Table names are internal constants.
-export async function assertNoActiveEvaluation(connection, table, internshipId) {
-  const [existing] = await connection.execute(
-    `SELECT id FROM ${table} WHERE internship_record_id = ? AND deleted_at IS NULL LIMIT 1`, [internshipId]);
-  if (existing.length) throw Object.assign(new Error('An active evaluation already exists for this internship. Delete it before posting a replacement.'), { status: 409, code: 'EVALUATION_ALREADY_EXISTS' });
-}
-
 // Share the deletion lifecycle across both directions using controller constants.
 // Table/column configuration must never come from request input.
 export function evaluationDeleteHandler({ table, scoresTable, ownerColumn, authorRole }) {
@@ -71,7 +62,7 @@ export function evaluationDeleteHandler({ table, scoresTable, ownerColumn, autho
       invalidateNotificationsCache();
       invalidateActivityLogsCache();
       invalidateRouteCache('/api/v1/department-head-dashboard-data');
-      return res.json({ success: true, permanently_deleted: staff, message: staff ? 'Evaluation permanently deleted.' : authorRole === 'student' ? 'Evaluation deleted. A replacement can now be posted.' : 'Evaluation deleted.' });
+      return res.json({ success: true, permanently_deleted: staff, message: staff ? 'Evaluation permanently deleted.' : 'Evaluation deleted.' });
     } catch (error) {
       if (connection) await connection.rollback();
       reportError('Delete evaluation failed:', error);
@@ -80,9 +71,8 @@ export function evaluationDeleteHandler({ table, scoresTable, ownerColumn, autho
   };
 }
 
-// Check ongoing assignment and, only for student-authored supervisor feedback,
-// the active slot. Performance reviews may repeat. Start dates are checked on submit.
-// It is no-store UI guidance; submission rechecks the current state under a lock.
+// Both evaluation directions may repeat for the same ongoing internship.
+// This no-store UI guidance checks assignment; submission rechecks under a lock.
 export function evaluationEligibilityHandler(direction) {
   const performance = direction === 'performance';
   return async (req, res) => {
@@ -92,15 +82,14 @@ export function evaluationEligibilityHandler(direction) {
     let connection;
     try {
       connection = await db.getConnection();
-      const activeCheck = performance ? '' : ', EXISTS(SELECT 1 FROM employer_evaluation_masters m WHERE m.internship_record_id = ir.id AND m.deleted_at IS NULL) AS has_evaluation';
       const params = performance ? [studentId, viewer.id] : [studentId];
       const [[record]] = await connection.execute(
-        `SELECT ir.id${activeCheck}
+        `SELECT ir.id
          FROM internship_records ir WHERE ir.user_id = ? AND ir.status = 'ongoing' AND ir.deleted_at IS NULL AND ir.employer_id IS NOT NULL
          ${performance ? 'AND ir.employer_id = ?' : ''} ORDER BY ir.created_at DESC LIMIT 1`, params);
       res.set?.('Cache-Control', 'private, no-store');
-      return res.json({ can_post: Boolean(record && (performance || !Number(record.has_evaluation))), internship_record_id: record?.id || null,
-        message: !record ? 'An ongoing internship with an accepted supervisor is required.' : !performance && Number(record.has_evaluation) ? 'You already have an active evaluation for this internship. Delete it from your history before posting a replacement.' : '' });
+      return res.json({ can_post: Boolean(record), internship_record_id: record?.id || null,
+        message: !record ? 'An ongoing internship with an accepted supervisor is required.' : '' });
     } catch (error) {
       reportError('Evaluation eligibility failed:', error);
       return res.status(500).json({ error: 'Could not check whether you can post an evaluation.' });

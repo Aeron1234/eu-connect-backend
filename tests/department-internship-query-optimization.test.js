@@ -50,7 +50,7 @@ test("department list keeps filtered pagination and unfiltered status cards", as
   };
   const { calls, res, released } = await invoke({
     role: "department_head",
-    query: { status: "ongoing", search: "Ana", page: "2", limit: "5" },
+    query: { status: "ongoing", search: "  Ana   Santos  ", page: "2", limit: "5" },
     summary,
     rows: [row],
   });
@@ -62,8 +62,10 @@ test("department list keeps filtered pagination and unfiltered status cards", as
   assert.equal(calls.length, 3);
   const [auth, aggregate, page] = calls;
   assert.deepEqual(auth.params, [12]);
-  assert.deepEqual(aggregate.params, ["ongoing", ...Array(5).fill("%Ana%"), 7]);
-  assert.deepEqual(page.params, [7, "ongoing", ...Array(5).fill("%Ana%"), 5, 5]);
+  assert.deepEqual(aggregate.params, ["ongoing", ...Array(6).fill("%Ana Santos%"), 7]);
+  assert.deepEqual(page.params, [7, "ongoing", ...Array(6).fill("%Ana Santos%"), 5, 5]);
+  assert.match(aggregate.sql, /CONCAT_WS\(' ', up\.first_name, up\.last_name\) LIKE \?/);
+  assert.match(page.sql, /CONCAT_WS\(' ', up\.first_name, up\.last_name\) LIKE \?/);
   assert.match(aggregate.sql, /COUNT\(CASE WHEN ir\.status = \? AND/);
   assert.match(aggregate.sql, /WHERE ir\.deleted_at IS NULL AND sai\.department_id = \?/);
   assert.doesNotMatch(aggregate.sql, /GROUP BY ir\.status/);

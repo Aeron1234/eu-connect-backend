@@ -1,4 +1,4 @@
-import { assertNoActiveEvaluation, evaluationDeleteHandler } from "../evaluationLifecycle.js";
+import { evaluationDeleteHandler } from "../evaluationLifecycle.js";
 import { reportError } from "../../../config/errorTracking.js";
 import { invalidateEvaluationHistoryCache } from "../../../config/cache/evaluationHistoryCache.js";
 import { invalidateActivityLogsCache } from "../../../config/cache/activityLogsCache.js";
@@ -94,8 +94,7 @@ export const createEmployerEvaluation = async (req, res) => {
     connection = await db.getConnection();
     await connection.beginTransaction();
 
-    // Lock the student's live ongoing record so assignment changes and duplicate
-    // submissions are serialized before resolving the supervisor and active slot.
+    // Lock the student's live ongoing record while resolving the accepted supervisor.
     const [records] = await connection.execute(
       `SELECT id, employer_id, company_name FROM internship_records WHERE user_id = ? AND status = 'ongoing' AND deleted_at IS NULL LIMIT 1 FOR UPDATE`,
       [studentId],
@@ -118,9 +117,7 @@ export const createEmployerEvaluation = async (req, res) => {
       });
     }
 
-    await assertNoActiveEvaluation(connection, "employer_evaluation_masters", internship.id);
-
-    const evaluationPeriod = new Date().toISOString().slice(0, 7); // UTC YYYY-MM label; uniqueness is per internship, not month.
+    const evaluationPeriod = new Date().toISOString().slice(0, 7); // UTC YYYY-MM display label, not a posting limit.
 
     const masterId = newUUID();
 
@@ -200,7 +197,13 @@ export const createEmployerEvaluation = async (req, res) => {
   } catch (error) {
     if (connection) await connection.rollback();
     if (error?.status) return res.status(error.status).json({ error: error.message, code: error.code });
-    if (error?.code === "ER_DUP_ENTRY") return res.status(409).json({ error: "An active evaluation already exists for this internship." });
+    if (error?.code === "ER_DUP_ENTRY" && /uq_employer_evaluation_active_slot/.test(error.sqlMessage || error.message || "")) {
+      return res.status(503).json({
+        error: "Multiple supervisor evaluations require a database update. Please ask your administrator to apply the evaluation migration.",
+        code: "EVALUATION_SCHEMA_UPGRADE_REQUIRED",
+      });
+    }
+    if (error?.code === "ER_DUP_ENTRY") return res.status(409).json({ error: "The evaluation could not be saved because of a conflicting record. Refresh and try again." });
     reportError("Create employer evaluation error:", error);
     res.status(500).json({
       success: false,

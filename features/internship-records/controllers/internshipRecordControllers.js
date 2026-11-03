@@ -1028,15 +1028,17 @@ export const getDepartmentInternshipRecords = async (req, res) => {
       filterParams.push(status);
     }
 
-    if (search) {
+    const normalizedSearch = typeof search === "string" ? search.trim().replace(/\s+/g, " ") : "";
+    if (normalizedSearch) {
       filterConditions.push(
         `(up.first_name LIKE ? OR up.last_name LIKE ? 
+          OR CONCAT_WS(' ', up.first_name, up.last_name) LIKE ?
           OR sai.student_number LIKE ? 
           OR ir.company_name LIKE ? 
           OR c.course_name LIKE ?)`,
       );
-      const term = `%${search}%`;
-      filterParams.push(term, term, term, term, term);
+      const term = `%${normalizedSearch}%`;
+      filterParams.push(term, term, term, term, term, term);
     }
 
     const whereClause = [...scopedConditions, ...filterConditions].join(" AND ");

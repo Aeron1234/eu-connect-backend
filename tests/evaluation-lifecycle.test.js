@@ -13,22 +13,9 @@ const response = () => ({ statusCode: 200, set() {}, status(code) { this.statusC
 const req = (role, id = 'author') => ({ verifiedUser: { id, role, department_id: 999 }, params: { evaluationId: 'evaluation', studentId: 'student' },
   body: { student_id: 'student', scores: Array.from({ length: 29 }, (_, n) => ({ criterion_name: 'Criterion ' + n, score: 4 })) }, app: { get() {} } });
 
-test('student-authored supervisor feedback still rejects a second active evaluation before any writes', async () => {
-  for (const [create, role] of [[createEmployerEvaluation, 'student']]) {
-    let writes = 0, rollback = 0, parentLocked = false;
-    db.getConnection = async () => ({ release() {}, async beginTransaction() {}, async commit() { throw Error('must not commit'); }, async rollback() { rollback++; },
-      async execute(sql) {
-        if (sql.includes('FROM internship_records')) { assert.match(sql, /FOR UPDATE/); parentLocked = true; return [[{ id: 'record', employer_id: 'author', date_started: '2000-01-01' }]]; }
-        if (/SELECT id FROM .*evaluation_masters/.test(sql)) { assert(parentLocked); assert.match(sql, /deleted_at IS NULL/); return [[{ id: 'existing' }]]; }
-        writes++; return [{ affectedRows: 1 }];
-      } });
-    const res = response(); await create(req(role), res); assert.equal(res.statusCode, 409); assert.equal(writes, 0); assert.equal(rollback, 1);
-  }
-});
-
-test('concurrent creates allow multiple performance reviews but only one active supervisor evaluation', async () => {
+test('concurrent creates allow multiple evaluations in both directions', async () => {
   for (const [create, role] of [[createStudentEvaluation, 'employer'], [createEmployerEvaluation, 'student']]) {
-    let active = false, lock = Promise.resolve(), inserts = 0, scoreWrites = 0, commits = 0;
+    let lock = Promise.resolve(), inserts = 0, scoreWrites = 0, commits = 0;
     const masters = new Set(), notifiedMasters = new Set();
     db.getConnection = async () => {
       let unlock;
@@ -38,13 +25,9 @@ test('concurrent creates allow multiple performance reviews but only one active 
           const previous = lock; lock = new Promise(resolve => { unlock = resolve; }); await previous;
           return [[{ id: 'record', employer_id: 'author', date_started: '2000-01-01', company_name: 'Company' }]];
         }
-        if (/SELECT id FROM .*evaluation_masters/.test(sql)) {
-          assert.equal(role, 'student', 'performance reviews must not check for an occupied slot');
-          return [active ? [{ id: 'existing' }] : []];
-        }
+        assert.doesNotMatch(sql, /SELECT id FROM .*evaluation_masters/, 'neither direction should check for an occupied slot');
         if (/INSERT INTO (student|employer)_evaluation_masters/.test(sql)) {
-          if (role === 'student') assert(!active);
-          assert(!masters.has(params[0])); masters.add(params[0]); active = true; inserts++;
+          assert(!masters.has(params[0])); masters.add(params[0]); inserts++;
         }
         if (/INSERT INTO (student|employer)_evaluation_scores/.test(sql)) {
           assert(masters.has(params[0]), 'scores must belong to the new master'); scoreWrites++;
@@ -59,11 +42,10 @@ test('concurrent creates allow multiple performance reviews but only one active 
       } };
     };
     const first = response(), second = response(); await Promise.all([create(req(role), first), create(req(role), second)]);
-    const count = role === 'employer' ? 2 : 1;
-    assert.deepEqual([first.statusCode, second.statusCode].sort(), role === 'employer' ? [201, 201] : [201, 409]);
-    assert.equal(inserts, count); assert.equal(commits, count); assert.equal(scoreWrites, 29 * count);
+    assert.deepEqual([first.statusCode, second.statusCode].sort(), [201, 201]);
+    assert.equal(inserts, 2); assert.equal(commits, 2); assert.equal(scoreWrites, 58);
+    assert.notEqual(first.body.evaluationId, second.body.evaluationId);
     if (role === 'employer') {
-      assert.notEqual(first.body.evaluationId, second.body.evaluationId);
       assert.deepEqual(notifiedMasters, masters);
     }
   }
@@ -117,19 +99,22 @@ test('authors cannot read deleted summaries; staff history retains their deleted
   const history = response(); await getAllStudentEvaluations(req('student'), history); assert.deepEqual(history.body.data, []);
 });
 
-test('posting availability ignores existing performance reviews but retains the supervisor active slot', async () => {
+test('posting availability ignores earlier evaluations in both directions', async () => {
   for (const direction of ['performance', 'supervisor']) for (const active of [false, true]) {
     db.getConnection = async () => ({ release() {}, async execute(sql, params) {
       assert.match(sql, /ir.deleted_at IS NULL/); assert.match(sql, /ir.employer_id IS NOT NULL/);
       if (direction === 'performance') {
         assert.doesNotMatch(sql, /evaluation_masters/);
         assert.match(sql, /AND ir.employer_id = \?/); assert.deepEqual(params, ['student', 'author']);
-      } else assert.match(sql, /employer_evaluation_masters m WHERE m.internship_record_id = ir.id AND m.deleted_at IS NULL/);
+      } else {
+        assert.doesNotMatch(sql, /evaluation_masters/);
+        assert.deepEqual(params, ['author']);
+      }
       return [[{ id: 'record', has_evaluation: Number(active) }]];
     } });
     const res = response(); await evaluationEligibilityHandler(direction)(req(direction === 'performance' ? 'employer' : 'student'), res);
-    assert.equal(res.body.can_post, direction === 'performance' || !active);
-    if (direction === 'performance') assert.equal(res.body.message, '');
+    assert.equal(res.body.can_post, true);
+    assert.equal(res.body.message, '');
   }
 });
 
@@ -162,6 +147,18 @@ test('an unapplied performance migration returns a schema error and rolls back i
   assert(rolledBack); assert.equal(writes, 1);
 });
 
+test('an unapplied supervisor-evaluation migration returns a schema error and rolls back', async () => {
+  let rolledBack = false;
+  db.getConnection = async () => ({ release() {}, async beginTransaction() {}, async commit() { assert.fail('must not commit'); },
+    async rollback() { rolledBack = true; }, async execute(sql) {
+      if (sql.includes('FROM internship_records')) return [[{ id: 'record', employer_id: 'author', company_name: 'Company' }]];
+      throw Object.assign(new Error('Duplicate key'), { code: 'ER_DUP_ENTRY', sqlMessage: "Duplicate entry for key 'uq_employer_evaluation_active_slot'" });
+    } });
+  const res = response(); await createEmployerEvaluation(req('student'), res);
+  assert.equal(res.statusCode, 503); assert.equal(res.body.code, 'EVALUATION_SCHEMA_UPGRADE_REQUIRED');
+  assert.match(res.body.error, /administrator.*migration/); assert(rolledBack);
+});
+
 test('performance history keeps several active reviews of one internship as independent score groups', async () => {
   db.getConnection = async () => ({ release() {}, async execute(sql) {
     assert.match(sql, /m.deleted_at IS NULL/);
@@ -178,6 +175,24 @@ test('performance history keeps several active reviews of one internship as inde
     [['review-400', 'record', 9, 10], ['review-200', 'record', 3, 5]]);
 });
 
+test('student history keeps multiple supervisor evaluations of one internship separate', async () => {
+  db.getConnection = async () => ({ release() {}, async execute(sql, params) {
+    assert.match(sql, /FROM employer_evaluation_masters AS m/);
+    assert.match(sql, /m.deleted_at IS NULL/);
+    assert.deepEqual(params, ['author']);
+    return [[
+      { evaluation_id: 'supervisor-2', submitted_date: '2026-11-04', company: 'Company', breakdown_label: 'Support', breakdown_score: 5 },
+      { evaluation_id: 'supervisor-1', submitted_date: '2026-11-03', company: 'Company', breakdown_label: 'Support', breakdown_score: 3 },
+    ]];
+  } });
+  const res = response(); await getAllStudentEvaluations(req('student'), res);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body.data.map(item => [item.id, item.type, item.breakdown[0].score]), [
+    ['supervisor-2', 'Supervisor Evaluation', 5],
+    ['supervisor-1', 'Supervisor Evaluation', 3],
+  ]);
+});
+
 test('multiple performance migration removes only its unique index and preserves all existing records', () => {
   const sql = readFileSync(new URL('../scripts/2026-10-29-multiple-performance-evaluations.sql', import.meta.url), 'utf8');
   const statements = sql.replace(/--[^\n]*/g, '');
@@ -185,6 +200,17 @@ test('multiple performance migration removes only its unique index and preserves
   assert.equal((statements.match(/ALTER TABLE/g) || []).length, 1);
   assert.doesNotMatch(statements, /\b(UPDATE|DELETE|INSERT|TRUNCATE)\b/i);
   assert.doesNotMatch(statements, /DROP.*uq_employer_evaluation_active_slot|DROP COLUMN/i);
+});
+
+test('multiple supervisor migration removes only its unique index and preserves evaluation data', () => {
+  const sql = readFileSync(new URL('../scripts/2026-11-04-multiple-supervisor-evaluations.sql', import.meta.url), 'utf8');
+  const statements = sql.replace(/--[^\n]*/g, '');
+  assert.match(statements, /ALTER TABLE employer_evaluation_masters\s+ADD INDEX IF NOT EXISTS idx_employer_evaluation_internship_record \(internship_record_id\);/);
+  assert.match(statements, /ALTER TABLE employer_evaluation_masters\s+DROP INDEX IF EXISTS uq_employer_evaluation_active_slot;/);
+  assert.equal((statements.match(/ALTER TABLE/g) || []).length, 2);
+  assert(statements.indexOf('ADD INDEX IF NOT EXISTS') < statements.indexOf('DROP INDEX IF EXISTS'));
+  assert.doesNotMatch(statements, /\b(UPDATE|DELETE|INSERT|TRUNCATE)\b/i);
+  assert.doesNotMatch(statements, /DROP.*uq_student_evaluation_active_slot|DROP COLUMN/i);
 });
 
 test('legacy review is retired and migration preserves duplicates before enforcing one active slot', async () => {

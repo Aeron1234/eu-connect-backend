@@ -8,10 +8,11 @@ master ID, scores, submitted date, history entry, notification and printable PDF
 The legacy complete-summary endpoint continues to return its latest master;
 history and record-detail endpoints include the individual evaluations.
 
-Student-authored supervisor evaluations still allow one active entry per
-internship. Soft-deleting that entry frees its slot for a replacement. Accepted
-supervision and Philippine internship-start checks remain enforced on submission
-in both directions. Forms post immediately without a confirmation/status step.
+Students can also submit multiple supervisor evaluations during the same ongoing
+internship. Earlier evaluations do not need to be deleted first. Both directions
+require an accepted supervisor and an ongoing internship; the Philippine
+internship-start check applies to employer-authored performance reviews.
+Forms post immediately without a confirmation/status step.
 Performance evaluations remain confidential from students.
 
 Author deletion sets `deleted_at` and hides only that evaluation from the author's
@@ -23,29 +24,31 @@ linked notifications transactionally. Successful writes invalidate caches after
 commit. Notifications target the internship record and identify each evaluation
 with its own `link_uuid`.
 
-Submission locks the ongoing internship row before checking assignment and start
-date. Only student-authored supervisor feedback checks for an existing active
-evaluation, protected by `uq_employer_evaluation_active_slot`. Performance posting
-does not check for an existing master. Availability reads are private/no-store
+Submission locks the ongoing internship row before checking assignment.
+Neither direction checks for an existing active evaluation. The supervisor
+evaluation unique index `uq_employer_evaluation_active_slot` must be removed
+by the November 4 migration. Availability reads are private/no-store
 and fail closed on errors; submission remains authoritative. Existing submission
 rate limits apply. Legacy confirmation/dispute endpoints remain retired.
 
 ## Deployment and SQL
 
 Back up first. For databases with the October 22 soft-delete baseline already
-installed (including the latest supplied Layerbase export), run only
+installed (including the latest supplied Layerbase export), run
 [`2026-10-29-multiple-performance-evaluations.sql`](../../scripts/2026-10-29-multiple-performance-evaluations.sql),
-then deploy the matching backend and frontend. This MariaDB 11.8 migration drops
-only `uq_student_evaluation_active_slot`, preserving all evaluation rows, scores,
-deleted timestamps, the nonunique internship foreign-key index and the harmless
-generated active flag. It is safe to rerun. No environment or package changes
-are required. The API reports a schema-upgrade error if the old index still
-rejects a subsequent performance evaluation.
+if not yet applied, followed by
+[`2026-11-04-multiple-supervisor-evaluations.sql`](../../scripts/2026-11-04-multiple-supervisor-evaluations.sql),
+then deploy the matching backend and frontend. The November migration drops only
+`uq_employer_evaluation_active_slot`, first adding a nonunique internship index
+so the existing foreign key remains supported. Both migrations preserve rows,
+scores and deleted timestamps and are safe
+to rerun. No environment or package changes are required. The API reports a
+schema-upgrade error if an old index still rejects another evaluation.
 
 For an older schema without soft deletion, apply
 [`2026-10-22-evaluation-soft-delete.sql`](../../scripts/2026-10-22-evaluation-soft-delete.sql)
-first, following its duplicate-consolidation review, then the October 29 upgrade.
-Never replay that historical baseline after enabling multiple reviews: it would
-archive older active performance entries and recreate the retired index.
+first, following its duplicate-consolidation review, then both upgrades in date
+order. Never replay that historical baseline after enabling multiple reviews: it
+would archive older active entries and recreate the retired indexes.
 The new migration does not restore previously deleted historical entries.
 DDL commits implicitly. No live database migration was executed by Codex.
