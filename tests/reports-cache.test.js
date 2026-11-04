@@ -25,6 +25,7 @@ beforeEach(() => {
       if(sql.includes("d.code = 'REG'")) {if(fail==='auth') throw Error('auth offline'); return [allowed?[{ok:1}]:[]];}
       calls++;
       if(fail==='read' || (fail==='after-commit' && committed)) throw Error('read offline');
+      if(fail==='response-read' && sql.includes('SELECT * FROM program_annual_reports WHERE id = ?')) throw Error('response read offline');
       if(!sql.trim().startsWith('SELECT')) return [{affectedRows:1}];
       if(sql.includes('AND id <> ? FOR UPDATE')) return [[]];
       if(sql.includes('FOR UPDATE')) return [existing?[{id:'r',degree_program:'Computing',academic_year:'2026-2027',status:'draft'}]:[]];
@@ -89,9 +90,17 @@ test('annual rollback, validation, missing and denied writes preserve summaries'
     for(const [handler,input,status] of [[reports.deleteProgramAnnualReport,req,404],[reports.saveProgramAnnualReport,{...req,body:{}},400],[reports.saveProgramAnnualReport,{...req,verifiedUser:{id:'head',role:'department_head'}},403]]){allowed=false;const res=response();await handler(input,res);assert.equal(res.statusCode,status);assert.ok(cache.has('annual'));assert.ok(cache.has('detail-one'));}
   }finally{console.error=error;}
 });
-test('committed annual save invalidates even if response reread fails',async()=>{
-  seed();fail='after-commit';const error=console.error;console.error=()=>{};
-  try{const res=response();await reports.saveProgramAnnualReport(req,res);assert.equal(res.statusCode,500);assert.ok(committed);assert.equal(cache.has('annual'),false);assert.equal(cache.has('detail-one'),false);}finally{console.error=error;}
+test('annual save completes without database reads after commit',async()=>{
+  seed();fail='after-commit';const res=response();
+  await reports.saveProgramAnnualReport(req,res);
+  assert.equal(res.statusCode,200);
+  assert.ok(committed);
+  assert.equal(cache.has('annual'),false);
+  assert.equal(cache.has('detail-one'),false);
+});
+test('response read failure rolls back before a draft can be reported as saved',async()=>{
+  seed();fail='response-read';const error=console.error;console.error=()=>{};
+  try{const res=response();await reports.saveProgramAnnualReport(req,res);assert.equal(res.statusCode,500);assert.equal(committed,false);assert.ok(cache.has('annual'));}finally{console.error=error;}
 });
 test('report read errors, missing reports and invalid input never cache; empty summaries do',async t=>{
   const get=await client(t);const error=console.error;console.error=()=>{};

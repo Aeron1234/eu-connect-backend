@@ -573,6 +573,7 @@ export const getProgramAnnualReportById = async (req, res) => {
 // explicit reportId that still points to a draft; submission finalizes that draft.
 export const saveProgramAnnualReport = async (req, res) => {
   let connection;
+  let committed = false;
   try {
     const { id: userId, role } = req.verifiedUser;
     const {
@@ -756,11 +757,6 @@ export const saveProgramAnnualReport = async (req, res) => {
       );
     }
 
-    await connection.commit();
-    invalidateAnnualReportsCache();
-
-    invalidateActivityLogsCache();
-
     const [report] = await connection.execute(
       `SELECT * FROM program_annual_reports WHERE id = ?`,
       [reportId],
@@ -771,13 +767,18 @@ export const saveProgramAnnualReport = async (req, res) => {
       [reportId],
     );
 
+    await connection.commit();
+    committed = true;
+    invalidateAnnualReportsCache();
+    invalidateActivityLogsCache();
+
     res.status(200).json({
       success: true,
       message: status === "submitted" ? "Report submitted." : "Draft saved.",
       report: { ...report[0], entries: savedEntries },
     });
   } catch (error) {
-    if (connection) await connection.rollback();
+    if (connection && !committed) await connection.rollback();
     reportError("Save program annual report error:", error);
     res.status(500).json({ error: "Failed to save program annual report." });
   } finally {
