@@ -1,7 +1,7 @@
 import { after, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { db } from "../config/db.js";
-import { clockIn, clockOut, getLatestDtrStatus, startBreak, resumeDuty } from "../features/dtr/controllers/dtrControllers.js";
+import { clockIn, clockOut, deleteDTR, getTodayDTR, getLatestDtrStatus, startBreak, resumeDuty } from "../features/dtr/controllers/dtrControllers.js";
 import { getStudentDashboardData } from "../features/dashboard/controllers/dashboardController.js";
 import { autoCloseStaleShifts } from "../config/autoCloseStaleShifts.js";
 
@@ -39,7 +39,9 @@ test("clock-in and clock-out reject an internship before its start date", async 
       async commit() { wrote = true; },
       release() {},
       async execute(sql) {
+        if (sql.includes("SELECT id FROM users")) return [[{ id: "student" }]];
         if (sql.includes("SELECT id FROM daily_time_records")) return [[]];
+        if (sql.includes("DATE(clock_in) = CURDATE()")) return [[]];
         if (sql.includes("FROM internship_records ir") || sql.includes("FROM daily_time_records dtr")) {
           return [[{ internship_id: "internship", dtr_id: 1, date_started: "2099-01-01", has_started: 0 }]];
         }
@@ -53,6 +55,99 @@ test("clock-in and clock-out reject an internship before its start date", async 
     assert.match(res.body.error, /start date/i);
     assert.equal(rolledBack, true);
     assert.equal(wrote, false);
+  }
+});
+
+test("one Manila start date and six-hour rest work for day and overnight shifts", async () => {
+  for (const [lastShift, expectedStatus, message] of [
+    [{ started_today: 1, seconds_since_clock_out: 36000 }, 409, /already clocked in.*today/i],
+    [{ started_today: 0, seconds_since_clock_out: 300 }, 409, /six hours/i],
+    [{ started_today: 0, seconds_since_clock_out: 16 * 3600 }, 201, /successful/i],
+    [null, 201, /successful/i],
+  ]) {
+    let committed = false;
+    let rolledBack = false;
+    db.getConnection = async () => ({
+      async beginTransaction() {},
+      async commit() { committed = true; },
+      async rollback() { rolledBack = true; },
+      release() {},
+      async execute(sql, params) {
+        if (sql.includes("SELECT id FROM users")) {
+          assert.match(sql, /FOR UPDATE/);
+          assert.deepEqual(params, ["student"]);
+          return [[{ id: "student" }]];
+        }
+        if (sql.includes("SELECT id FROM daily_time_records")) return [[]];
+        if (sql.includes("DATE(clock_in) = CURDATE()")) {
+          assert.match(sql, /TIMESTAMPDIFF\(SECOND, clock_out, NOW\(\)\)/);
+          return [lastShift ? [lastShift] : []];
+        }
+        if (sql.includes("FROM internship_records ir")) {
+          return [[{ internship_id: "internship", date_started: "2026-11-01", has_started: 1,
+            company_lat: 14, company_lon: 121 }]];
+        }
+        if (sql.includes("INSERT INTO daily_time_records")) return [{ affectedRows: 1 }];
+        throw new Error("Unexpected SQL: " + sql);
+      },
+    });
+    const res = response();
+    await clockIn({ verifiedUser: { id: "student" }, query: { internshipId: "internship" },
+      body: { lat_in: 14, lon_in: 121 } }, res);
+    assert.equal(res.statusCode, expectedStatus);
+    assert.match(res.body.error || res.body.message, message);
+    assert.equal(committed, expectedStatus === 201);
+    assert.equal(rolledBack, expectedStatus !== 201);
+  }
+});
+
+test("the Today lookup keeps an overnight shift visible after midnight", async () => {
+  const overnight = { id: 1, clock_in: "2026-11-03 22:00:00", clock_out: "2026-11-04 06:00:00" };
+  db.getConnection = async () => ({
+    release() {},
+    async execute(sql, params) {
+      assert.match(sql, /clock_out >= CURDATE\(\)/);
+      assert.match(sql, /clock_out IS NULL/);
+      assert.deepEqual(params, ["student", "internship"]);
+      return [[overnight]];
+    },
+  });
+  const res = response();
+  await getTodayDTR({ verifiedUser: { id: "student" }, query: { internshipId: "internship" } }, res);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body, overnight);
+});
+
+test("recent or open DTR rows cannot be deleted to bypass the next clock-in rule", async () => {
+  for (const [record, expectedStatus] of [
+    [{ clock_in: "2026-11-04 08:00:00", clock_out: null, started_today: 1, seconds_since_clock_out: null }, 409],
+    [{ clock_in: "2026-11-04 08:00:00", clock_out: "2026-11-04 10:00:00", started_today: 1, seconds_since_clock_out: 36000 }, 409],
+    [{ clock_in: "2026-11-03 22:00:00", clock_out: "2026-11-04 06:00:00", started_today: 0, seconds_since_clock_out: 300 }, 409],
+    [{ clock_in: "2026-11-03 08:00:00", clock_out: "2026-11-03 10:00:00", started_today: 0, seconds_since_clock_out: 36000 }, 200],
+    [{ clock_in: null, clock_out: null, started_today: null, seconds_since_clock_out: null }, 200],
+  ]) {
+    let committed = false;
+    let rolledBack = false;
+    let writes = 0;
+    db.getConnection = async () => ({
+      release() {},
+      async beginTransaction() {},
+      async commit() { committed = true; },
+      async rollback() { rolledBack = true; },
+      async execute(sql, params) {
+        assert.deepEqual(params, [1, "student"]);
+        if (sql.includes("SELECT clock_in, clock_out")) return [[record]];
+        writes++;
+        if (sql.includes("DELETE FROM daily_time_records")) return [{ affectedRows: 1 }];
+        return [{ affectedRows: 1 }];
+      },
+    });
+    const res = response();
+    await deleteDTR({ verifiedUser: { id: "student" }, params: { dtrId: 1 } }, res);
+    assert.equal(res.statusCode, expectedStatus);
+    assert.equal(committed, expectedStatus === 200);
+    assert.equal(rolledBack, expectedStatus === 409);
+    assert.equal(writes, expectedStatus === 200 ? 2 : 0);
   }
 });
 
@@ -359,7 +454,9 @@ test("valid Philippine coordinates produce an actionable storage error and roll 
       async commit() { committed = true; },
       release() { released = true; },
       async execute(sql, params) {
+        if (sql.includes("SELECT id FROM users")) return [[{ id: "student" }]];
         if (sql.includes("SELECT id FROM daily_time_records")) return [[]];
+        if (sql.includes("DATE(clock_in) = CURDATE()")) return [[]];
         if (sql.includes("FROM internship_records ir") || sql.includes("FROM daily_time_records dtr")) {
           return [[{ internship_id: "internship", dtr_id: 1, date_started: "2026-01-01", has_started: 1,
             company_lat: 14, company_lon: 121, clock_in: "2026-10-29 08:00:00", status: "present", break_started_at: null }]];

@@ -100,13 +100,14 @@ export const getStudentDashboardData = async (req, res) => {
     let location = {};
 
     if (internshipId && isOngoing) {
-      // Today's DTR
+      // Show a shift started today or one that continued past midnight.
       try {
         const [todayRows] = await connection.execute(
           `SELECT id, clock_in, clock_out, created_at, status 
            FROM daily_time_records 
-           WHERE user_id = ? AND created_at >= CURDATE()
-             AND created_at < CURDATE() + INTERVAL 1 DAY AND internship_id = ?
+           WHERE user_id = ? AND internship_id = ? AND clock_in IS NOT NULL
+             AND (clock_in >= CURDATE() OR clock_out >= CURDATE() OR clock_out IS NULL)
+           ORDER BY clock_in DESC
            LIMIT 1`,
           [userId, internshipId],
         );

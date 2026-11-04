@@ -115,6 +115,8 @@ read/write failures still fall back to the normal controller response.
 
 ## Duty breaks
 
+Clock-in locks the student's `users` row to serialize simultaneous attempts, then rejects any open DTR, a prior shift started on the current Philippine date, or a clock-out less than six hours ago. The MySQL pool uses `+08:00`; `CURDATE()` and `NOW()` provide the calendar day and elapsed rest time. A night shift belongs to its start date; `/dtr/today` and the student dashboard include a prior-day shift that is still open or ended today. Keep the same safeguards on DTR deletion so deleting a recent shift cannot permit an extra clock-in. Legacy rows without a clock-in may still be deleted. No schema or environment changes are needed.
+
 Apply `docs/attendance-breaks.sql` before deploying break-enabled backend code.
 Student-only `POST /dtr/break/start` and `PATCH /dtr/break/resume` transition the
 one open DTR with a non-null `clock_in` between `present` and `on-break`. Both

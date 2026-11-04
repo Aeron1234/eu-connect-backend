@@ -7,6 +7,8 @@ import { db } from "../../../config/db.js";
 import { isWithinRadius } from "../../../config/helpers.js";
 import { getMaxShiftHours } from "../../../config/shiftLimits.js";
 
+const MIN_REST_SECONDS = 6 * 60 * 60;
+
 // Reject absent, blank, non-numeric or out-of-range coordinates, preserving zero.
 // This validates submitted values; it does not establish when the device acquired them.
 function parseDtrCoordinates(lat, lon) {
@@ -46,7 +48,9 @@ export const getTodayDTR = async (req, res) => {
 
     const [rows] = await connection.execute(
       `SELECT id, clock_in, clock_out, created_at, status FROM daily_time_records 
-       WHERE user_id = ? AND DATE(created_at) = CURDATE() AND internship_id = ?
+       WHERE user_id = ? AND internship_id = ? AND clock_in IS NOT NULL
+         AND (clock_in >= CURDATE() OR clock_out >= CURDATE() OR clock_out IS NULL)
+       ORDER BY clock_in DESC
        LIMIT 1`,
       [id, internshipId],
     );
@@ -170,6 +174,17 @@ export const clockIn = async (req, res) => {
     connection = await db.getConnection();
     await connection.beginTransaction();
 
+    // Serialize this student's clock-ins, including simultaneous requests for
+    // different internships. Locking the user row also protects the empty day.
+    const [studentRows] = await connection.execute(
+      `SELECT id FROM users WHERE id = ? FOR UPDATE`,
+      [userId],
+    );
+    if (studentRows.length === 0) {
+      await connection.rollback();
+      return res.status(401).json({ error: "Your account is no longer available." });
+    }
+
     // Check and lock an existing open shift across this student's internships
     // before allowing another clock-in.
     const [openRecords] = await connection.execute(
@@ -184,6 +199,32 @@ export const clockIn = async (req, res) => {
       return res.status(400).json({
         error:
           "You are already clocked in. Please clock out before starting a new shift.",
+      });
+    }
+
+    // A shift belongs to its Manila clock-in date, even when clock-out is the
+    // next morning. After a prior-day shift, also require rest before another.
+    const [lastShifts] = await connection.execute(
+      `SELECT DATE(clock_in) = CURDATE() AS started_today,
+              TIMESTAMPDIFF(SECOND, clock_out, NOW()) AS seconds_since_clock_out
+       FROM daily_time_records
+       WHERE user_id = ? AND clock_in IS NOT NULL
+       ORDER BY clock_in DESC, id DESC
+       LIMIT 1 FOR UPDATE`,
+      [userId],
+    );
+    const lastShift = lastShifts[0];
+    if (Number(lastShift?.started_today) === 1) {
+      await connection.rollback();
+      return res.status(409).json({
+        error: "You have already clocked in for a shift starting today. Your next shift can start tomorrow (Philippine time).",
+      });
+    }
+    const secondsSinceClockOut = Number(lastShift?.seconds_since_clock_out);
+    if (lastShift && Number.isFinite(secondsSinceClockOut) && secondsSinceClockOut < MIN_REST_SECONDS) {
+      await connection.rollback();
+      return res.status(409).json({
+        error: "Allow at least six hours after your last clock-out before starting another shift.",
       });
     }
 
@@ -576,6 +617,27 @@ export const deleteDTR = async (req, res) => {
     }
 
     await connection.beginTransaction();
+
+    const [records] = await connection.execute(
+      `SELECT clock_in, clock_out, DATE(clock_in) = CURDATE() AS started_today,
+              TIMESTAMPDIFF(SECOND, clock_out, NOW()) AS seconds_since_clock_out
+       FROM daily_time_records WHERE id = ? AND user_id = ? FOR UPDATE`,
+      [dtrId, id],
+    );
+    if (records.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "DTR record not found or you do not have permission to delete it." });
+    }
+    const record = records[0];
+    const elapsedSinceClockOut = Number(record.seconds_since_clock_out);
+    if (record.clock_in != null &&
+        (record.clock_out == null || Number(record.started_today) === 1 ||
+         (Number.isFinite(elapsedSinceClockOut) && elapsedSinceClockOut < MIN_REST_SECONDS))) {
+      await connection.rollback();
+      return res.status(409).json({
+        error: "An open shift, today's shift, or a shift ended less than six hours ago cannot be deleted.",
+      });
+    }
 
     // Subtract this owned DTR's credited total from its internship before deletion.
     // An unfinished row has no credited total, so COALESCE subtracts zero.

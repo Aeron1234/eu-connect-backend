@@ -36,13 +36,13 @@ async function invoke(handler, user, answer, query = {}) {
   }
 }
 
-test("student dashboard keeps today's first row and independent live status with a date range", async () => {
+test("student dashboard keeps the latest shift touching today and independent live status", async () => {
   const internship = { id: "i-1", status: "ongoing", company_name: "Acme" };
   const today = { id: 11, clock_in: "in", clock_out: null, created_at: "today", status: "present" };
   const latest = { id: 12, clock_in: "latest-in", clock_out: null };
   const { res, calls, releases } = await invoke(getStudentDashboardData, { id: "u-1" }, (sql) => {
     if (sql.includes("SELECT * FROM internship_records")) return [internship];
-    if (sql.includes("FROM daily_time_records") && sql.includes("created_at >= CURDATE()")) return [today];
+    if (sql.includes("FROM daily_time_records") && sql.includes("clock_out >= CURDATE()")) return [today];
     if (sql.includes("ORDER BY id DESC")) return [latest];
     if (sql.includes("LEFT JOIN dtr_locations")) return [{ dtr_location_id: null, company_lat: 14, company_lon: 121 }];
     throw new Error("Unexpected query");
@@ -54,7 +54,8 @@ test("student dashboard keeps today's first row and independent live status with
       address: null, set_by: null, created_at: null, updated_at: null } });
   assert.equal(calls.length, 4);
   assert.deepEqual(calls[1].params, ["u-1", "i-1"]);
-  assert.match(calls[1].sql, /created_at >= CURDATE\(\).*created_at < CURDATE\(\) \+ INTERVAL 1 DAY/s);
+  assert.match(calls[1].sql, /clock_in >= CURDATE\(\) OR clock_out >= CURDATE\(\) OR clock_out IS NULL/);
+  assert.match(calls[1].sql, /ORDER BY clock_in DESC/);
   assert.doesNotMatch(calls[1].sql, /DATE\(created_at\)/);
   assert.equal(releases, 1);
 });
