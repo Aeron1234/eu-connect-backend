@@ -79,3 +79,4 @@ export const acceptDocumentUpload = boundedUpload(policies.document);
 export const acceptCertificateUpload = boundedUpload(policies.certificate);
 export const acceptSummaryImages = boundedUpload(policies.summary);
 export const acceptFeedbackAttachments = boundedUpload({ field: "attachments", maxFiles: 3, maxBytes: 5 * MB, sizeMessage: "Each attachment must be 5 MB or smaller.", countMessage: "Choose up to three PDF, PNG, JPG, or WebP attachments." });
+export const acceptDtrPhoto = boundedUpload({ field: "photo", maxFiles: 1, maxBytes: 3 * MB, sizeMessage: "Attendance photo must be 3 MB or smaller.", countMessage: "Choose one attendance photo." });

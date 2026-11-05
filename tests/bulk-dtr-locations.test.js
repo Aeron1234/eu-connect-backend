@@ -24,6 +24,7 @@ beforeEach(() => {
   database = new DatabaseSync(':memory:');
   database.function('CONCAT_WS', (separator, ...parts) => parts.filter(p => p != null).join(separator));
   database.function('NOW', () => '2026-10-30 10:00:00');
+  database.function('TIME_FORMAT', (value, pattern) => value?.slice(0, 5) ?? null);
   database.exec(`CREATE TABLE users(id TEXT PRIMARY KEY,deleted_at TEXT);
     CREATE TABLE user_profiles(user_id TEXT PRIMARY KEY, first_name TEXT,last_name TEXT,avatar TEXT);
     CREATE TABLE departments(id INTEGER PRIMARY KEY,name TEXT,code TEXT);
@@ -32,6 +33,7 @@ beforeEach(() => {
     CREATE TABLE student_academic_info(id INTEGER PRIMARY KEY,user_id TEXT,department_id INTEGER,course_id INTEGER);
     CREATE TABLE internship_records(id TEXT PRIMARY KEY,user_id TEXT,employer_id TEXT,status TEXT,deleted_at TEXT,company_name TEXT,lat REAL,lon REAL,company_address TEXT);
     CREATE TABLE dtr_locations(id INTEGER PRIMARY KEY,internship_id TEXT UNIQUE,set_by TEXT,lat REAL,lon REAL,radius_meters INTEGER,label TEXT,address TEXT,updated_at TEXT);
+    CREATE TABLE dtr_shift_restrictions(internship_id TEXT PRIMARY KEY,employer_id TEXT,clock_in_time TEXT,clock_out_time TEXT);
     CREATE TABLE notifications(id INTEGER PRIMARY KEY,user_id TEXT,sender_id TEXT,type TEXT,title TEXT,message TEXT,link TEXT,link_uuid TEXT);
     CREATE TABLE activity_logs(actor_id TEXT,actor_role TEXT,action TEXT,target_type TEXT,target_id TEXT,description TEXT);
     INSERT INTO departments VALUES(1,'Computing','CCS'),(2,'Nursing','CN'),(3,'Registrar','REG');
@@ -134,6 +136,18 @@ test('employer sees and assigns only ongoing supervised interns; cannot inject d
   assert.equal(result.body.summary.assigned, 1); assert.equal(result.body.summary.failed, 1);
   assert.deepEqual(database.prepare('SELECT user_id FROM notifications').all().map(n => n.user_id), ['s1']);
 });
+test('shift hours are visible only in the supervising employer student list', async () => {
+  database.prepare('INSERT INTO dtr_shift_restrictions VALUES(?,?,?,?)').run(id(1), 'employer', '22:00:00', '06:00:00');
+  const employer = await call(getDtrLocationStudents, req('employer'));
+  assert.deepEqual(employer.body.students.find(student => student.internship_id === id(1)).schedule,
+    { clockInTime: '22:00', clockOutTime: '06:00' });
+  for (const [role, actor] of [['admin', 'admin'], ['department_head', 'head']]) {
+    const list = await call(getDtrLocationStudents, req(role, actor));
+    assert.equal(Object.hasOwn(list.body.students[0], 'schedule'), false);
+    const pins = await call(getDtrLocationPins, req(role, actor));
+    assert.equal(Object.hasOwn(pins.body.locations[0].students[0], 'schedule'), false);
+  }
+});
 test('assignment moves membership between pins and supports a single-student pin', async () => {
   await save('admin', [id(1)]);
   const pins = await call(getDtrLocationPins, req());
@@ -187,5 +201,15 @@ test('authenticated mounted routes reject students and unauthenticated access on
     assert.equal((await fetch(url, { headers: { Authorization: `Bearer ${signAccessToken({ id: 's1', role: 'student' })}` } })).status, 403);
     const admin = await fetch(url, { headers: { Authorization: `Bearer ${signAccessToken({ id: 'admin', role: 'admin' })}` } });
     assert.equal(admin.status, 200); assert.equal(admin.headers.get('cache-control'), 'private, no-store');
+    const canonical = `http://127.0.0.1:${server.address().port}${prefix}/dtr-restrictions/students`;
+    assert.equal((await fetch(canonical, { headers: { Authorization: `Bearer ${signAccessToken({ id: 'registrar', role: 'department_head' })}` } })).status, 403);
+    const schedule = `http://127.0.0.1:${server.address().port}${prefix}/dtr-restrictions/${id(1)}/schedule`;
+    for (const role of ['admin', 'department_head', 'student']) {
+      const denied = await fetch(schedule, { method: 'PUT', headers: {
+        Authorization: `Bearer ${signAccessToken({ id: role, role })}`,
+        'Content-Type': 'application/json',
+      }, body: JSON.stringify({ clockInTime: '08:00', clockOutTime: '17:00' }) });
+      assert.equal(denied.status, 403);
+    }
   }
 });

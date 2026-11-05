@@ -1503,6 +1503,7 @@ export const getInternshipRecordDtr = async (req, res) => {
       const total = Number(countRow?.total) || 0;
       const [rows] = await connection.execute(
         `SELECT id, total_hours, clock_in, clock_out, lat_in, lon_in, lat_out, lon_out,
+            clock_in_photo_path, clock_out_photo_path, is_late, is_undertime, is_overtime,
             status, flagged, flag_reason, auto_closed, created_at
          FROM daily_time_records
          WHERE internship_id = ?
@@ -1520,6 +1521,7 @@ export const getInternshipRecordDtr = async (req, res) => {
 
     const [rows] = await connection.execute(
       `SELECT id, total_hours, clock_in, clock_out, lat_in, lon_in, lat_out, lon_out,
+          clock_in_photo_path, clock_out_photo_path, is_late, is_undertime, is_overtime,
           status, flagged, flag_reason, auto_closed, created_at
        FROM daily_time_records
        WHERE internship_id = ?

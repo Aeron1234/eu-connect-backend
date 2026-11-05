@@ -4,8 +4,12 @@ import { invalidateProfileOverviewCache } from "../../../config/cache/profileOve
 import { invalidateDepartmentInternshipsCache } from "../../../config/cache/staffInternshipsCache.js";
 import { invalidateDashboardCache } from "../../../config/cache/dashboardCache.js";
 import { db } from "../../../config/db.js";
-import { isWithinRadius } from "../../../config/helpers.js";
+import { isWithinRadius, verifyRecordAccess } from "../../../config/helpers.js";
 import { getMaxShiftHours } from "../../../config/shiftLimits.js";
+import { afterUploadCommit, cleanupUploadPaths } from "../../../config/uploadLifecycle.js";
+import { supabase } from "../../../config/supabase.js";
+import { uploadDtrPhoto, validateDtrPhoto } from "../dtrPhoto.js";
+import { shiftExpectations, clockOutTiming } from "../shiftTiming.js";
 
 const MIN_REST_SECONDS = 6 * 60 * 60;
 
@@ -159,7 +163,10 @@ export const getLatestDtrStatus = async (req, res) => {
 
 export const clockIn = async (req, res) => {
   let connection;
+  let photoPath;
+  let commitAttempted = false;
   try {
+    await validateDtrPhoto(req.file);
     const { id: userId } = req.verifiedUser;
     const { lat_in, lon_in } = req.body;
     const requestedInternshipId = req.query?.internshipId;
@@ -239,9 +246,12 @@ export const clockIn = async (req, res) => {
          ir.lon AS company_lon,
          dl.lat AS dtr_lat, 
          dl.lon AS dtr_lon, 
-         dl.radius_meters
+         dl.radius_meters,
+         TIME_FORMAT(sr.clock_in_time, '%H:%i') AS schedule_in,
+         TIME_FORMAT(sr.clock_out_time, '%H:%i') AS schedule_out
        FROM internship_records ir
        LEFT JOIN dtr_locations dl ON ir.id = dl.internship_id
+       LEFT JOIN dtr_shift_restrictions sr ON sr.internship_id = ir.id AND sr.employer_id = ir.employer_id
        WHERE ir.user_id = ? AND ir.status = 'ongoing' AND ir.deleted_at IS NULL
          ${requestedInternshipId ? "AND ir.id = ?" : ""}
        LIMIT 1`,
@@ -296,12 +306,20 @@ export const clockIn = async (req, res) => {
       });
     }
 
-    // Store the DB clock-in time and submitted coordinates; invalidate caches after commit.
+    // Use one database clock value for the saved shift and the watermark burned
+    // into its image. The browser never supplies the attendance timestamp.
+    const [[{ recorded_at: recordedAt }]] = await connection.execute(
+      "SELECT DATE_FORMAT(NOW(), '%Y-%m-%d %H:%i:%s') AS recorded_at",
+    );
+    const expected = shiftExpectations(recordedAt, record.schedule_in, record.schedule_out);
+    photoPath = await uploadDtrPhoto(req.file, recordedAt, "in", userId);
     const [result] = await connection.execute(
       `INSERT INTO daily_time_records 
-       (internship_id, user_id, clock_in, lat_in, lon_in, status) 
-       VALUES (?, ?, NOW(), ?, ?, 'present')`,
-      [record.internship_id, userId, location.latitude, location.longitude],
+       (internship_id, user_id, clock_in, lat_in, lon_in, clock_in_photo_path,
+        expected_clock_in, expected_clock_out, is_late, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'present')`,
+      [record.internship_id, userId, recordedAt, location.latitude, location.longitude,
+       photoPath, expected?.expectedIn ?? null, expected?.expectedOut ?? null, Number(expected?.late || false)],
     );
 
     if (result.affectedRows === 0) {
@@ -309,11 +327,14 @@ export const clockIn = async (req, res) => {
       throw new Error("Insert failed");
     }
 
+    commitAttempted = true;
     await connection.commit();
-    invalidateAttendanceHistoryCache();
-    invalidateProfileOverviewCache();
-    invalidateDashboardCache();
-    invalidateDepartmentInternshipsCache();
+    afterUploadCommit(() => {
+      invalidateAttendanceHistoryCache();
+      invalidateProfileOverviewCache();
+      invalidateDashboardCache();
+      invalidateDepartmentInternshipsCache();
+    });
 
     res.status(201).json({
       message: "Clock-in successful. Location verified.",
@@ -321,7 +342,10 @@ export const clockIn = async (req, res) => {
     });
   } catch (error) {
     if (connection) await connection.rollback();
+    if (photoPath && !commitAttempted) await cleanupUploadPaths([photoPath]);
+    if (error.status) return res.status(error.status).json({ success: false, error: error.message });
     reportError("Clock-in error:", error);
+    if (commitAttempted) return res.status(503).json({ success: false, error: "Clock-in confirmation was interrupted. Refresh your attendance before trying again." });
     if (isCoordinateStorageError(error)) {
       return res.status(503).json({
         success: false,
@@ -427,10 +451,13 @@ export const resumeDuty = (req, res) => changeBreakState(req, res, false);
 
 export const clockOut = async (req, res) => {
   let connection;
+  let photoPath;
+  let commitAttempted = false;
 
   try {
     const maxShiftHours = getMaxShiftHours();
     const { id: userId } = req.verifiedUser;
+    if (req.verifiedUser.role === "student") await validateDtrPhoto(req.file);
     const { lat_out, lon_out } = req.body;
     const location = parseDtrCoordinates(lat_out, lon_out);
 
@@ -450,6 +477,7 @@ export const clockOut = async (req, res) => {
          dtr.id AS dtr_id, 
          dtr.internship_id, 
          dtr.clock_in, 
+         DATE_FORMAT(dtr.expected_clock_out, '%Y-%m-%d %H:%i:%s') AS expected_clock_out,
          dtr.status,
          dtr.break_started_at,
          dtr.break_total_seconds,
@@ -544,17 +572,24 @@ export const clockOut = async (req, res) => {
       finalHours = maxShiftHours;
     }
 
+    const [[{ recorded_at: recordedAt }]] = await connection.execute(
+      "SELECT DATE_FORMAT(NOW(), '%Y-%m-%d %H:%i:%s') AS recorded_at",
+    );
+    const timing = clockOutTiming(recordedAt, record.expected_clock_out);
+    if (req.file) photoPath = await uploadDtrPhoto(req.file, recordedAt, "out", userId);
     // Save the clock-out position, credited hours and flag on the locked shift.
     const [updateDtr] = await connection.execute(
       `UPDATE daily_time_records 
-       SET clock_out = NOW(), 
+       SET clock_out = ?, clock_out_photo_path = ?,
            lat_out = ?, 
            lon_out = ?, 
            total_hours = ?,
            flagged = ?,
-           flag_reason = ?
+           flag_reason = ?,
+           is_undertime = ?, is_overtime = ?
        WHERE id = ?`,
-      [location.latitude, location.longitude, finalHours, flagged, flagReason, record.dtr_id],
+      [recordedAt, photoPath ?? null, location.latitude, location.longitude, finalHours,
+       flagged, flagReason, Number(timing.undertime), Number(timing.overtime), record.dtr_id],
     );
 
     // Add exactly the credited (possibly capped) hours to the internship in the
@@ -571,11 +606,14 @@ export const clockOut = async (req, res) => {
       throw new Error("Failed to update records.");
     }
 
+    commitAttempted = true;
     await connection.commit();
-    invalidateAttendanceHistoryCache();
-    invalidateProfileOverviewCache();
-    invalidateDashboardCache();
-    invalidateDepartmentInternshipsCache();
+    afterUploadCommit(() => {
+      invalidateAttendanceHistoryCache();
+      invalidateProfileOverviewCache();
+      invalidateDashboardCache();
+      invalidateDepartmentInternshipsCache();
+    });
 
     res.status(200).json({
       message: flagged
@@ -587,7 +625,10 @@ export const clockOut = async (req, res) => {
     });
   } catch (error) {
     if (connection) await connection.rollback();
+    if (photoPath && !commitAttempted) await cleanupUploadPaths([photoPath]);
+    if (error.status) return res.status(error.status).json({ success: false, error: error.message });
     reportError("Clock-out Error:", error);
+    if (commitAttempted) return res.status(503).json({ success: false, error: "Clock-out confirmation was interrupted. Refresh your attendance before trying again." });
     if (isCoordinateStorageError(error)) {
       return res.status(503).json({
         success: false,
@@ -619,7 +660,8 @@ export const deleteDTR = async (req, res) => {
     await connection.beginTransaction();
 
     const [records] = await connection.execute(
-      `SELECT clock_in, clock_out, DATE(clock_in) = CURDATE() AS started_today,
+      `SELECT clock_in, clock_out, clock_in_photo_path, clock_out_photo_path,
+              DATE(clock_in) = CURDATE() AS started_today,
               TIMESTAMPDIFF(SECOND, clock_out, NOW()) AS seconds_since_clock_out
        FROM daily_time_records WHERE id = ? AND user_id = ? FOR UPDATE`,
       [dtrId, id],
@@ -666,6 +708,7 @@ export const deleteDTR = async (req, res) => {
     }
 
     await connection.commit();
+    await cleanupUploadPaths([record.clock_in_photo_path, record.clock_out_photo_path].filter(Boolean));
     invalidateAttendanceHistoryCache();
     invalidateProfileOverviewCache();
     invalidateDashboardCache();
@@ -680,6 +723,43 @@ export const deleteDTR = async (req, res) => {
     res.status(500).json({ error: "Database query failed", success: false });
   } finally {
     if (connection) connection.release();
+  }
+};
+
+export const getDtrPhoto = async (req, res) => {
+  res.set("Cache-Control", "private, no-store");
+  const dtrId = Number(req.params.dtrId);
+  const kind = req.params.kind;
+  if (!Number.isSafeInteger(dtrId) || dtrId < 1 || !["in", "out"].includes(kind))
+    return res.status(400).json({ error: "Invalid attendance photo request." });
+  let connection;
+  try {
+    connection = await db.getConnection();
+    const [rows] = await connection.execute(
+      `SELECT dtr.clock_in_photo_path, dtr.clock_out_photo_path, ir.id AS internship_id,
+              ir.user_id, ir.employer_id, ir.deleted_at
+       FROM daily_time_records dtr
+       JOIN internship_records ir ON ir.id = dtr.internship_id
+       WHERE dtr.id = ? LIMIT 1`, [dtrId],
+    );
+    const row = rows[0];
+    if (!row || row.deleted_at) return res.status(404).json({ error: "Attendance photo not found." });
+    const { id, role } = req.verifiedUser;
+    if (role === "department_head") await verifyRecordAccess(connection, row.internship_id, id, role);
+    else if (role !== "admin" && !(role === "student" && row.user_id === id) &&
+             !(role === "employer" && row.employer_id === id))
+      return res.status(403).json({ error: "Access denied." });
+    const path = kind === "in" ? row.clock_in_photo_path : row.clock_out_photo_path;
+    if (!path) return res.status(404).json({ error: "This attendance record has no photo." });
+    const { data, error } = await supabase.storage.from(process.env.SUPABASE_BUCKET).createSignedUrl(path, 120);
+    if (error || !data?.signedUrl) return res.status(503).json({ error: "Photo is temporarily unavailable." });
+    return res.json({ url: data.signedUrl });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    reportError("DTR photo read failed:", error);
+    return res.status(500).json({ error: "Could not load attendance photo." });
+  } finally {
+    connection?.release();
   }
 };
 

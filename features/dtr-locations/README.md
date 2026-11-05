@@ -1,14 +1,15 @@
-# Bulk DTR Location Assignment
+# DTR Restrictions: locations and employer shift hours
 
 Individual location controllers also live here in `individualDtrLocationController.js`: student current-location lookup and profile location lookup/set/remove. `dtrLocationRoutes.js` owns their registrations, including the unchanged `/dtr/setted-location` and `/searched-user/set-dtr-location/:studentId` (GET) / `:searchedUserId` (PUT/DELETE) URLs. Preserve each route's original role checks, department guard, multipart parser and limiter. Attendance clock/break/history controllers remain in `features/dtr`; profile/document controllers remain in `features/users`. This is a source organization change, with no frontend, API URL, SQL or environment migration.
 
-Frontend: `/dtr-locations`. Canonical APIs (also mounted under the compatibility prefix):
+Frontend: `/dtr-restrictions` (`/dtr-locations` redirects). Canonical APIs (also mounted under the compatibility prefix):
 
 | Method | Endpoint | Contract |
 | --- | --- | --- |
-| GET | `/api/v1/dtr-locations/students` | Ten ongoing internship rows/page, current assignment or company fallback, scoped department/course choices |
-| GET | `/api/v1/dtr-locations/pins` | All custom and company-default locations in the authorized current filters, grouped by eight-decimal coordinates; independent of table pagination |
-| POST | `/api/v1/dtr-locations/assign` | 1–100 distinct `internshipIds`, `lat`, `lon`, optional `radius_meter` (150), `address`, `label` |
+| GET | `/api/v1/dtr-restrictions/students` | Ten ongoing internship rows/page, current assignment or company fallback, scoped department/course choices; employer rows also include shift hours |
+| GET | `/api/v1/dtr-restrictions/pins` | All custom and company-default locations in the authorized current filters, grouped by eight-decimal coordinates; independent of table pagination |
+| POST | `/api/v1/dtr-restrictions/assign` | 1–100 distinct `internshipIds`, `lat`, `lon`, optional `radius_meter` (150), `address`, `label` |
+| PUT/DELETE | `/api/v1/dtr-restrictions/:internshipId/schedule` | Employer only: set/remove a recurring shift for one currently supervised ongoing internship |
 
 ## Authorization and relationships
 
@@ -28,11 +29,13 @@ Changed overrides and their notifications use bounded multi-row statements, avoi
 
 Inside a transaction, recheck authorized ongoing records and lock in internship-ID order. Inaccessible, transferred, deleted, finished or no-longer-supervised selections receive a generic per-record failure without disclosing hidden names; other authorized selections may succeed. Identical location/radius/note/address returns `unchanged` with no duplicate notices. Upsert changed assignments, create each student's `dtr_location_set` notification with location/radius and attendance instructions, then (only for admin/head actors) group successfully changed students by `employer_id` for one employer notification per action. Missing supervisors are skipped; their students still receive notices. Write one readable activity log for the changed set. All these writes commit together. Unexpected write/notification/commit failure returns a safe error and attempts rollback; no socket success is emitted before commit. A lost response/commit confirmation is an unknown outcome: refresh before retrying, never automatically retry a mutation.
 
-After commit invalidate notification/activity-log server caches; emit `new_notification` only to each verified user's existing room and `dtr_locations_changed` to the actor. New student alerts link to `/student`, supervisor alerts to `/dtr-locations`; legacy location alerts remain readable at `/notifications`. Socket delivery is best effort; persisted notices are authoritative. The frontend refreshes its table/pins after save and relevant events, preserves failed selections and masks stale data on 401/403. It also invalidates the actor's profile/record DTR queries. Reads/focus/manual refresh recover when sockets disconnect.
+After commit invalidate notification/activity-log server caches; emit `new_notification` only to each verified user's existing room and `dtr_locations_changed` to the actor. New student alerts link to `/student`, supervisor alerts to `/dtr-restrictions`; legacy location alerts remain readable at `/notifications`. Socket delivery is best effort; persisted notices are authoritative. The frontend refreshes its table/pins after save and relevant events, preserves failed selections and masks stale data on 401/403. It also invalidates the actor's profile/record DTR queries. Reads/focus/manual refresh recover when sockets disconnect.
 
 ## Database / deployment
 
-Run the read-only verification migration [2026-10-30-bulk-dtr-locations.sql](../../scripts/2026-10-30-bulk-dtr-locations.sql) on the intended database first. Expected structures are listed in the file. No ALTER/CREATE, backfill, new notification enum, group table, environment variable or dependency is needed for the inspected schema. Existing foreign keys, unique internship index, decimal coordinates and notification fields already support this feature. Do not rerun unrelated historical migrations or rewrite current assignments. If a check differs, inspect that deployment's schema before changing it. Deploy both repositories together.
+Run the read-only verification migration [2026-10-30-bulk-dtr-locations.sql](../../scripts/2026-10-30-bulk-dtr-locations.sql) on the intended database first. Expected structures are listed in the file. The original location assignment needs no ALTER/CREATE, backfill, new notification enum, group table, environment variable or dependency. Existing foreign keys, unique internship index, decimal coordinates and notification fields already support it. Do not rerun unrelated historical migrations or rewrite current assignments. If a check differs, inspect that deployment's schema before changing it. Deploy both repositories together.
+
+Employer shift hours are a later addition. Apply [2026-11-05-dtr-shift-restrictions.sql](../../scripts/2026-11-05-dtr-shift-restrictions.sql) after the attendance-photo migration and before deploying schedule-aware backend code. It creates one Philippine-time recurring schedule per internship and adds expected-time snapshots and timing labels to DTR rows. It does not alter the original bulk location assignment table or rules.
 
 Regression: `node --test tests/bulk-dtr-locations.test.js tests/dtr-location-notifications.test.js tests/lookup-edit-and-location-removal.test.js`. Tests use an in-memory relational fixture, not the configured database; mounted route tests bind loopback only. SQLite translation tests relationships/transactions, not MySQL locking itself; manually verify concurrent edits and real map/geocoding in a staging environment.
 

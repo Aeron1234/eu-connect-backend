@@ -1,13 +1,22 @@
 import { after, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
+import sharp from "sharp";
 import { db } from "../config/db.js";
-import { clockIn, clockOut, deleteDTR, getTodayDTR, getLatestDtrStatus, startBreak, resumeDuty } from "../features/dtr/controllers/dtrControllers.js";
+import { supabase } from "../config/supabase.js";
+import { clockIn, clockOut, deleteDTR, getTodayDTR, getLatestDtrStatus, startBreak, resumeDuty, getDtrPhoto } from "../features/dtr/controllers/dtrControllers.js";
+import { uploadDtrPhoto } from "../features/dtr/dtrPhoto.js";
 import { getStudentDashboardData } from "../features/dashboard/controllers/dashboardController.js";
 import { autoCloseStaleShifts } from "../config/autoCloseStaleShifts.js";
 
 const originalGetConnection = db.getConnection;
 const originalMaxShiftHours = process.env.MAX_SHIFT_HOURS;
 const originalBatchSize = process.env.BATCH_SIZE;
+const originalStorageFrom = supabase.storage.from;
+const photo = { buffer: await sharp({ create: { width: 320, height: 240, channels: 3, background: "white" } }).jpeg().toBuffer() };
+supabase.storage.from = () => ({
+  async upload() { return { error: null }; },
+  async remove() { return { error: null }; },
+});
 
 beforeEach(() => {
   process.env.MAX_SHIFT_HOURS = "8";
@@ -20,13 +29,61 @@ after(async () => {
   else process.env.MAX_SHIFT_HOURS = originalMaxShiftHours;
   if (originalBatchSize === undefined) delete process.env.BATCH_SIZE;
   else process.env.BATCH_SIZE = originalBatchSize;
+  supabase.storage.from = originalStorageFrom;
   await db.end();
 });
 
 const response = () => ({
   statusCode: 200,
   status(code) { this.statusCode = code; return this; },
+  set(key, value) { this.headers ??= {}; this.headers[key] = value; return this; },
   json(body) { this.body = body; return this; },
+});
+
+test("the saved image has a visible band derived from the supplied database time", async () => {
+  const from = supabase.storage.from;
+  const uploads = [];
+  supabase.storage.from = () => ({ async upload(path, bytes, options) { uploads.push({ path, bytes, options }); return { error: null }; } });
+  try {
+    const first = await uploadDtrPhoto(photo, "2026-11-05 08:00:00", "in", "student");
+    await uploadDtrPhoto(photo, "2026-11-05 08:01:00", "in", "student");
+    assert.match(first, /^dtr\/student\/.+-in\.jpg$/);
+    assert.equal(uploads[0].options.contentType, "image/jpeg");
+    assert.notDeepEqual(uploads[0].bytes, uploads[1].bytes);
+    const top = await sharp(uploads[0].bytes).extract({ left: 1, top: 1, width: 1, height: 1 }).raw().toBuffer();
+    const bottom = await sharp(uploads[0].bytes).extract({ left: 1, top: 230, width: 1, height: 1 }).raw().toBuffer();
+    assert.ok(top[0] > 200 && bottom[0] < 100, "watermark band is burned into the JPEG");
+  } finally { supabase.storage.from = from; }
+});
+
+test("photo access checks the DTR owner and supervisor before signing", async () => {
+  const from = supabase.storage.from;
+  let signed = 0;
+  supabase.storage.from = () => ({ async createSignedUrl() { signed++; return { data: { signedUrl: "https://example.test/private" }, error: null }; } });
+  db.getConnection = async () => ({
+    release() {},
+    async execute(sql) {
+      if (sql.includes("FROM daily_time_records dtr")) return [[{
+        internship_id: "internship", user_id: "student", employer_id: "supervisor", deleted_at: null,
+        clock_in_photo_path: "dtr/student/in.jpg", clock_out_photo_path: null,
+      }]];
+      throw new Error("Unexpected SQL");
+    },
+  });
+  try {
+    const denied = response();
+    await getDtrPhoto({ params: { dtrId: "1", kind: "in" }, verifiedUser: { id: "other", role: "employer" } }, denied);
+    assert.equal(denied.statusCode, 403);
+    assert.equal(signed, 0);
+    const allowed = response();
+    await getDtrPhoto({ params: { dtrId: "1", kind: "in" }, verifiedUser: { id: "supervisor", role: "employer" } }, allowed);
+    assert.equal(allowed.statusCode, 200);
+    assert.equal(allowed.body.url, "https://example.test/private");
+    assert.equal(allowed.headers["Cache-Control"], "private, no-store");
+    const legacy = response();
+    await getDtrPhoto({ params: { dtrId: "1", kind: "out" }, verifiedUser: { id: "student", role: "student" } }, legacy);
+    assert.equal(legacy.statusCode, 404);
+  } finally { supabase.storage.from = from; }
 });
 
 test("clock-in and clock-out reject an internship before its start date", async () => {
@@ -50,12 +107,28 @@ test("clock-in and clock-out reject an internship before its start date", async 
       },
     });
     const res = response();
-    await action({ verifiedUser: { id: "student" }, body: { lat_in: 14, lon_in: 121, lat_out: 14, lon_out: 121 } }, res);
+    await action({ verifiedUser: { id: "student", role: "student" }, file: photo, body: { lat_in: 14, lon_in: 121, lat_out: 14, lon_out: 121 } }, res);
     assert.equal(res.statusCode, 409);
     assert.match(res.body.error, /start date/i);
     assert.equal(rolledBack, true);
     assert.equal(wrote, false);
   }
+});
+
+test("student clock actions require a readable photo before attendance is changed", async () => {
+  let connections = 0;
+  db.getConnection = async () => { connections++; throw new Error("Photo validation should precede database access"); };
+  for (const action of [clockIn, clockOut]) {
+    const missing = response();
+    await action({ verifiedUser: { id: "student", role: "student" }, body: { lat_in: 14, lon_in: 121, lat_out: 14, lon_out: 121 } }, missing);
+    assert.equal(missing.statusCode, 400);
+    assert.match(missing.body.error, /photo/i);
+    const invalid = response();
+    await action({ verifiedUser: { id: "student", role: "student" }, file: { buffer: Buffer.from("not an image") }, body: { lat_in: 14, lon_in: 121, lat_out: 14, lon_out: 121 } }, invalid);
+    assert.equal(invalid.statusCode, 400);
+    assert.match(invalid.body.error, /retake/i);
+  }
+  assert.equal(connections, 0);
 });
 
 test("one Manila start date and six-hour rest work for day and overnight shifts", async () => {
@@ -87,12 +160,13 @@ test("one Manila start date and six-hour rest work for day and overnight shifts"
           return [[{ internship_id: "internship", date_started: "2026-11-01", has_started: 1,
             company_lat: 14, company_lon: 121 }]];
         }
+        if (sql.includes("DATE_FORMAT(NOW()")) return [[{ recorded_at: "2026-11-05 08:00:00" }]];
         if (sql.includes("INSERT INTO daily_time_records")) return [{ affectedRows: 1 }];
         throw new Error("Unexpected SQL: " + sql);
       },
     });
     const res = response();
-    await clockIn({ verifiedUser: { id: "student" }, query: { internshipId: "internship" },
+    await clockIn({ verifiedUser: { id: "student", role: "student" }, file: photo, query: { internshipId: "internship" },
       body: { lat_in: 14, lon_in: 121 } }, res);
     assert.equal(res.statusCode, expectedStatus);
     assert.match(res.body.error || res.body.message, message);
@@ -167,13 +241,14 @@ test("clock-out at and beyond the cap returns success after committing numeric h
           return [[{ dtr_id: 1, internship_id: "internship", clock_in: "2026-10-03 08:00:00", company_lat: 14, company_lon: 121, date_started: "2026-10-01", has_started: 1 }]];
         }
         if (sql.includes("TIMESTAMPDIFF")) return [[{ hours: rawHours }]];
+        if (sql.includes("DATE_FORMAT(NOW()")) return [[{ recorded_at: "2026-11-05 17:00:00" }]];
         writes.push({ sql, params });
         return [{ affectedRows: 1 }];
       },
     });
 
     const res = response();
-    await clockOut({ verifiedUser: { id: "student" }, body: { lat_out: 14, lon_out: 121 } }, res);
+    await clockOut({ verifiedUser: { id: "student", role: "student" }, file: photo, body: { lat_out: 14, lon_out: 121 } }, res);
 
     assert.equal(res.statusCode, 200);
     assert.equal(res.body.success, true);
@@ -181,8 +256,8 @@ test("clock-out at and beyond the cap returns success after committing numeric h
     assert.equal(res.body.flagged, expectedFlagged);
     assert.equal(committed, true);
     assert.equal(rolledBack, false);
-    assert.equal(writes[0].params[2], 8);
-    assert.equal(writes[0].params[3], expectedFlagged);
+    assert.equal(writes[0].params[4], 8);
+    assert.equal(writes[0].params[5], expectedFlagged);
     assert.equal(writes[1].params[0], 8);
   }
 });
@@ -282,12 +357,13 @@ test("manual clock-out excludes completed lunch and rejects an active break", as
           assert.deepEqual(params, ["2026-10-03 08:00:00", 3600]);
           return [[{ hours: 8 }]];
         }
+        if (sql.includes("DATE_FORMAT(NOW()")) return [[{ recorded_at: "2026-11-05 17:00:00" }]];
         writes.push({ sql, params });
         return [{ affectedRows: 1 }];
       },
     });
     const res = response();
-    await clockOut({ verifiedUser: { id: "student" }, body: { lat_out: 14, lon_out: 121 } }, res);
+    await clockOut({ verifiedUser: { id: "student", role: "student" }, file: photo, body: { lat_out: 14, lon_out: 121 } }, res);
     assert.equal(res.statusCode, onBreak ? 409 : 200);
     assert.equal(writes.length, onBreak ? 0 : 2);
     if (!onBreak) assert.equal(res.body.shiftHours, "8.00");
@@ -462,6 +538,7 @@ test("valid Philippine coordinates produce an actionable storage error and roll 
             company_lat: 14, company_lon: 121, clock_in: "2026-10-29 08:00:00", status: "present", break_started_at: null }]];
         }
         if (sql.includes("TIMESTAMPDIFF")) return [[{ hours: 1 }]];
+        if (sql.includes("DATE_FORMAT(NOW()")) return [[{ recorded_at: "2026-11-05 17:00:00" }]];
         if (sql.includes("INSERT INTO daily_time_records") || sql.includes("UPDATE daily_time_records")) {
           assert.ok(params.includes(121), "valid longitude reaches the storage write unchanged");
           throw Object.assign(new Error("coordinate storage range"), {
@@ -472,7 +549,7 @@ test("valid Philippine coordinates produce an actionable storage error and roll 
       },
     });
     const res = response();
-    await action({ verifiedUser: { id: "student" }, query: {}, body: { lat_in: 14, lon_in: 121, lat_out: 14, lon_out: 121 } }, res);
+    await action({ verifiedUser: { id: "student", role: "student" }, file: photo, query: {}, body: { lat_in: 14, lon_in: 121, lat_out: 14, lon_out: 121 } }, res);
     assert.equal(res.statusCode, 503);
     assert.equal(res.body.code, "DTR_LOCATION_STORAGE_UNAVAILABLE");
     assert.match(res.body.error, /could not be saved.*contact your coordinator/i);

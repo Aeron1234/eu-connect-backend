@@ -359,6 +359,11 @@ export const getSearchedStudentDTRs = async (req, res) => {
         dtr.total_hours,
         dtr.clock_in,
         dtr.clock_out,
+        dtr.clock_in_photo_path,
+        dtr.clock_out_photo_path,
+        dtr.is_late,
+        dtr.is_undertime,
+        dtr.is_overtime,
         dtr.user_id,
         dtr.status,
         (

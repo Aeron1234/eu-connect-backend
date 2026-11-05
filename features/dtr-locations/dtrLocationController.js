@@ -18,12 +18,15 @@ const joins = `FROM internship_records ir
   LEFT JOIN student_academic_info sai ON sai.id = (SELECT MAX(latest.id) FROM student_academic_info latest WHERE latest.user_id = ir.user_id)
   LEFT JOIN courses c ON c.id = sai.course_id
   LEFT JOIN departments d ON d.id = sai.department_id
-  LEFT JOIN dtr_locations dl ON dl.internship_id = ir.id`;
+  LEFT JOIN dtr_locations dl ON dl.internship_id = ir.id
+  LEFT JOIN dtr_shift_restrictions sr ON sr.internship_id = ir.id AND sr.employer_id = ir.employer_id`;
 const columns = `ir.id AS internship_id, ir.user_id, ir.employer_id, ir.company_name,
   p.first_name, p.last_name, p.avatar, sai.department_id, sai.course_id,
   c.course_name, c.short_name, d.name AS department_name, d.code AS department_code,
   ir.lat AS company_lat, ir.lon AS company_lon, ir.company_address,
-  dl.id AS location_id, dl.lat, dl.lon, dl.radius_meters, dl.label, dl.address`;
+  dl.id AS location_id, dl.lat, dl.lon, dl.radius_meters, dl.label, dl.address,
+  TIME_FORMAT(sr.clock_in_time, '%H:%i') AS schedule_in,
+  TIME_FORMAT(sr.clock_out_time, '%H:%i') AS schedule_out`;
 
 // Resolve heads from current database membership on every read and write.
 // A stale or forged department claim cannot grant access, including to Registrar.
@@ -103,7 +106,7 @@ function filteredScope(base, filters, { search = true, course = true } = {}) {
   }
   return scope;
 }
-function studentRow(row) {
+function studentRow(row, includeSchedule = false) {
   const location =
     row.location_id == null
       ? null
@@ -126,6 +129,11 @@ function studentRow(row) {
     department_name: row.department_name,
     department_code: row.department_code,
     location,
+    ...(includeSchedule ? {
+      schedule: row.schedule_in && row.schedule_out
+        ? { clockInTime: row.schedule_in, clockOutTime: row.schedule_out }
+        : null,
+    } : {}),
     company_location:
       row.company_lat == null || row.company_lon == null
         ? null
@@ -194,7 +202,7 @@ export async function getDtrLocationStudents(req, res) {
           )[0];
     res.json({
       success: true,
-      students: rows.map(studentRow),
+      students: rows.map(row => studentRow(row, req.verifiedUser.role === "employer")),
       departments,
       courses,
       pagination: { page: currentPage, pageSize, total, totalPages },
@@ -348,7 +356,7 @@ export async function assignDtrLocations(req, res) {
         user_id: employer,
         title: "Intern DTR Locations Updated",
         message: `${actorName} assigned or updated the DTR location for ${names.join(", ")}: ${site}. ${instructions}`,
-        link: "/dtr-locations",
+        link: "/dtr-restrictions",
         link_uuid: actionId,
       });
     // Persist notifications with the assignments. Any unexpected database failure

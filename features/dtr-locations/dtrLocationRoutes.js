@@ -15,6 +15,7 @@ import {
   getDtrLocationPins,
   assignDtrLocations,
 } from "./dtrLocationController.js";
+import { saveShiftRestriction, removeShiftRestriction } from "./shiftRestrictionController.js";
 
 const router = express.Router();
 router.use(
@@ -25,6 +26,14 @@ router.use(
 router.get("/dtr-locations/students", generalLimiter, getDtrLocationStudents);
 router.get("/dtr-locations/pins", generalLimiter, getDtrLocationPins);
 router.post("/dtr-locations/assign", strictLimiter, assignDtrLocations);
+// Canonical name for location and employer-only shift restrictions. Keep the
+// old API prefix so already-deployed clients can finish upgrading safely.
+router.use("/dtr-restrictions", verifyUser, verifyRole(["admin", "department_head", "employer"]));
+router.get("/dtr-restrictions/students", generalLimiter, getDtrLocationStudents);
+router.get("/dtr-restrictions/pins", generalLimiter, getDtrLocationPins);
+router.post("/dtr-restrictions/assign", strictLimiter, assignDtrLocations);
+router.put("/dtr-restrictions/:internshipId/schedule", verifyUser, verifyRole(["employer"]), strictLimiter, saveShiftRestriction);
+router.delete("/dtr-restrictions/:internshipId/schedule", verifyUser, verifyRole(["employer"]), strictLimiter, removeShiftRestriction);
 // Keep legacy URLs and their original guards/limiters for deployed clients.
 const upload = multer({ storage: multer.memoryStorage() });
 router.get(

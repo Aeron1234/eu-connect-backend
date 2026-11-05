@@ -11,7 +11,9 @@ import {
   getAllDTRs,
   getLatestDtrStatus,
   getTodayDTR,
+  getDtrPhoto,
 } from "../controllers/dtrControllers.js";
+import { acceptDtrPhoto } from "../../../middleware/multipart-uploads.js";
 import {
   generalLimiter,
   mediumLimiter,
@@ -51,6 +53,7 @@ dtrRoutes.post(
   verifyUser,
   verifyRole(["student"]),
   clockInLimiter,
+  acceptDtrPhoto,
   clockIn,
 );
 
@@ -59,7 +62,16 @@ dtrRoutes.patch(
   verifyUser,
   verifyRole(["student", "admin"]),
   mediumLimiter,
+  acceptDtrPhoto,
   clockOut,
+);
+
+dtrRoutes.get(
+  "/dtr/:dtrId/photo/:kind",
+  verifyUser,
+  verifyRole(["student", "employer", "department_head", "admin"]),
+  generalLimiter,
+  getDtrPhoto,
 );
 
 dtrRoutes.post(
