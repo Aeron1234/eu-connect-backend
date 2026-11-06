@@ -1,9 +1,10 @@
 import { reportError } from "../../../config/errorTracking.js";
 import { invalidateCriteriaCache } from "../../../config/cache/criteriaCache.js";
 import { db } from "../../../config/db.js";
+import { headCriteriaDepartment } from "../criteriaDepartment.js";
 
 // Internal table names select the evaluation direction; mounted management
-// routes are admin-only. Categories are stored on criteria rows, not separately.
+// routes are for non-Registrar department heads. Categories stay on criteria rows.
 function createCriteriaEndpoints(tableName) {
   const isStudentCriteria = tableName === "student_evaluation_criteria";
   // Performance criteria omit a leading numeric category prefix; supervisor
@@ -11,21 +12,29 @@ function createCriteriaEndpoints(tableName) {
   const cleanCategory = (value) => isStudentCriteria
     ? value.trim().replace(/^\d+\.\s*/, "").trim()
     : value.trim();
+  const departmentFor = async (connection, req, res) => {
+    const departmentId = await headCriteriaDepartment(connection, req.verifiedUser.id);
+    if (!departmentId) res.status(403).json({ error: "Evaluation criteria are available only to non-Registrar department heads." });
+    return departmentId;
+  };
   const getCriteria = async (req, res) => {
     let connection;
     try {
       const { includeInactive } = req.query;
 
       connection = await db.getConnection();
+      const departmentId = await departmentFor(connection, req, res);
+      if (!departmentId) return;
 
       const whereClause =
-        includeInactive === "true" ? "" : "WHERE is_active = 1";
+        includeInactive === "true" ? "WHERE department_id = ?" : "WHERE department_id = ? AND is_active = 1";
 
       const [rows] = await connection.execute(
         `SELECT id, category, criterion_name, is_active
          FROM ${tableName}
          ${whereClause}
          ORDER BY ${isStudentCriteria ? "id ASC" : "category ASC, id ASC"}`,
+        [departmentId],
       );
 
       // Group flat rows into [{ category, items: [{ id, name, is_active }] }]
@@ -64,11 +73,13 @@ function createCriteriaEndpoints(tableName) {
       }
 
       connection = await db.getConnection();
+      const departmentId = await departmentFor(connection, req, res);
+      if (!departmentId) return;
       await connection.beginTransaction();
 
       const [result] = await connection.execute(
-        `INSERT INTO ${tableName} (category, criterion_name, is_active) VALUES (?, ?, 1)`,
-        [categoryName, criterion_name.trim()],
+        `INSERT INTO ${tableName} (department_id, category, criterion_name, is_active) VALUES (?, ?, ?, 1)`,
+        [departmentId, categoryName, criterion_name.trim()],
       );
 
       if (result.affectedRows === 0) {
@@ -97,11 +108,13 @@ function createCriteriaEndpoints(tableName) {
       const { criterionId } = req.params;
 
       connection = await db.getConnection();
+      const departmentId = await departmentFor(connection, req, res);
+      if (!departmentId) return;
       await connection.beginTransaction();
 
       const [rows] = await connection.execute(
-        `SELECT id, is_active FROM ${tableName} WHERE id = ? FOR UPDATE`,
-        [criterionId],
+        `SELECT id, is_active FROM ${tableName} WHERE id = ? AND department_id = ? FOR UPDATE`,
+        [criterionId, departmentId],
       );
 
       if (rows.length === 0) {
@@ -117,8 +130,8 @@ function createCriteriaEndpoints(tableName) {
       }
 
       const [result] = await connection.execute(
-        `UPDATE ${tableName} SET is_active = 0 WHERE id = ?`,
-        [criterionId],
+        `UPDATE ${tableName} SET is_active = 0 WHERE id = ? AND department_id = ?`,
+        [criterionId, departmentId],
       );
 
       if (result.affectedRows === 0) {
@@ -149,11 +162,13 @@ function createCriteriaEndpoints(tableName) {
       const { criterionId } = req.params;
 
       connection = await db.getConnection();
+      const departmentId = await departmentFor(connection, req, res);
+      if (!departmentId) return;
       await connection.beginTransaction();
 
       const [rows] = await connection.execute(
-        `SELECT id, is_active FROM ${tableName} WHERE id = ? FOR UPDATE`,
-        [criterionId],
+        `SELECT id, is_active FROM ${tableName} WHERE id = ? AND department_id = ? FOR UPDATE`,
+        [criterionId, departmentId],
       );
 
       if (rows.length === 0) {
@@ -167,8 +182,8 @@ function createCriteriaEndpoints(tableName) {
       }
 
       await connection.execute(
-        `UPDATE ${tableName} SET is_active = 1 WHERE id = ?`,
-        [criterionId],
+        `UPDATE ${tableName} SET is_active = 1 WHERE id = ? AND department_id = ?`,
+        [criterionId, departmentId],
       );
 
       await connection.commit();
@@ -199,11 +214,13 @@ function createCriteriaEndpoints(tableName) {
       }
 
       connection = await db.getConnection();
+      const departmentId = await departmentFor(connection, req, res);
+      if (!departmentId) return;
       await connection.beginTransaction();
 
       const [rows] = await connection.execute(
-        `SELECT id FROM ${tableName} WHERE category = ? AND is_active = 1 FOR UPDATE`,
-        [categoryName],
+        `SELECT id FROM ${tableName} WHERE department_id = ? AND category = ? AND is_active = 1 FOR UPDATE`,
+        [departmentId, categoryName],
       );
 
       if (rows.length === 0) {
@@ -214,8 +231,8 @@ function createCriteriaEndpoints(tableName) {
       }
 
       const [result] = await connection.execute(
-        `UPDATE ${tableName} SET is_active = 0 WHERE category = ? AND is_active = 1`,
-        [categoryName],
+        `UPDATE ${tableName} SET is_active = 0 WHERE department_id = ? AND category = ? AND is_active = 1`,
+        [departmentId, categoryName],
       );
 
       await connection.commit();
@@ -247,11 +264,13 @@ function createCriteriaEndpoints(tableName) {
       }
 
       connection = await db.getConnection();
+      const departmentId = await departmentFor(connection, req, res);
+      if (!departmentId) return;
       await connection.beginTransaction();
 
       const [rows] = await connection.execute(
-        `SELECT id FROM ${tableName} WHERE category = ? AND is_active = 0 FOR UPDATE`,
-        [categoryName],
+        `SELECT id FROM ${tableName} WHERE department_id = ? AND category = ? AND is_active = 0 FOR UPDATE`,
+        [departmentId, categoryName],
       );
 
       if (rows.length === 0) {
@@ -262,8 +281,8 @@ function createCriteriaEndpoints(tableName) {
       }
 
       const [result] = await connection.execute(
-        `UPDATE ${tableName} SET is_active = 1 WHERE category = ? AND is_active = 0`,
-        [categoryName],
+        `UPDATE ${tableName} SET is_active = 1 WHERE department_id = ? AND category = ? AND is_active = 0`,
+        [departmentId, categoryName],
       );
 
       await connection.commit();

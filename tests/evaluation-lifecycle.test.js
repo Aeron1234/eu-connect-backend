@@ -11,7 +11,7 @@ beforeEach(() => cache.flushAll());
 after(async () => { db.getConnection = original; cache.close(); await db.end(); });
 const response = () => ({ statusCode: 200, set() {}, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } });
 const req = (role, id = 'author') => ({ verifiedUser: { id, role, department_id: 999 }, params: { evaluationId: 'evaluation', studentId: 'student' },
-  body: { student_id: 'student', scores: Array.from({ length: 29 }, (_, n) => ({ criterion_name: 'Criterion ' + n, score: 4 })) }, app: { get() {} } });
+  body: { student_id: 'student', scores: Array.from({ length: 29 }, (_, n) => ({ criterion_id: n + 1, score: 4 })) }, app: { get() {} } });
 
 test('concurrent creates allow multiple evaluations in both directions', async () => {
   for (const [create, role] of [[createStudentEvaluation, 'employer'], [createEmployerEvaluation, 'student']]) {
@@ -25,6 +25,8 @@ test('concurrent creates allow multiple evaluations in both directions', async (
           const previous = lock; lock = new Promise(resolve => { unlock = resolve; }); await previous;
           return [[{ id: 'record', employer_id: 'author', date_started: '2000-01-01', company_name: 'Company' }]];
         }
+        if (sql.trim().startsWith('SELECT department_id FROM student_academic_info')) return [[{ department_id: 3 }]];
+        if (sql.includes('FROM student_evaluation_criteria') || sql.includes('FROM employer_evaluation_criteria')) return [Array.from({ length: 29 }, (_, n) => ({ id: n + 1 }))];
         assert.doesNotMatch(sql, /SELECT id FROM .*evaluation_masters/, 'neither direction should check for an occupied slot');
         if (/INSERT INTO (student|employer)_evaluation_masters/.test(sql)) {
           assert(!masters.has(params[0])); masters.add(params[0]); inserts++;

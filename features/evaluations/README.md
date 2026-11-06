@@ -52,3 +52,6 @@ order. Never replay that historical baseline after enabling multiple reviews: it
 would archive older active entries and recreate the retired indexes.
 The new migration does not restore previously deleted historical entries.
 DDL commits implicitly. No live database migration was executed by Codex.
+# Department-owned criteria
+
+Run `scripts/2026-11-06-department-evaluation-criteria.sql` after backing up the database and before deploying the paired API and frontend. The migration adds `department_id` to both criteria tables and assigns all existing questions to CCS without changing criterion IDs. Non-Registrar department heads manage only their own department's questions. Students receive supervisor evaluation questions for their latest academic department; employers receive performance questions for the supervised ongoing student's department. Both forms submit stable criterion IDs, and the backend checks that each active question is answered exactly once. Departments without active questions must add them before an evaluation can be submitted. Historical scores retain their existing criterion references. No new environment variables or dependencies are needed.

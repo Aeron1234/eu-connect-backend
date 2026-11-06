@@ -12,8 +12,8 @@ const routesByTable = {
   ],
 };
 
-// A criteria change affects both the admin list (including inactive variants)
-// and the active evaluation form. Keep the other criteria family cached.
+// Clear legacy response-cache entries for the changed criteria family. Current
+// department/target-scoped endpoints bypass the response cache entirely.
 export function invalidateCriteriaCache(tableName) {
   invalidateDashboardCache();
   for (const route of routesByTable[tableName]) invalidateRouteCache(route);

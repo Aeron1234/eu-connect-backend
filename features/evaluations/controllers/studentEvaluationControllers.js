@@ -7,24 +7,35 @@ import { db } from "../../../config/db.js";
 import { newUUID } from "../../../config/helpers.js";
 import { assertInternshipStarted } from "../../../config/internshipStart.js";
 import { evaluationReadScope, departmentEvaluationRecipients } from "../evaluationAccess.js";
+import { studentCriteriaDepartment, validateCriteriaScores } from "../../evaluation-criteria/criteriaDepartment.js";
 
 // In this API, student evaluation means the employer evaluating a student.
 export const getStudentEvaluationCriteria = async (req, res) => {
   let connection;
   try {
+    const studentId = req.query.studentId;
+    if (!studentId) return res.status(400).json({ error: "A student ID is required." });
     connection = await db.getConnection();
+    const [records] = await connection.execute(
+      `SELECT id FROM internship_records WHERE user_id = ? AND employer_id = ? AND status = 'ongoing' AND deleted_at IS NULL LIMIT 1`,
+      [studentId, req.verifiedUser.id],
+    );
+    // The profile can still show historical evaluations after supervision ends.
+    if (!records.length) return res.status(200).json([]);
+    const departmentId = await studentCriteriaDepartment(connection, studentId);
+    if (!departmentId) return res.status(404).json({ error: "Student department not found." });
 
     // Offer active criteria only; historical score reads still join retained inactive criteria.
     const query = `
         SELECT id, category, criterion_name 
         FROM student_evaluation_criteria
-        WHERE is_active = 1
+        WHERE department_id = ? AND is_active = 1
         ORDER BY id ASC
       `;
 
-    const [rows] = await connection.execute(query);
+    const [rows] = await connection.execute(query, [departmentId]);
 
-    // Group questions by category; criterion_name is the form key and db_id is the stored row ID.
+    // Group questions by category; the form submits numeric criterion IDs.
     const structuredData = [];
 
     rows.forEach((row) => {
@@ -41,8 +52,8 @@ export const getStudentEvaluationCriteria = async (req, res) => {
       }
 
       categoryGroup.items.push({
-        id: row.criterion_name, // Form score key, submitted as criterion_name.
-        db_id: row.id, // Stored criterion ID; distinct from the form key.
+        id: row.id, // Stable criterion ID submitted with the score.
+        db_id: row.id, // Existing display contract for callers that inspect stored IDs.
         name: row.criterion_name, // Display string
       });
     });
@@ -304,16 +315,6 @@ export const createStudentEvaluation = async (req, res) => {
     });
   }
 
-  // This handler requires at least 29 submitted score entries. This count check
-  // does not derive completeness from the current active-criteria table.
-  const TOTAL_REQUIRED_CRITERIA = 29;
-
-  if (scores.length < TOTAL_REQUIRED_CRITERIA) {
-    return res.status(400).json({
-      error: `Incomplete evaluation form. You answered ${scores.length} out of ${TOTAL_REQUIRED_CRITERIA} required criteria items.`,
-    });
-  }
-
   // Reject blank or out-of-range submitted values; zero is a valid score.
   const hasInvalidScore = scores.some((item) => {
     if (
@@ -367,6 +368,11 @@ export const createStudentEvaluation = async (req, res) => {
           "Only this student's accepted supervisor can submit their evaluation.",
       });
     }
+    const departmentId = await studentCriteriaDepartment(connection, student_id);
+    if (!departmentId || !(await validateCriteriaScores(connection, "student_evaluation_criteria", departmentId, scores))) {
+      await connection.rollback();
+      return res.status(400).json({ error: "Answer every current evaluation criterion for this student's department." });
+    }
 
     assertInternshipStarted(records[0].date_started, "Student evaluations");
 
@@ -394,25 +400,18 @@ export const createStudentEvaluation = async (req, res) => {
       other_remarks || null,
     ]);
 
-    // Resolve submitted names to stored criterion IDs and parse scores as integers.
-    // Blank criterion names are skipped; master and score writes share the transaction.
+    // Active IDs were validated for this student's department above. Master and
+    // score writes share the transaction, so a failed score cannot leave a master.
     const scoreQuery = `
       INSERT INTO student_evaluation_scores (evaluation_master_id, criterion_id, score)
-      VALUES (?, (SELECT id FROM student_evaluation_criteria WHERE criterion_name = ? LIMIT 1), ?)
+      VALUES (?, ?, ?)
     `;
 
     for (const item of scores) {
-      if (
-        item.criterion_name === null ||
-        item.criterion_name === undefined ||
-        String(item.criterion_name).trim() === ""
-      ) {
-        continue;
-      }
       const cleanScore = parseInt(item.score, 10);
       await connection.execute(scoreQuery, [
         masterId,
-        item.criterion_name,
+        item.criterion_id,
         cleanScore,
       ]);
     }

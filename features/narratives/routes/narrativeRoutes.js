@@ -67,7 +67,7 @@ narrativeRoutes.get(
 narrativeRoutes.get(
   "/internship-records/narratives/:internshipId",
   verifyUser,
-  verifyRole(["department_head", "admin"]),
+  verifyRole(["department_head"]),
   generalLimiter,
   getInternshipRecordNarratives,
 );

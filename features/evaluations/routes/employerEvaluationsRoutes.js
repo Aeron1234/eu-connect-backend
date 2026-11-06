@@ -23,8 +23,8 @@ const employerEvaluationsRoutes = express.Router();
 employerEvaluationsRoutes.get(
   "/evaluation-criterias",
   verifyUser,
+  verifyRole(["student"]),
   generalLimiter,
-  cacheRoute(300),
   getEvaluationCriterias,
 );
 

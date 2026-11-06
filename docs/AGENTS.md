@@ -1,6 +1,12 @@
 # EU Connect backend — agent handoff
 
+## Department-head record review (November 6, 2026)
+
+Frontend staff Records moved to `/department_head/internship-records`. Backend `/internship-records/...` API paths stay unchanged, but staff list, overview, DTR, narratives, summary report, evaluations, documents, downloads, approval, restoration, and completion require a department head. Admins cannot use these APIs or the former admin-only record deletion route. Student-owned record endpoints and separate admin dashboard/search/reporting permissions remain. Rotation reads keep student, assigned employer, and authorized head access but exclude admin. Keep current-department authorization on each read and mutation.
+
 ## Employer DTR shift restrictions (November 5, 2026)
+
+The follow-up migration `scripts/2026-11-06-dtr-shift-date-range-notifications.sql` adds nullable inclusive `start_date`/`end_date` and the `dtr_shift_schedule` notification type. Existing rows with both dates NULL remain unbounded. Validate ISO dates and ordering server-side; compare the shift's **start date** against the range so overnight clock-ins after midnight retain the prior day's schedule. Dashboard reads show only currently applicable hours. Set/update/remove writes lock the current employer-owned ongoing internship, persist the schedule change with one student notification and one readable activity log in the same transaction, then invalidate notification/activity/dashboard caches and emit the socket notice after commit. Identical saves and removing an absent schedule create no notice. Prior DTR expected-time snapshots are never rewritten.
 
 Apply `scripts/2026-11-05-dtr-shift-restrictions.sql` after the camera migration. `dtr_shift_restrictions` belongs to an internship and its current supervising employer; only that employer can PUT/DELETE its schedule for an ongoing, nondeleted internship. Admin and ordinary department heads still manage location restrictions; Registrar heads are rejected by current DB department membership. `/dtr-restrictions` is canonical; retain `/dtr-locations` API compatibility. Snapshot expected start/end and late flag at clock-in; clock-out computes undertime/overtime from the snapshot so later schedule changes do not alter history. Use Philippine SQL time. A time earlier than start is overnight; late begins at +10 minutes, overtime at +30 minutes after expected end, undertime before expected end. These are labels, not clock gates or credited-hour changes. Auto-closed shifts are not classified as a student clock-out.
 
@@ -292,8 +298,7 @@ All paths below are relative to `/eu-connect/api`.
 | Activity logs        | `/activity-logs/mine`, `/activity-logs`                                         | 30 seconds  |
 | Notifications        | `/notifications`, `/notifications/unread-count`                                 | 15 seconds  |
 | Departments/courses  | `/departments`, `/courses`                                                      | 300 seconds |
-| Criteria admin lists | `/criteria/employer-evaluation`, `/criteria/student-evaluation`                 | 300 seconds |
-| Criteria forms       | `/evaluation-criterias`, `/student-evaluation/criteria`                         | 300 seconds |
+| Criteria management and forms | Department-scoped criteria and active-form endpoints | Not response-cached |
 | Internship postings  | `/internship-postings`, `/posted-jobs`                                          | 30 seconds  |
 | Dashboard summaries  | Six endpoints listed below                                                      | 15 seconds  |
 | Announcements | `/announcements/history` | 30 seconds |
@@ -525,8 +530,9 @@ single-process restrictions apply.
 
 The staff views /internship-records/department, /internships/all and
 /internships/active/all cache for 30 seconds (paths under /eu-connect/api).
-Only department_head/admin reads participate. Student /internships/all reads
-remain uncached. Existing response shapes and route guards are preserved.
+The department record-review route now allows department heads only; the
+separate shared internship-list routes retain their own role rules. Student
+/internships/all reads remain uncached. Existing response shapes remain.
 
 The department controller re-resolves the head's department from the database
 before every cache lookup. The resolved department replaces the token department
@@ -969,8 +975,9 @@ student map, attendance averages, and department dashboard query plans.
 aggregate for its filtered pagination total and four status cards. It formerly
 used separate total and grouped-status scans; the paginated row query remains
 unchanged. The aggregate applies status and substring-search filters only to
-`total`; cards still count all non-deleted records in the viewer's department,
-or all departments for an admin. It retains the same latest-academic-record,
+`total`; cards still count all non-deleted records in the head's department.
+Administrators could use this endpoint when the optimization was introduced,
+but the current route rejects them. It retains the same latest-academic-record,
 profile, and course joins so filtering and row multiplicity stay aligned.
 
 The latest-academic derived table projects only user, department, course, and
@@ -1567,3 +1574,6 @@ Tags always force tagged_students_only=1 on create/edit using persisted tags, ev
 ### Announcement mutation reliability
 
 Announcement mutations: edit recipient reconciliation compares live eligible users before and after the write under the announcement lock, independently of existing alerts. Ordinary edits must not recreate dismissed notifications; only newly eligible recipients are notified. Remove out-of-audience UUID and legacy numeric-link alerts. Pin accepts only numeric/string 0 or 1; admin may pin any existing post, heads must pass fresh DB department/Registrar and targeted viewing checks. Pin commits before silent announcements_changed events; socket failures do not report the saved pin as failed. Existing client listeners refresh announcement, notification and calendar queries. No new SQL/schema/env settings are needed for these mutation fixes; earlier tagging migrations remain required.
+## Department evaluation criteria (November 6, 2026)
+
+Criteria in both directions belong to `departments` through `department_id`. Run `scripts/2026-11-06-department-evaluation-criteria.sql` before deploying this API; existing questions become CCS questions without changing IDs or historical score references. Management routes allow department heads only, and controllers verify the head's current department in the database and reject Registrar. Student-authored supervisor forms use that student's latest academic department. Employer-authored student forms require the target student's ongoing internship with that employer and use the target's latest academic department. Writes validate every active criterion ID in that department in the same transaction as the evaluation. Do not cache a criteria response across viewers or targets.

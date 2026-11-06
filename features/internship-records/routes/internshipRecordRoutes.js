@@ -9,7 +9,6 @@ import {
   approveInternshipRecord,
   createInternshipRecord,
   deleteOwnInternshipRecord,
-  deleteInternshipRecord,
   downloadInternshipRecordFile,
   finishInternshipRecord,
   getActiveInternship,
@@ -100,7 +99,7 @@ internshipRecordRoutes.patch(
 internshipRecordRoutes.patch(
   "/internship-records/:internshipId/finish",
   verifyUser,
-  verifyRole(["department_head", "admin"]),
+  verifyRole(["department_head"]),
   generalLimiter,
   markInternshipFinished,
 );
@@ -108,7 +107,7 @@ internshipRecordRoutes.patch(
 internshipRecordRoutes.patch(
   "/internship/:internshipId",
   verifyUser,
-  verifyRole(["department_head", "admin"]),
+  verifyRole(["department_head"]),
   upload.none(),
   mediumLimiter,
   approveInternshipRecord,
@@ -117,7 +116,7 @@ internshipRecordRoutes.patch(
 internshipRecordRoutes.get(
   "/internship-records/department",
   verifyUser,
-  verifyRole(["department_head", "admin"]),
+  verifyRole(["department_head"]),
   paginationLimiter,
   getDepartmentInternshipRecords,
 );
@@ -125,7 +124,7 @@ internshipRecordRoutes.get(
 internshipRecordRoutes.patch(
   "/internship-records/restore/:internshipId",
   verifyUser,
-  verifyRole(["department_head", "admin"]),
+  verifyRole(["department_head"]),
   generalLimiter,
   restoreInternshipRecord,
 );
@@ -147,18 +146,10 @@ internshipRecordRoutes.delete(
   deleteOwnInternshipRecord,
 );
 
-internshipRecordRoutes.delete(
-  "/internship-records/:internshipId",
-  verifyUser,
-  verifyRole(["admin"]),
-  generalLimiter,
-  deleteInternshipRecord,
-);
-
 internshipRecordRoutes.get(
   "/internship-records/overview/:internshipId",
   verifyUser,
-  verifyRole(["department_head", "admin"]),
+  verifyRole(["department_head"]),
   generalLimiter,
   getInternshipRecordOverview,
 );
@@ -166,7 +157,7 @@ internshipRecordRoutes.get(
 internshipRecordRoutes.get(
   "/internship-records/dtr/:internshipId",
   verifyUser,
-  verifyRole(["department_head", "admin"]),
+  verifyRole(["department_head"]),
   generalLimiter,
   getInternshipRecordDtr,
 );
@@ -174,7 +165,7 @@ internshipRecordRoutes.get(
 internshipRecordRoutes.get(
   "/internship-records/evaluations/:internshipId",
   verifyUser,
-  verifyRole(["department_head", "admin"]),
+  verifyRole(["department_head"]),
   generalLimiter,
   getInternshipRecordEvaluations,
 );
@@ -182,7 +173,7 @@ internshipRecordRoutes.get(
 internshipRecordRoutes.get(
   "/internship-records/documents/:internshipId",
   verifyUser,
-  verifyRole(["department_head", "admin"]),
+  verifyRole(["department_head"]),
   generalLimiter,
   getInternshipRecordDocuments,
 );
@@ -190,7 +181,7 @@ internshipRecordRoutes.get(
 internshipRecordRoutes.get(
   "/internship-records/files/download/:internshipId/:fileId",
   verifyUser,
-  verifyRole(["department_head", "admin"]),
+  verifyRole(["department_head"]),
   generalLimiter,
   downloadInternshipRecordFile,
 );

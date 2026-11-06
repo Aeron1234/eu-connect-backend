@@ -32,14 +32,14 @@ router.get(
 router.get(
   "/internship-records/:internshipId/summary-report",
   verifyUser,
-  verifyRole(["department_head", "admin"]),
+  verifyRole(["department_head"]),
   generalLimiter,
   getInternshipRecordSummaryReport,
 );
 router.get(
   "/internship-records/:internshipId/summary-report/attachment",
   verifyUser,
-  verifyRole(["department_head", "admin"]),
+  verifyRole(["department_head"]),
   generalLimiter,
   getInternshipRecordSummaryAttachment,
 );

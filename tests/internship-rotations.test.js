@@ -73,8 +73,8 @@ test("ongoing owners can create and edit rotations beyond an estimated end while
   }
 });
 
-test("reads authorize owner, assigned employer, current department head and admin only", async () => {
-  for (const [role, id, allowed, headAllowed] of [["student", "student", true], ["student", "other", false], ["employer", "employer", true], ["employer", "other", false], ["department_head", "head", true, true], ["department_head", "head", false, false], ["admin", "admin", true]]) {
+test("reads authorize owner, assigned employer and current department head, excluding admin", async () => {
+  for (const [role, id, allowed, headAllowed] of [["student", "student", true], ["student", "other", false], ["employer", "employer", true], ["employer", "other", false], ["department_head", "head", true, true], ["department_head", "head", false, false], ["admin", "admin", false]]) {
     const state = mock({ headAllowed }); const res = response();
     await getRotations(req(role, id), res);
     assert.equal(res.code, allowed ? 200 : 403, `${role}/${id}`);

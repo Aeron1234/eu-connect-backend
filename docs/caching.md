@@ -117,19 +117,18 @@ are. The existing in-flight read protection and single-process limitation apply.
 
 ## Evaluation criteria
 
-The two admin criteria lists (`/criteria/employer-evaluation` and
-`/criteria/student-evaluation`) and both active-form endpoints
-(`/evaluation-criterias` and `/student-evaluation/criteria`) use a 300-second TTL.
-Authentication, existing role checks and rate limiting still precede caching.
-User identity, authorization context and query strings separate entries,
-including `includeInactive=true`. Response shapes are unchanged.
+Department-head criteria lists (`/criteria/employer-evaluation` and
+`/criteria/student-evaluation`) and active-form endpoints
+(`/evaluation-criterias` and `/student-evaluation/criteria`) are not cached by
+the backend response cache. Their answers depend on the head's current database
+department or the evaluated student's latest academic department. The employer
+form also depends on the target student's ongoing supervisor relationship.
 
 After criterion creation, individual deactivation/reactivation or section
 deactivation/reactivation commits, `invalidateCriteriaCache(tableName)` clears
-both admin and form caches for that criteria table across all users and query
-variants. The other evaluation type stays cached. Failed transactions do not
-invalidate. Historical evaluations and submission validation remain uncached;
-soft-deletion behavior is unchanged. Existing process-local limitations apply.
+any legacy response-cache entries for the affected family. Failed transactions
+do not invalidate. Historical evaluations and submission validation remain
+uncached; soft-deletion behavior is unchanged.
 
 ## Internship postings
 

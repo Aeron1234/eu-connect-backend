@@ -30,7 +30,7 @@ const criteriaRoutes = express.Router();
 criteriaRoutes.get(
   "/criteria/employer-evaluation",
   verifyUser,
-  verifyRole(["admin"]),
+  verifyRole(["department_head"]),
   generalLimiter,
   cacheRoute(300),
   getEmployerEvaluationCriteria,
@@ -39,7 +39,7 @@ criteriaRoutes.get(
 criteriaRoutes.post(
   "/criteria/employer-evaluation",
   verifyUser,
-  verifyRole(["admin"]),
+  verifyRole(["department_head"]),
   generalLimiter,
   addEmployerEvaluationCriterion,
 );
@@ -47,7 +47,7 @@ criteriaRoutes.post(
 criteriaRoutes.delete(
   "/criteria/employer-evaluation/:criterionId",
   verifyUser,
-  verifyRole(["admin"]),
+  verifyRole(["department_head"]),
   generalLimiter,
   deactivateEmployerEvaluationCriterion,
 );
@@ -55,7 +55,7 @@ criteriaRoutes.delete(
 criteriaRoutes.patch(
   "/criteria/employer-evaluation/:criterionId/reactivate",
   verifyUser,
-  verifyRole(["admin"]),
+  verifyRole(["department_head"]),
   generalLimiter,
   reactivateEmployerEvaluationCriterion,
 );
@@ -63,7 +63,7 @@ criteriaRoutes.patch(
 criteriaRoutes.delete(
   "/criteria/employer-evaluation/section/:category",
   verifyUser,
-  verifyRole(["admin"]),
+  verifyRole(["department_head"]),
   generalLimiter,
   deactivateEmployerEvaluationSection,
 );
@@ -71,7 +71,7 @@ criteriaRoutes.delete(
 criteriaRoutes.patch(
   "/criteria/employer-evaluation/section/:category/reactivate",
   verifyUser,
-  verifyRole(["admin"]),
+  verifyRole(["department_head"]),
   generalLimiter,
   reactivateEmployerEvaluationSection,
 );
@@ -80,7 +80,7 @@ criteriaRoutes.patch(
 criteriaRoutes.get(
   "/criteria/student-evaluation",
   verifyUser,
-  verifyRole(["admin"]),
+  verifyRole(["department_head"]),
   generalLimiter,
   cacheRoute(300),
   getStudentEvaluationCriteria,
@@ -89,7 +89,7 @@ criteriaRoutes.get(
 criteriaRoutes.post(
   "/criteria/student-evaluation",
   verifyUser,
-  verifyRole(["admin"]),
+  verifyRole(["department_head"]),
   generalLimiter,
   addStudentEvaluationCriterion,
 );
@@ -97,7 +97,7 @@ criteriaRoutes.post(
 criteriaRoutes.delete(
   "/criteria/student-evaluation/:criterionId",
   verifyUser,
-  verifyRole(["admin"]),
+  verifyRole(["department_head"]),
   generalLimiter,
   deactivateStudentEvaluationCriterion,
 );
@@ -105,7 +105,7 @@ criteriaRoutes.delete(
 criteriaRoutes.patch(
   "/criteria/student-evaluation/:criterionId/reactivate",
   verifyUser,
-  verifyRole(["admin"]),
+  verifyRole(["department_head"]),
   generalLimiter,
   reactivateStudentEvaluationCriterion,
 );
@@ -113,7 +113,7 @@ criteriaRoutes.patch(
 criteriaRoutes.delete(
   "/criteria/student-evaluation/section/:category",
   verifyUser,
-  verifyRole(["admin"]),
+  verifyRole(["department_head"]),
   generalLimiter,
   deactivateStudentEvaluationSection,
 );
@@ -121,7 +121,7 @@ criteriaRoutes.delete(
 criteriaRoutes.patch(
   "/criteria/student-evaluation/section/:category/reactivate",
   verifyUser,
-  verifyRole(["admin"]),
+  verifyRole(["department_head"]),
   generalLimiter,
   reactivateStudentEvaluationSection,
 );

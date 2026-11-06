@@ -363,6 +363,7 @@ Paths below are relative to the API base. The linked routers define exact method
 | Employer evaluates student | `/student-evaluation/new`, `/student-past-evaluations/:studentId`, `/evaluations/student/:evaluationId/print` | [studentEvaluationRoutes.js](features/evaluations/routes/studentEvaluationRoutes.js) |
 | Student evaluates supervisor | `/evaluations/employer`, `/evaluations/submitted`, `/evaluations/eligibility` | [employerEvaluationsRoutes.js](features/evaluations/routes/employerEvaluationsRoutes.js) |
 | Evaluation criteria | `/criteria/student-evaluation`, `/criteria/employer-evaluation`, section/criterion activation paths | [evaluationsCriteriaRoutes.js](features/evaluation-criteria/routes/evaluationsCriteriaRoutes.js) |
+
 | Announcements | `/announcements/history`, `/announcements/:announcementId`, `/announcement/new`, pin/delete paths | [announcementRoutes.js](features/announcements/routes/announcementRoutes.js) |
 | Calendar | `/calendar`, `/calendar/todos`, `/calendar/schedules` | [calendarRoutes.js](features/calendar/routes/calendarRoutes.js) |
 | Notifications | `/notifications`, `/notifications/unread-count`, `/notifications/:notificationId` | [notificationRoutes.js](features/notifications/routes/notificationRoutes.js) |
@@ -375,6 +376,8 @@ Paths below are relative to the API base. The linked routers define exact method
 | Activity logs | `/activity-logs`, `/activity-logs/mine`, `/activity-logs/batch-delete-preview`, `/activity-logs/batch` | [activityLogsRoutes.js](features/activity-logs/routes/activityLogsRoutes.js) |
 | Cache diagnostics | `/cache/metrics` | [cacheMonitoringRoutes.js](features/cache-monitoring/routes/cacheMonitoringRoutes.js) |
 | Error tracking | `/errors`, `/errors/:fingerprint` | [errorTrackingRoutes.js](features/error-tracking/routes/errorTrackingRoutes.js) |
+
+Evaluation criteria management is restricted to non-Registrar department heads and scoped by their current database department. Before deploying the paired frontend/backend, back up the database and run [`scripts/2026-11-06-department-evaluation-criteria.sql`](scripts/2026-11-06-department-evaluation-criteria.sql) once. It assigns all existing criteria to CCS while retaining question IDs and historical scores. Other departments create their own questions. Evaluation forms and score submissions use the evaluated student's latest academic department; employer forms additionally require current supervision of an ongoing internship. No new dependencies or environment variables are required.
 
 Naming reflects existing contracts: `student-evaluation` is an employer's evaluation of a student, while `evaluations/employer` is the student's evaluation of their supervisor.
 
@@ -689,5 +692,10 @@ Announcement mutations: edit recipient reconciliation compares live eligible use
 
 ### Employer DTR shift restrictions (November 5, 2026)
 
+After the initial shift migration, apply `scripts/2026-11-06-dtr-shift-date-range-notifications.sql` before deploying date-aware schedule code. It adds nullable inclusive schedule start/end dates and the `dtr_shift_schedule` notification type. Existing schedules remain unbounded. The current supervisor can set either date, both, or neither; overnight work uses the shift start date. Changed schedules notify the student and create a readable activity log in the same transaction. Existing DTR snapshots stay unchanged. No new environment variables, packages, or data backfill are needed.
+
 Apply `scripts/2026-11-05-dtr-shift-restrictions.sql` after the attendance-photo migration and before deploying this API. It creates one optional recurring Philippine-time start/end schedule per ongoing internship and adds immutable schedule snapshots and Late/Undertime/Overtime flags to DTR rows. Only the currently assigned supervising employer may set or remove a schedule; admin and non-Registrar department heads retain location management but cannot edit shift hours. The canonical management API is `/dtr-restrictions`; `/dtr-locations` remains a compatibility alias. The schedule labels attendance rather than blocking it or changing credited hours. No new environment variables or packages are required.
 
+Staff record review is now a department-head feature at the frontend path `/department_head/internship-records`. The API retains its existing `/internship-records/...` paths, but staff record list/detail/lifecycle endpoints reject administrators. Student-owned record APIs and separate admin dashboard, search, and reporting permissions are unchanged. No SQL migration or new environment variable is required.
+
+The student dashboard presents remaining required hours and any currently applicable employer shift schedule. Attendance responses keep saved `status` separate from the `is_late`, `is_undertime` and `is_overtime` timing flags; the frontend displays those flags in a Timing column. This UI/documentation change does not add an absence workflow or change DTR storage.

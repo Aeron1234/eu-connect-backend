@@ -23,6 +23,7 @@ test("new student evaluation categories omit a leading number and dot", async ()
     async commit() {},
     async rollback() {},
     async execute(sql, params) {
+      if (sql.includes("FROM dept_heads_background_info")) return [[{ department_id: 3, code: "CCS" }]];
       assert.match(sql, /INSERT INTO student_evaluation_criteria/);
       inserted = params;
       return [{ affectedRows: 1, insertId: 30 }];
@@ -30,9 +31,9 @@ test("new student evaluation categories omit a leading number and dot", async ()
   });
   try {
     const res = response();
-    await addStudentEvaluationCriterion({ body: { category: "7. Communication", criterion_name: "Clarity" } }, res);
+    await addStudentEvaluationCriterion({ verifiedUser: { id: "head" }, body: { category: "7. Communication", criterion_name: "Clarity" } }, res);
     assert.equal(res.statusCode, 201);
-    assert.deepEqual(inserted, ["Communication", "Clarity"]);
+    assert.deepEqual(inserted, [3, "Communication", "Clarity"]);
   } finally {
     db.getConnection = original;
   }
@@ -44,6 +45,7 @@ test("student evaluation sections retain first-criterion order after prefixes ar
   db.getConnection = async () => ({
     release() {},
     async execute(sql) {
+      if (sql.includes("FROM dept_heads_background_info")) return [[{ department_id: 3, code: "CCS" }]];
       statement = sql;
       return [[
         { id: 1, category: "Personality", criterion_name: "Grooming", is_active: 1 },
@@ -53,7 +55,7 @@ test("student evaluation sections retain first-criterion order after prefixes ar
   });
   try {
     const res = response();
-    await getStudentEvaluationCriteria({ query: {} }, res);
+    await getStudentEvaluationCriteria({ verifiedUser: { id: "head" }, query: {} }, res);
     assert.equal(res.statusCode, 200);
     assert.match(statement, /ORDER BY id ASC/);
     assert.deepEqual(res.body.map((group) => group.category), ["Personality", "Work Attitude"]);

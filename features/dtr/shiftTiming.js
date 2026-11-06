@@ -30,6 +30,16 @@ export function shiftExpectations(recordedAt, startTime, endTime) {
   };
 }
 
+// Optional bounds apply to the shift's start date, including overnight shifts
+// whose clock-in happens after midnight on the following calendar day.
+export function datedShiftExpectations(recordedAt, startTime, endTime, startDate, endDate) {
+  const expected = shiftExpectations(recordedAt, startTime, endTime);
+  if (!expected) return null;
+  const shiftDate = expected.expectedIn.slice(0, 10);
+  return (startDate && shiftDate < startDate) || (endDate && shiftDate > endDate)
+    ? null : expected;
+}
+
 export function clockOutTiming(recordedAt, expectedOut) {
   if (!expectedOut) return { undertime: false, overtime: false };
   const difference = parse(recordedAt) - parse(expectedOut);

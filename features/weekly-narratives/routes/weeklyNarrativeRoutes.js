@@ -79,7 +79,7 @@ weeklyNarrativeRoutes.get(
 weeklyNarrativeRoutes.get(
   "/internship-records/weekly-narratives/:internshipId",
   verifyUser,
-  verifyRole(["department_head", "admin"]),
+  verifyRole(["department_head"]),
   generalLimiter,
   getInternshipRecordWeeklyNarratives,
 );

@@ -9,7 +9,7 @@ import { getMaxShiftHours } from "../../../config/shiftLimits.js";
 import { afterUploadCommit, cleanupUploadPaths } from "../../../config/uploadLifecycle.js";
 import { supabase } from "../../../config/supabase.js";
 import { uploadDtrPhoto, validateDtrPhoto } from "../dtrPhoto.js";
-import { shiftExpectations, clockOutTiming } from "../shiftTiming.js";
+import { datedShiftExpectations, clockOutTiming } from "../shiftTiming.js";
 
 const MIN_REST_SECONDS = 6 * 60 * 60;
 
@@ -248,7 +248,9 @@ export const clockIn = async (req, res) => {
          dl.lon AS dtr_lon, 
          dl.radius_meters,
          TIME_FORMAT(sr.clock_in_time, '%H:%i') AS schedule_in,
-         TIME_FORMAT(sr.clock_out_time, '%H:%i') AS schedule_out
+         TIME_FORMAT(sr.clock_out_time, '%H:%i') AS schedule_out,
+         DATE_FORMAT(sr.start_date, '%Y-%m-%d') AS schedule_start_date,
+         DATE_FORMAT(sr.end_date, '%Y-%m-%d') AS schedule_end_date
        FROM internship_records ir
        LEFT JOIN dtr_locations dl ON ir.id = dl.internship_id
        LEFT JOIN dtr_shift_restrictions sr ON sr.internship_id = ir.id AND sr.employer_id = ir.employer_id
@@ -311,7 +313,8 @@ export const clockIn = async (req, res) => {
     const [[{ recorded_at: recordedAt }]] = await connection.execute(
       "SELECT DATE_FORMAT(NOW(), '%Y-%m-%d %H:%i:%s') AS recorded_at",
     );
-    const expected = shiftExpectations(recordedAt, record.schedule_in, record.schedule_out);
+    const expected = datedShiftExpectations(recordedAt, record.schedule_in, record.schedule_out,
+      record.schedule_start_date, record.schedule_end_date);
     photoPath = await uploadDtrPhoto(req.file, recordedAt, "in", userId);
     const [result] = await connection.execute(
       `INSERT INTO daily_time_records 

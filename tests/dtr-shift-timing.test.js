@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { shiftExpectations, clockOutTiming } from '../features/dtr/shiftTiming.js';
+import { shiftExpectations, datedShiftExpectations, clockOutTiming } from '../features/dtr/shiftTiming.js';
 
 test('day shift marks the ten-minute threshold and clock-out labels', () => {
   const before = shiftExpectations('2026-11-05 08:09:59', '08:00', '17:00');
@@ -25,4 +25,12 @@ test('overnight shift anchors a post-midnight clock-in to the previous day', () 
 test('no schedule creates no timing labels', () => {
   assert.equal(shiftExpectations('2026-11-05 08:00:00', null, null), null);
   assert.deepEqual(clockOutTiming('2026-11-05 17:00:00', null), { undertime: false, overtime: false });
+});
+
+test('optional range includes its start and end dates, using the overnight shift start', () => {
+  assert.equal(datedShiftExpectations('2026-11-04 08:00:00', '08:00', '17:00', '2026-11-05', '2026-11-06'), null);
+  assert.equal(datedShiftExpectations('2026-11-05 08:00:00', '08:00', '17:00', '2026-11-05', '2026-11-06').expectedIn, '2026-11-05 08:00:00');
+  assert.equal(datedShiftExpectations('2026-11-07 00:15:00', '22:00', '06:00', '2026-11-05', '2026-11-06').expectedIn, '2026-11-06 22:00:00');
+  assert.equal(datedShiftExpectations('2026-11-08 00:15:00', '22:00', '06:00', '2026-11-05', '2026-11-06'), null);
+  assert.ok(datedShiftExpectations('2026-11-07 08:00:00', '08:00', '17:00', null, null));
 });

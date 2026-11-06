@@ -36,7 +36,6 @@ async function authorize(connection, internshipId, viewer, write = false) {
       );
   } else if (!(
     owner ||
-    viewer.role === "admin" ||
     (viewer.role === "employer" &&
       record.employer_id != null &&
       String(record.employer_id) === String(viewer.id)) ||

@@ -31,7 +31,6 @@ studentEvaluationRoutes.get(
   verifyUser,
   verifyRole(["employer"]),
   generalLimiter,
-  cacheRoute(300),
   getStudentEvaluationCriteria,
 );
 

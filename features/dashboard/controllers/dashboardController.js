@@ -75,10 +75,25 @@ export const getStudentDashboardData = async (req, res) => {
     let internshipData = null;
     try {
       const [rows] = await connection.execute(
-        `SELECT * FROM internship_records
-         WHERE user_id = ? AND deleted_at IS NULL
-           AND (status = 'ongoing' OR status = 'pending')
-         ORDER BY (status = 'ongoing') DESC, created_at DESC
+        `SELECT ir.*,
+                TIME_FORMAT(sr.clock_in_time, '%H:%i') AS schedule_in,
+                TIME_FORMAT(sr.clock_out_time, '%H:%i') AS schedule_out,
+                DATE_FORMAT(sr.start_date, '%Y-%m-%d') AS schedule_start_date,
+                DATE_FORMAT(sr.end_date, '%Y-%m-%d') AS schedule_end_date
+         FROM internship_records ir
+         LEFT JOIN dtr_shift_restrictions sr
+            ON sr.internship_id = ir.id AND sr.employer_id = ir.employer_id
+            AND (sr.start_date IS NULL OR sr.start_date <=
+              CASE WHEN sr.clock_out_time <= sr.clock_in_time AND sr.clock_in_time >= '12:00:00'
+                  AND TIME(NOW()) < SUBTIME(sr.clock_in_time, '12:00:00')
+                THEN DATE_SUB(CURDATE(), INTERVAL 1 DAY) ELSE CURDATE() END)
+            AND (sr.end_date IS NULL OR sr.end_date >=
+              CASE WHEN sr.clock_out_time <= sr.clock_in_time AND sr.clock_in_time >= '12:00:00'
+                  AND TIME(NOW()) < SUBTIME(sr.clock_in_time, '12:00:00')
+                THEN DATE_SUB(CURDATE(), INTERVAL 1 DAY) ELSE CURDATE() END)
+         WHERE ir.user_id = ? AND ir.deleted_at IS NULL
+           AND (ir.status = 'ongoing' OR ir.status = 'pending')
+         ORDER BY (ir.status = 'ongoing') DESC, ir.created_at DESC
          LIMIT 1`,
         [userId],
       );
@@ -103,7 +118,7 @@ export const getStudentDashboardData = async (req, res) => {
       // Show a shift started today or one that continued past midnight.
       try {
         const [todayRows] = await connection.execute(
-          `SELECT id, clock_in, clock_out, created_at, status 
+          `SELECT id, clock_in, clock_out, created_at, status, is_late
            FROM daily_time_records 
            WHERE user_id = ? AND internship_id = ? AND clock_in IS NOT NULL
              AND (clock_in >= CURDATE() OR clock_out >= CURDATE() OR clock_out IS NULL)

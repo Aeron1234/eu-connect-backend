@@ -77,6 +77,8 @@ test("submission is completed immediately, notifies only matching department hea
       async commit() { assert(cache.has("history")); if (failCommit) throw Error("commit failed"); committed = true; },
       async execute(sql, params) {
         if (sql.includes("FROM internship_records")) return [[{ id: "record-uuid", date_started: "2000-01-01", employer_id: "employer", company_name: "Company" }]];
+        if (sql.trim().startsWith("SELECT department_id FROM student_academic_info")) return [[{ department_id: 3 }]];
+        if (sql.includes("FROM student_evaluation_criteria")) return [Array.from({ length: 29 }, (_, i) => ({ id: i + 1 }))];
         if (sql.includes("FROM user_profiles")) return [[{ first_name: "Test", last_name: "Employer" }]];
         if (sql.includes("SELECT DISTINCT u.id")) {
           assert.match(sql, /r.role = 'department_head'/); assert.match(sql, /u.deleted_at IS NULL/);
@@ -88,7 +90,7 @@ test("submission is completed immediately, notifies only matching department hea
         return [{ affectedRows: 1 }];
       },
     });
-    const req = { ...request("employer"), body: { student_id: "student", scores: Array.from({ length: 29 }, (_, i) => ({ criterion_name: `Skill ${i}`, score: 5 })) },
+    const req = { ...request("employer"), body: { student_id: "student", scores: Array.from({ length: 29 }, (_, i) => ({ criterion_id: i + 1, score: 5 })) },
       app: { get: () => ({ to: room => ({ emit(event, payload) { assert(committed); assert(!cache.has("history")); rooms.push(room); assert.equal(payload.link, "record-uuid"); } }) }) } };
     const res = response(), log = console.log; console.log = () => {};
     try { await student.createStudentEvaluation(req, res); } finally { console.log = log; }

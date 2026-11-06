@@ -4,24 +4,27 @@ import { invalidateEvaluationHistoryCache } from "../../../config/cache/evaluati
 import { invalidateActivityLogsCache } from "../../../config/cache/activityLogsCache.js";
 import { db } from "../../../config/db.js";
 import { newUUID } from "../../../config/helpers.js";
+import { studentCriteriaDepartment, validateCriteriaScores } from "../../evaluation-criteria/criteriaDepartment.js";
 
 // In this API, employer evaluation means the student evaluating their supervisor.
 export const getEvaluationCriterias = async (req, res) => {
   let connection;
   try {
     connection = await db.getConnection();
+    const departmentId = await studentCriteriaDepartment(connection, req.verifiedUser.id);
+    if (!departmentId) return res.status(404).json({ error: "Student department not found." });
 
     // Offer active questions only; inactive rows remain available to historical score joins.
     const query = `
       SELECT id, category, criterion_name 
       FROM employer_evaluation_criteria
-      WHERE is_active = 1
+      WHERE department_id = ? AND is_active = 1
       ORDER BY id ASC
     `;
 
-    const [rows] = await connection.execute(query);
+    const [rows] = await connection.execute(query, [departmentId]);
 
-    // Group by category; the form submits criterion_name while scores reference numeric IDs.
+    // Group by category; the form submits numeric IDs to preserve department scope.
     const structuredData = [];
 
     rows.forEach((row) => {
@@ -38,8 +41,8 @@ export const getEvaluationCriterias = async (req, res) => {
       }
 
       categoryGroup.items.push({
-        id: row.criterion_name, // Form key submitted as criterion_name.
-        db_id: row.id, // Stored criterion ID.
+        id: row.id, // Stable criterion ID submitted with the score.
+        db_id: row.id, // Existing display contract for callers that inspect stored IDs.
         name: row.criterion_name, // Display string
       });
     });
@@ -108,6 +111,11 @@ export const createEmployerEvaluation = async (req, res) => {
     }
 
     const internship = records[0];
+    const departmentId = await studentCriteriaDepartment(connection, studentId);
+    if (!departmentId || !(await validateCriteriaScores(connection, "employer_evaluation_criteria", departmentId, scores))) {
+      await connection.rollback();
+      return res.status(400).json({ error: "Answer every current evaluation criterion for your department." });
+    }
 
     if (!internship.employer_id) {
       await connection.rollback();
@@ -136,21 +144,14 @@ export const createEmployerEvaluation = async (req, res) => {
 
     const scoreQuery = `
       INSERT INTO employer_evaluation_scores (evaluation_master_id, criterion_id, score)
-      VALUES (?, (SELECT id FROM employer_evaluation_criteria WHERE criterion_name = ? LIMIT 1), ?)
+      VALUES (?, ?, ?)
     `;
 
     for (const item of scores) {
-      if (
-        item.criterion_name === null ||
-        item.criterion_name === undefined ||
-        String(item.criterion_name).trim() === ""
-      ) {
-        continue;
-      }
       const cleanScore = parseInt(item.score, 10);
       await connection.execute(scoreQuery, [
         masterId,
-        item.criterion_name,
+        item.criterion_id,
         cleanScore,
       ]);
     }

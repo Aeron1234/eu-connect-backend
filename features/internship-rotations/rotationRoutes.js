@@ -9,7 +9,7 @@ const base = "/internship-records/:internshipId/rotations";
 router.get(
   base,
   verifyUser,
-  verifyRole(["student", "employer", "department_head", "admin"]),
+  verifyRole(["student", "employer", "department_head"]),
   generalLimiter,
   getRotations,
 );

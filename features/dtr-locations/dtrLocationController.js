@@ -26,7 +26,9 @@ const columns = `ir.id AS internship_id, ir.user_id, ir.employer_id, ir.company_
   ir.lat AS company_lat, ir.lon AS company_lon, ir.company_address,
   dl.id AS location_id, dl.lat, dl.lon, dl.radius_meters, dl.label, dl.address,
   TIME_FORMAT(sr.clock_in_time, '%H:%i') AS schedule_in,
-  TIME_FORMAT(sr.clock_out_time, '%H:%i') AS schedule_out`;
+  TIME_FORMAT(sr.clock_out_time, '%H:%i') AS schedule_out,
+  DATE_FORMAT(sr.start_date, '%Y-%m-%d') AS schedule_start_date,
+  DATE_FORMAT(sr.end_date, '%Y-%m-%d') AS schedule_end_date`;
 
 // Resolve heads from current database membership on every read and write.
 // A stale or forged department claim cannot grant access, including to Registrar.
@@ -131,7 +133,8 @@ function studentRow(row, includeSchedule = false) {
     location,
     ...(includeSchedule ? {
       schedule: row.schedule_in && row.schedule_out
-        ? { clockInTime: row.schedule_in, clockOutTime: row.schedule_out }
+        ? { clockInTime: row.schedule_in, clockOutTime: row.schedule_out,
+            startDate: row.schedule_start_date, endDate: row.schedule_end_date }
         : null,
     } : {}),
     company_location:
