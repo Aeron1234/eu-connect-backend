@@ -1,5 +1,9 @@
 # EU Connect backend — agent handoff
 
+## Department-head review navigation (November 7, 2026)
+
+Frontend Internship Records now handles placement decisions, overview and rotations. Department-wide Attendance, Student Submissions and Evaluations lists open focused `/department_head/attendance/[internshipId]`, `/department_head/submissions/[internshipId]` and `/department_head/evaluations/[internshipId]` pages. These pages reuse the existing authorized record-detail API endpoints; do not relax their department or Registrar checks. Old Records tab URLs redirect in the frontend. Request/finished notifications still open the record overview, while evaluation notifications open the focused evaluation when both IDs exist. No backend route, schema or environment change is needed for this navigation split.
+
 ## Department-head record review (November 6, 2026)
 
 Frontend staff Records moved to `/department_head/internship-records`. Backend `/internship-records/...` API paths stay unchanged, but staff list, overview, DTR, narratives, summary report, evaluations, documents, downloads, approval, restoration, and completion require a department head. Admins cannot use these APIs or the former admin-only record deletion route. Student-owned record endpoints and separate admin dashboard/search/reporting permissions remain. Rotation reads keep student, assigned employer, and authorized head access but exclude admin. Keep current-department authorization on each read and mutation.
@@ -138,22 +142,24 @@ endpoints reject requests without an active clock-in, and the dashboard shows
 the break button only when that record exists. The row stores the current
 `break_started_at` and accumulated `break_total_seconds`; all timestamps and
 duration calculations use database time. A student must resume before manual
-clock-out. Clock-out subtracts completed breaks before the eight-hour cap, and
-auto-close uses net duty time with `MAX_SHIFT_WALL_HOURS` (default: cap plus two
-hours) as a safety stop for a forgotten open break. The dashboard's live state
+clock-out. Clock-out subtracts completed breaks before the `MAX_SHIFT_HOURS`
+credit cap. Auto-close uses elapsed wall time, including breaks and overnight
+hours, at the fixed 16-hour safety limit. The dashboard's live state
 uses `ON_BREAK`; the historical `status` field stays `present` once closed.
-Overtime crediting is deferred until the school's policy is confirmed.
+Overtime approval does not change the credit cap.
 
 ## Attendance shift cap and auto-close
 
 `config/shiftLimits.js` parses and validates `MAX_SHIFT_HOURS` as a positive
-whole number for both manual clock-out and the hourly auto-close job. Keep the
+whole number as the maximum creditable hours for manual clock-out and review. Keep the
 cap numeric: a string cap previously made clock-out commit the shift, then fail
 while formatting `shiftHours`. At exactly the cap, a manual clock-out is not
-flagged; a longer shift is capped and flagged. Auto-close now starts at the cap,
-sets `status = 'present'`, and retains `flagged = 1` and `auto_closed = 1` to show
-that the closure was automatic. The job rechecks and locks rows before writing
-or adding hours, so a manual clock-out after the initial scan is not overwritten.
+flagged; a longer shift is capped and flagged. Auto-close starts after 16 wall
+hours by default, sets `status = 'present'`, `flagged = 1` and `auto_closed = 1`,
+and proposes break-adjusted duty without crediting it. It preserves a null
+clock-out photo and requires student explanation and scoped staff review before
+hours are credited. The job rechecks and locks rows before writing, so a manual
+clock-out after the initial scan is not overwritten.
 `docs/attendance-auto-close-backfill.sql` is an optional, narrowly scoped
 one-time correction for historical eight-hour rows marked invalid by the old
 job; review its count before running it against a live database.
@@ -1577,3 +1583,17 @@ Announcement mutations: edit recipient reconciliation compares live eligible use
 ## Department evaluation criteria (November 6, 2026)
 
 Criteria in both directions belong to `departments` through `department_id`. Run `scripts/2026-11-06-department-evaluation-criteria.sql` before deploying this API; existing questions become CCS questions without changing IDs or historical score references. Management routes allow department heads only, and controllers verify the head's current department in the database and reject Registrar. Student-authored supervisor forms use that student's latest academic department. Employer-authored student forms require the target student's ongoing internship with that employer and use the target's latest academic department. Writes validate every active criterion ID in that department in the same transaction as the evaluation. Do not cache a criteria response across viewers or targets.
+## Department Attendance (November 7, 2026)
+
+`GET /dtr/department-attendance` is a paginated read for non-Registrar department heads. Resolve the department from `dept_heads_background_info` on every request and reject REG before querying. Join each student's latest `student_academic_info` row and exclude deleted internships and users; never trust a client department ID. Search, course, internship and clock-in date filters apply to both count and rows. The endpoint returns DTR metadata and photo-path presence; actual photos still require the existing per-record authorized signed-URL route. No schema migration or new environment setting is required.
+
+## Department Student Submissions (November 7, 2026)
+
+`GET /department-submissions` in internship-record routes is non-Registrar department-head only. Resolve the head's current department from the DB, join the student's latest academic row, and exclude deleted internships and users. Apply type, student-name, company, course, internship and submission-date filters to the count and paginated rows alike. Include student-uploaded documents, including legacy rows with NULL `uploaded_by_role` (the student upload path does not set that column), but exclude employer-uploaded documents. Return metadata, not private file paths or report contents; the existing record-detail and download routes remain authoritative for content authorization. No database migration or environment setting is required.
+
+## Department Evaluations (November 7, 2026)
+
+`GET /department-evaluations` in internship-record routes is non-Registrar department-head only. Resolve the head's current department from the DB, join the student's latest academic row, and exclude deleted internships and users. Union employer-authored `student_evaluation_masters` (performance) and student-authored `employer_evaluation_masters` (supervisor) without joining scores, so each evaluation appears once. Apply all filters to both count and page. Return metadata and deleted state only; existing authorized detail endpoints provide scores/comments and staff deletion. Preserve the confidential performance-evaluation boundary. Student-to-supervisor record detail also needs `deleted_at` to label author-deleted evaluations accurately. No schema or environment change is required.
+# DTR overtime and auto-close review (2026-11-07)
+
+`scripts/2026-11-07-dtr-overtime-auto-close-review.sql` follows the DTR photo and shift-date migrations. Keep `MAX_SHIFT_HOURS` below 16 as the credit cap. The safety closure is fixed at 16 wall hours; `MAX_SHIFT_WALL_HOURS` is obsolete. The hourly `warnLongShifts` uses `wall_warning_sent_at` to send one reminder at 12 wall hours. `config/autoCloseStaleShifts.js` closes only after 16 wall hours, proposes break-adjusted hours, credits zero, and notifies the student. Historical auto-closed rows are `legacy_credited` and preserve existing credit; they accept an optional student explanation without changing credit or starting a new review. Student overtime request uses an open row and a Manila intended end; assigned employer approves or declines, independent of timing badges. Manual clock-out still requires photo and geofence. Student explanation is required after a new auto-close and before another clock-in, even if the unexplained row is not the latest shift. Employer or non-REG head may then confirm or reduce credit under a row lock; add it to internship accumulated hours exactly once. Keep scoped DTR reads, notification routing, cache invalidation, UI help, and frontend review controls in sync. The frontend dashboard also warns while open after 12 wall hours.

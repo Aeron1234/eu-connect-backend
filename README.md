@@ -237,7 +237,7 @@ All three JWT secrets must be configured. Use a storage credential with the perm
 | Variable | Default / behavior |
 | --- | --- |
 | `CACHE_ENABLED` | Response caching is enabled unless set to the exact string `false`. |
-| `MAX_SHIFT_WALL_HOURS` | Defaults to `MAX_SHIFT_HOURS + 2`; must exceed `MAX_SHIFT_HOURS`. |
+| `MAX_SHIFT_WALL_HOURS` | Obsolete; the safety close is fixed at 16 wall hours. |
 | `BATCH_SIZE` | Stale-shift processing batch size; defaults to `100`. |
 | `REFRESH_TOKEN_REVOKED_RETENTION_DAYS` | Revoked-token retention before cleanup; defaults to `1` day. |
 | `REFRESH_TOKEN_CLEANUP_BATCH_SIZE` | Token deletion batch size; defaults to `1000`. |
@@ -699,3 +699,19 @@ Apply `scripts/2026-11-05-dtr-shift-restrictions.sql` after the attendance-photo
 Staff record review is now a department-head feature at the frontend path `/department_head/internship-records`. The API retains its existing `/internship-records/...` paths, but staff record list/detail/lifecycle endpoints reject administrators. Student-owned record APIs and separate admin dashboard, search, and reporting permissions are unchanged. No SQL migration or new environment variable is required.
 
 The student dashboard presents remaining required hours and any currently applicable employer shift schedule. Attendance responses keep saved `status` separate from the `is_late`, `is_undertime` and `is_overtime` timing flags; the frontend displays those flags in a Timing column. This UI/documentation change does not add an absence workflow or change DTR storage.
+### Department Attendance (November 7, 2026)
+
+`GET /dtr/department-attendance` supplies a paginated, current-department-scoped DTR list to non-Registrar department heads. Filters cover student name, course, internship ID, and clock-in date range. It uses the latest academic membership, excludes deleted records/users, and rejects Registrar on the server. Photo viewing continues through `/dtr/:dtrId/photo/:kind` with its separate authorization. The paired frontend adds `/department_head/attendance`; no SQL migration, environment variable, or package is needed.
+
+### Department Student Submissions (November 7, 2026)
+
+`GET /department-submissions` supplies a paginated, current-department-scoped union of weekly narratives, summary reports, and student-uploaded internship documents to non-Registrar department heads. It accepts student name, company, type, course, internship ID and submission-date filters. The list exposes metadata only; existing record-detail and document-download endpoints continue to authorize content access. The paired frontend adds `/department_head/submissions` and links to focused submission details; old record-tab URLs redirect there. Existing tables suffice, so there is no migration, backfill, new environment variable, or package.
+
+### Department Evaluations (November 7, 2026)
+
+`GET /department-evaluations` supplies a paginated list of both evaluation directions for non-Registrar department heads, scoped to students' current department. Search and filters cover student, company, direction, active/deleted state, course, internship/evaluation ID, and submission dates. The endpoint returns metadata only, including author-deleted status. Full scores, comments, print, and permanent deletion remain on the separately authorized internship-record detail routes. The paired frontend adds `/department_head/evaluations` and focused evaluation details. Notifications open that detail when both record and evaluation IDs exist, or filter the list when only an evaluation ID is available. The existing evaluation master tables suffice; no migration, backfill, new package, or environment variable is needed.
+### DTR overtime and auto-close review
+
+Apply `scripts/2026-11-07-dtr-overtime-auto-close-review.sql` after the DTR attendance-photo, shift-restriction and shift-date migrations, then deploy backend and frontend together. It adds overtime requests and review fields to `daily_time_records`, expands notification types, and marks already credited auto-closed rows `legacy_credited` without changing their credit. `MAX_SHIFT_HOURS` remains the maximum creditable duty per row (the local setting is 10) and must stay below the fixed 16-hour safety close. `MAX_SHIFT_WALL_HOURS` no longer controls closure.
+
+Students can request extra time near scheduled end or after eight duty hours without a schedule. Only their assigned employer can approve or decline, and a pending request never prevents photo/GPS manual clock-out. The hourly job sends one reminder after 12 elapsed wall hours, then closes an open shift after 16 elapsed wall hours, including overnight shifts, with zero credited hours and no clock-out photo; the student is notified and must submit an explanation before the next clock-in. Clock-in checks all pending explanations, even if a more recent shift exists. Once explained, the current assigned employer or non-Registrar department head may credit up to the proposed break-adjusted duty and `MAX_SHIFT_HOURS`, once under a transaction lock. Existing auto-closed rows keep prior credit; students may add an optional note to those `legacy_credited` rows without changing hours or starting a new review. The dashboard also warns while open after 12 wall hours. Apply the SQL before starting the new API; older schemas will reject these reads and writes.

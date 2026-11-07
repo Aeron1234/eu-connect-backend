@@ -129,7 +129,9 @@ export const getLatestDtrStatus = async (req, res) => {
     const { internshipId } = req.query;
 
     const [records] = await connection.execute(
-      `SELECT id, clock_in, clock_out, status
+      `SELECT id, clock_in, clock_out, status, auto_closed, auto_closed_at,
+              auto_close_review_status, proposed_hours, total_hours, student_explanation,
+              overtime_status, overtime_intended_end, overtime_reason, expected_clock_out
        FROM daily_time_records 
        WHERE user_id = ? AND internship_id = ? 
        ORDER BY id DESC 
@@ -209,10 +211,27 @@ export const clockIn = async (req, res) => {
       });
     }
 
+    // Check every unresolved system closure, not just the latest shift. A later
+    // normal entry must not hide an older explanation that is still required.
+    const [unexplainedRows] = await connection.execute(
+      `SELECT id FROM daily_time_records
+       WHERE user_id = ? AND auto_close_review_status = 'pending_explanation'
+       ORDER BY clock_in DESC, id DESC LIMIT 1 FOR UPDATE`,
+      [userId],
+    );
+    if (unexplainedRows.length > 0) {
+      await connection.rollback();
+      return res.status(409).json({
+        error: "Explain your automatically closed shift before starting another one.",
+        dtrId: unexplainedRows[0].id,
+      });
+    }
+
     // A shift belongs to its Manila clock-in date, even when clock-out is the
     // next morning. After a prior-day shift, also require rest before another.
     const [lastShifts] = await connection.execute(
       `SELECT DATE(clock_in) = CURDATE() AS started_today,
+              id,
               TIMESTAMPDIFF(SECOND, clock_out, NOW()) AS seconds_since_clock_out
        FROM daily_time_records
        WHERE user_id = ? AND clock_in IS NOT NULL
@@ -481,6 +500,7 @@ export const clockOut = async (req, res) => {
          dtr.internship_id, 
          dtr.clock_in, 
          DATE_FORMAT(dtr.expected_clock_out, '%Y-%m-%d %H:%i:%s') AS expected_clock_out,
+         dtr.overtime_status,
          dtr.status,
          dtr.break_started_at,
          dtr.break_total_seconds,
@@ -571,7 +591,7 @@ export const clockOut = async (req, res) => {
 
     if (rawHours > maxShiftHours) {
       flagged = true;
-      flagReason = `Shift exceeded ${maxShiftHours}h cap (raw: ${rawHours.toFixed(2)}h). Possible forgotten clock-out.`;
+      flagReason = `Shift exceeded ${maxShiftHours}h credit cap (raw: ${rawHours.toFixed(2)}h; overtime ${record.overtime_status || "not requested"}).`;
       finalHours = maxShiftHours;
     }
 
@@ -663,7 +683,7 @@ export const deleteDTR = async (req, res) => {
     await connection.beginTransaction();
 
     const [records] = await connection.execute(
-      `SELECT clock_in, clock_out, clock_in_photo_path, clock_out_photo_path,
+      `SELECT clock_in, clock_out, clock_in_photo_path, clock_out_photo_path, auto_closed,
               DATE(clock_in) = CURDATE() AS started_today,
               TIMESTAMPDIFF(SECOND, clock_out, NOW()) AS seconds_since_clock_out
        FROM daily_time_records WHERE id = ? AND user_id = ? FOR UPDATE`,
@@ -674,6 +694,10 @@ export const deleteDTR = async (req, res) => {
       return res.status(404).json({ error: "DTR record not found or you do not have permission to delete it." });
     }
     const record = records[0];
+    if (record.auto_closed) {
+      await connection.rollback();
+      return res.status(409).json({ error: "Auto-closed attendance entries must remain available for explanation and review." });
+    }
     const elapsedSinceClockOut = Number(record.seconds_since_clock_out);
     if (record.clock_in != null &&
         (record.clock_out == null || Number(record.started_today) === 1 ||

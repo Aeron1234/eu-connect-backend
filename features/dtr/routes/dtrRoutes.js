@@ -13,6 +13,8 @@ import {
   getTodayDTR,
   getDtrPhoto,
 } from "../controllers/dtrControllers.js";
+import { getDepartmentAttendance } from "../controllers/departmentAttendanceController.js";
+import { requestOvertime, reviewOvertime, submitAutoCloseExplanation, reviewAutoClosedDtr } from "../controllers/dtrReviewController.js";
 import { acceptDtrPhoto } from "../../../middleware/multipart-uploads.js";
 import {
   generalLimiter,
@@ -22,6 +24,14 @@ import {
 } from "../../../middleware/rateLimiter.js";
 
 const dtrRoutes = express.Router();
+
+dtrRoutes.get(
+  "/dtr/department-attendance",
+  verifyUser,
+  verifyRole(["department_head"]),
+  paginationLimiter,
+  getDepartmentAttendance,
+);
 
 dtrRoutes.get(
   "/dtr/today",
@@ -89,6 +99,11 @@ dtrRoutes.patch(
   mediumLimiter,
   resumeDuty,
 );
+
+dtrRoutes.post("/dtr/overtime/request", verifyUser, verifyRole(["student"]), mediumLimiter, requestOvertime);
+dtrRoutes.patch("/dtr/:dtrId/overtime", verifyUser, verifyRole(["employer"]), mediumLimiter, reviewOvertime);
+dtrRoutes.patch("/dtr/:dtrId/explanation", verifyUser, verifyRole(["student"]), mediumLimiter, submitAutoCloseExplanation);
+dtrRoutes.patch("/dtr/:dtrId/auto-close-review", verifyUser, verifyRole(["employer", "department_head"]), mediumLimiter, reviewAutoClosedDtr);
 
 dtrRoutes.delete(
   "/dtr/:dtrId",

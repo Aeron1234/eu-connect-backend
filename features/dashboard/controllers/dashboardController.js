@@ -112,13 +112,27 @@ export const getStudentDashboardData = async (req, res) => {
 
     let dtrToday = null;
     let dtrStatus = { status: "CLOCKED_OUT", record: null };
+    let pendingAutoCloseRecord = null;
     let location = {};
+
+    // A forgotten shift may belong to an earlier internship. Prompt for its
+    // explanation on the next dashboard visit even if another record is active.
+    const [pendingRows] = await connection.execute(
+      `SELECT id, internship_id, clock_in, clock_out, auto_closed, auto_closed_at,
+              auto_close_review_status, proposed_hours, total_hours, student_explanation
+       FROM daily_time_records
+       WHERE user_id = ? AND auto_close_review_status = 'pending_explanation'
+       ORDER BY clock_in DESC, id DESC LIMIT 1`,
+      [userId],
+    );
+    pendingAutoCloseRecord = pendingRows[0] || null;
 
     if (internshipId && isOngoing) {
       // Show a shift started today or one that continued past midnight.
       try {
         const [todayRows] = await connection.execute(
-          `SELECT id, clock_in, clock_out, created_at, status, is_late
+          `SELECT id, clock_in, clock_out, created_at, status, is_late, auto_closed,
+                  auto_close_review_status, overtime_status
            FROM daily_time_records 
            WHERE user_id = ? AND internship_id = ? AND clock_in IS NOT NULL
              AND (clock_in >= CURDATE() OR clock_out >= CURDATE() OR clock_out IS NULL)
@@ -139,7 +153,9 @@ export const getStudentDashboardData = async (req, res) => {
       // Latest clock-in/out status
       try {
         const [statusRows] = await connection.execute(
-          `SELECT id, clock_in, clock_out, status
+          `SELECT id, clock_in, clock_out, status, auto_closed, auto_closed_at,
+                  auto_close_review_status, proposed_hours, total_hours, student_explanation,
+                  overtime_status, overtime_intended_end, overtime_reason, expected_clock_out
            FROM daily_time_records 
            WHERE user_id = ? AND internship_id = ? 
            ORDER BY id DESC 
@@ -220,6 +236,7 @@ export const getStudentDashboardData = async (req, res) => {
       internshipData,
       dtrToday,
       dtrStatus,
+      pendingAutoCloseRecord,
       location,
     });
   } catch (error) {

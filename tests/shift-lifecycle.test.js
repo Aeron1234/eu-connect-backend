@@ -6,7 +6,8 @@ import { supabase } from "../config/supabase.js";
 import { clockIn, clockOut, deleteDTR, getTodayDTR, getLatestDtrStatus, startBreak, resumeDuty, getDtrPhoto } from "../features/dtr/controllers/dtrControllers.js";
 import { uploadDtrPhoto } from "../features/dtr/dtrPhoto.js";
 import { getStudentDashboardData } from "../features/dashboard/controllers/dashboardController.js";
-import { autoCloseStaleShifts } from "../config/autoCloseStaleShifts.js";
+import { autoCloseStaleShifts, warnLongShifts } from "../config/autoCloseStaleShifts.js";
+import { requestOvertime, reviewAutoClosedDtr, submitAutoCloseExplanation } from "../features/dtr/controllers/dtrReviewController.js";
 
 const originalGetConnection = db.getConnection;
 const originalMaxShiftHours = process.env.MAX_SHIFT_HOURS;
@@ -173,6 +174,29 @@ test("one Manila start date and six-hour rest work for day and overnight shifts"
     assert.equal(committed, expectedStatus === 201);
     assert.equal(rolledBack, expectedStatus !== 201);
   }
+});
+
+test("an older unexplained auto-close blocks clock-in even after a newer shift", async () => {
+  let reachedLatestShift = false;
+  let rolledBack = false;
+  db.getConnection = async () => ({
+    async beginTransaction() {}, async rollback() { rolledBack = true; },
+    async commit() { throw new Error("Blocked clock-in must not commit"); }, release() {},
+    async execute(sql) {
+      if (sql.includes("SELECT id FROM users")) return [[{ id: "student" }]];
+      if (sql.includes("clock_out IS NULL")) return [[]];
+      if (sql.includes("auto_close_review_status = 'pending_explanation'")) return [[{ id: 23 }]];
+      if (sql.includes("DATE(clock_in) = CURDATE()")) reachedLatestShift = true;
+      throw new Error("Unexpected SQL: " + sql);
+    },
+  });
+  const res = response();
+  await clockIn({ verifiedUser: { id: "student", role: "student" }, file: photo,
+    body: { lat_in: 14, lon_in: 121 } }, res);
+  assert.equal(res.statusCode, 409);
+  assert.equal(res.body.dtrId, 23);
+  assert.equal(rolledBack, true);
+  assert.equal(reachedLatestShift, false);
 });
 
 test("the Today lookup keeps an overnight shift visible after midnight", async () => {
@@ -408,7 +432,8 @@ test("status and dashboard do not treat a row without clock-in as an active shif
   assert.equal(dashboardRes.body.dtrStatus.status, "CLOCKED_OUT");
 });
 
-test("auto-close at eight hours records a present shift and credits hours once", async () => {
+test("auto-close at sixteen wall hours proposes duty without crediting it", async () => {
+  process.env.MAX_SHIFT_HOURS = "10";
   const queries = [];
   let connections = 0;
   let committed = false;
@@ -417,8 +442,8 @@ test("auto-close at eight hours records a present shift and credits hours once",
     if (connections === 1) return {
       release() {},
       async execute(sql, params) {
-        assert.match(sql, /break_total_seconds/);
-        assert.deepEqual(params, [28800, 10]);
+        assert.match(sql, /clock_in <= DATE_SUB\(NOW\(\), INTERVAL \? HOUR\)/);
+        assert.deepEqual(params, [16]);
         return [[{ id: 1, internship_id: "internship" }]];
       },
     };
@@ -431,7 +456,7 @@ test("auto-close at eight hours records a present shift and credits hours once",
       },
       async query(sql, params) {
         queries.push({ sql, params });
-        if (sql.trim().startsWith("SELECT")) return [[{ id: 1, internship_id: "internship", worked_seconds: 28800, break_total_seconds: 0 }]];
+        if (sql.trim().startsWith("SELECT")) return [[{ id: 1, user_id: "student", internship_id: "internship", worked_seconds: 16 * 3600, break_total_seconds: 0 }]];
         return [{ affectedRows: 1 }];
       },
     };
@@ -446,8 +471,11 @@ test("auto-close at eight hours records a present shift and credits hours once",
   assert.match(queries[0].sql, /FOR UPDATE/);
   assert.match(queries[1].sql, /status = 'present'/);
   assert.match(queries[1].sql, /auto_closed = 1/);
-  assert.deepEqual(queries[1].params, [true, 28800, 8, true, 28800, 1]);
-  assert.deepEqual(queries[2].params, [8, "internship"]);
+  assert.match(queries[1].sql, /total_hours = 0/);
+  assert.match(queries[1].sql, /pending_explanation/);
+  assert.deepEqual(queries[1].params, [10, 1]);
+  assert.match(queries[2].sql, /INSERT INTO notifications/);
+  assert.deepEqual(queries[2].params, ["student", "internship"]);
 });
 
 test("auto-close stops a forgotten break at the wall limit without crediting break time", async () => {
@@ -459,7 +487,7 @@ test("auto-close stops a forgotten break at the wall limit without crediting bre
     if (connections === 1) return {
       release() {},
       async execute(sql, params) {
-        assert.deepEqual(params, [28800, 10]);
+        assert.deepEqual(params, [16]);
         return [[{ id: 1, internship_id: "internship" }]];
       },
     };
@@ -468,7 +496,7 @@ test("auto-close stops a forgotten break at the wall limit without crediting bre
       async commit() { committed = true; },
       async query(sql) {
         if (sql.trim().startsWith("SELECT")) return [[{
-          id: 1, internship_id: "internship", worked_seconds: 14400,
+          id: 1, user_id: "student", internship_id: "internship", worked_seconds: 14400,
           break_total_seconds: 0, break_started_at: "2026-10-03 12:00:00",
         }]];
         return [{ affectedRows: 1 }];
@@ -486,7 +514,8 @@ test("auto-close stops a forgotten break at the wall limit without crediting bre
   } finally { console.log = log; }
   assert.equal(committed, true);
   assert.match(updates[0].sql, /break_started_at = NULL/);
-  assert.deepEqual(updates[0].params, [false, 28800, 4, false, 28800, 1]);
+  assert.deepEqual(updates[0].params, [4, 1]);
+  assert.match(updates[0].sql, /total_hours = 0/);
 });
 
 test("auto-close does not overwrite a shift manually closed after its initial scan", async () => {
@@ -518,6 +547,160 @@ test("auto-close does not overwrite a shift manually closed after its initial sc
   } finally { console.log = log; }
   assert.equal(rolledBack, true);
   assert.equal(mutations, 0);
+});
+
+test("the hourly 12-hour reminder is persisted once for an open shift", async () => {
+  let warned = false;
+  let notices = 0;
+  db.getConnection = async () => ({
+    async beginTransaction() {}, async commit() {}, async rollback() {}, release() {},
+    async execute(sql) {
+      if (sql.includes("SELECT id, user_id, internship_id")) {
+        assert.match(sql, /INTERVAL 12 HOUR/);
+        assert.match(sql, /INTERVAL 16 HOUR/);
+        assert.match(sql, /wall_warning_sent_at IS NULL/);
+        return [warned ? [] : [{ id: 1, user_id: "student", internship_id: "internship" }]];
+      }
+      if (sql.includes("SET wall_warning_sent_at")) warned = true;
+      if (sql.includes("INSERT INTO notifications")) notices++;
+      return [{ affectedRows: 1 }];
+    },
+  });
+  await warnLongShifts();
+  await warnLongShifts();
+  assert.equal(notices, 1);
+});
+
+test("an overtime request near scheduled end notifies the assigned employer without closing the shift", async () => {
+  const writes = [];
+  let existingRequest = false;
+  db.getConnection = async () => ({
+    async beginTransaction() {}, async commit() {}, async rollback() {}, release() {},
+    async execute(sql, params) {
+      if (sql.includes("FROM daily_time_records dtr")) return [[{
+        id: 4, internship_id: "internship", employer_id: "employer", student_id: "student",
+        company_name: "Company", expected_clock_out: "2026-11-07 17:00:00",
+        minutes_to_end: 20, minutes_to_intended_end: 90, minutes_to_safety_close: 400,
+      }]];
+      writes.push({ sql, params });
+      if (sql.includes("UPDATE daily_time_records")) {
+        if (existingRequest) return [{ affectedRows: 0 }];
+        existingRequest = true;
+      }
+      return [{ affectedRows: 1 }];
+    },
+  });
+  const req = { verifiedUser: { id: "student", role: "student" }, body: {
+    reason: "The ward needs help finishing the evening handover.", intendedEnd: "2026-11-07T18:30",
+  } };
+  const first = response();
+  await requestOvertime(req, first);
+  assert.equal(first.statusCode, 200);
+  assert.equal(writes.filter(({ sql }) => sql.includes("INSERT INTO notifications")).length, 1);
+  assert.equal(writes.some(({ sql }) => sql.includes("clock_out =")), false);
+  const second = response();
+  await requestOvertime(req, second);
+  assert.equal(second.statusCode, 409);
+});
+
+test("the student explanation advances an auto-closed entry without crediting hours", async () => {
+  const writes = [];
+  db.getConnection = async () => ({
+    async beginTransaction() {}, async commit() {}, async rollback() {}, release() {},
+    async execute(sql, params) {
+      if (sql.includes("FROM daily_time_records dtr")) return [[{
+        id: 3, internship_id: "internship", student_id: "student", employer_id: "employer",
+        company_name: "Company", auto_close_review_status: "pending_explanation",
+      }]];
+      writes.push({ sql, params });
+      return [{ affectedRows: 1 }];
+    },
+  });
+  const res = response();
+  await submitAutoCloseExplanation({ verifiedUser: { id: "student", role: "student" },
+    params: { dtrId: 3 }, body: { explanation: "I forgot to clock out after the night shift ended." } }, res);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(writes.find(({ sql }) => sql.includes("UPDATE daily_time_records")).params.slice(1, 2), ["pending_review"]);
+  assert.equal(writes.some(({ sql }) => sql.includes("UPDATE internship_records")), false);
+});
+
+test("an explanation for a historical auto-close keeps its existing credit and review state", async () => {
+  const writes = [];
+  let committed = false;
+  db.getConnection = async () => ({
+    async beginTransaction() {}, async commit() { committed = true; }, async rollback() {}, release() {},
+    async execute(sql, params) {
+      if (sql.includes("FROM daily_time_records dtr")) return [[{
+        id: 6, internship_id: "internship", student_id: "student", employer_id: "employer",
+        company_name: "Company", auto_close_review_status: "legacy_credited",
+      }]];
+      writes.push({ sql, params });
+      return [{ affectedRows: 1 }];
+    },
+  });
+  const res = response();
+  await submitAutoCloseExplanation({ verifiedUser: { id: "student", role: "student" },
+    params: { dtrId: 6 }, body: { explanation: "I forgot to clock out after finishing my assigned shift." } }, res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(committed, true);
+  assert.match(writes[0].sql, /student_explanation IS NULL/);
+  assert.equal(writes[0].params[1], "legacy_credited");
+  assert.equal(writes.some(({ sql }) => /UPDATE internship_records|INSERT INTO notifications/.test(sql)), false);
+});
+
+test("auto-closed hours are credited only once by the assigned supervisor", async () => {
+  const writes = [];
+  let reviewed = false;
+  let commits = 0;
+  db.getConnection = async () => ({
+    async beginTransaction() {}, async rollback() {}, release() {},
+    async commit() { commits++; },
+    async execute(sql, params) {
+      if (sql.includes("SELECT dtr.*")) return [[{
+        id: 1, internship_id: "internship", student_id: "student", employer_id: "employer",
+        company_name: "Company", auto_closed: 1, auto_close_review_status: reviewed ? "approved" : "pending_review",
+        proposed_hours: 8, head_department_code: null,
+      }]];
+      writes.push({ sql, params });
+      if (sql.includes("UPDATE daily_time_records")) reviewed = true;
+      return [{ affectedRows: 1 }];
+    },
+  });
+  const req = { verifiedUser: { id: "employer", role: "employer" }, params: { dtrId: 1 }, body: { hours: 7.5 } };
+  const first = response();
+  await reviewAutoClosedDtr(req, first);
+  assert.equal(first.statusCode, 200);
+  assert.equal(commits, 1);
+  assert.equal(writes.filter(({ sql }) => sql.includes("UPDATE internship_records")).length, 1);
+  assert.deepEqual(writes.find(({ sql }) => sql.includes("UPDATE internship_records")).params, [7.5, "internship"]);
+  const second = response();
+  await reviewAutoClosedDtr(req, second);
+  assert.equal(second.statusCode, 409);
+  assert.equal(commits, 1);
+  assert.equal(writes.filter(({ sql }) => sql.includes("UPDATE internship_records")).length, 1);
+});
+
+test("Registrar and unrelated employers cannot review an auto-closed student's hours", async () => {
+  let writes = 0;
+  db.getConnection = async () => ({
+    async beginTransaction() {}, async rollback() {}, release() {},
+    async execute(sql) {
+      if (sql.includes("SELECT dtr.*")) return [[{
+        id: 1, internship_id: "internship", student_id: "student",
+        employer_id: "assigned", department_id: 3,
+        head_department_id: 3, head_department_code: "REG",
+        auto_closed: 1, auto_close_review_status: "pending_review", proposed_hours: 8,
+      }]];
+      writes++;
+      return [{ affectedRows: 1 }];
+    },
+  });
+  for (const actor of [{ id: "registrar", role: "department_head" }, { id: "other", role: "employer" }]) {
+    const res = response();
+    await reviewAutoClosedDtr({ verifiedUser: actor, params: { dtrId: 1 }, body: { hours: 8 } }, res);
+    assert.equal(res.statusCode, 403);
+  }
+  assert.equal(writes, 0);
 });
 
 

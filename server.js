@@ -13,7 +13,7 @@ import cookieParser from "cookie-parser";
 import { writeSync } from "node:fs";
 import { registerMapLocationSockets } from "./features/map/mapLocationSockets.js";
 import { registerNotificationSockets } from "./config/socketAuth.js";
-import { autoCloseStaleShifts } from "./config/autoCloseStaleShifts.js";
+import { autoCloseStaleShifts, warnLongShifts } from "./config/autoCloseStaleShifts.js";
 import { refreshTokensCleanUp } from "./config/refreshTokensCleanUp.js";
 import {
   errorTrackingContext,
@@ -178,11 +178,12 @@ registerMapLocationSockets(io);
 // timezone option or deployment-wide scheduler lock is configured here.
 // The four jobs below report failures through their own catch paths.
 // ---------------------------------------------------------------------------
-// Hourly at minute zero: scan/cap stale shifts; the worker rechecks rows under locks.
+// Hourly at minute zero: warn open shifts at 12 hours, then close at 16.
 cron.schedule("0 * * * *", async () => {
   console.log("Running autoCloseStaleShifts job...");
   try {
-    await autoCloseStaleShifts();
+    await warnLongShifts(io);
+    await autoCloseStaleShifts(io);
   } catch (err) {
     reportBackgroundError("autoCloseStaleShifts", err);
   }

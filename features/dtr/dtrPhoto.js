@@ -5,6 +5,13 @@ import { supabase } from "../../config/supabase.js";
 const bucket = process.env.SUPABASE_BUCKET;
 const allowedFormats = new Set(["jpeg", "png", "webp"]);
 
+// Keep the database timestamp unchanged; only rearrange its date on the photo.
+function photoTimestamp(recordedAt) {
+  const match = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}:\d{2}:\d{2})$/.exec(recordedAt);
+  if (!match) throw new Error("Invalid attendance timestamp for photo.");
+  return `${match[2]}-${match[3]}-${match[1]} ${match[4]}`;
+}
+
 export async function validateDtrPhoto(file) {
   if (!file?.buffer?.length) throw Object.assign(new Error("Take a photo before recording attendance."), { status: 400 });
   try {
@@ -26,7 +33,7 @@ export async function uploadDtrPhoto(file, recordedAt, kind, userId) {
   const height = info.height;
   const bandHeight = Math.min(88, Math.max(40, Math.round(width * 0.085)));
   const fontSize = Math.min(40, Math.max(10, Math.round(width * 0.025)));
-  const label = `${kind === "in" ? "CLOCK IN" : "CLOCK OUT"}  |  ${recordedAt} PHT`;
+  const label = `${kind === "in" ? "CLOCK IN" : "CLOCK OUT"}  |  ${photoTimestamp(recordedAt)} PHT`;
   const band = Buffer.from(`<svg width="${width}" height="${bandHeight}"><rect width="100%" height="100%" fill="#101010" fill-opacity=".85"/><text x="${Math.round(width * 0.03)}" y="${Math.round(bandHeight * 0.67)}" fill="white" font-family="Arial, sans-serif" font-size="${fontSize}" font-weight="bold">${label}</text></svg>`);
   const stamped = await sharp(data).composite([{ input: band, gravity: "south" }]).jpeg({ quality: 82, mozjpeg: true }).toBuffer();
   const path = `dtr/${userId}/${randomUUID()}-${kind}.jpg`;

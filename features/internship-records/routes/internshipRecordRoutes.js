@@ -4,6 +4,8 @@ import express from "express";
 import multer from "multer";
 import { verifyUser } from "../../../middleware/verifyUser.js";
 import { verifyRole } from "../../../middleware/verifyRole.js";
+import { getDepartmentSubmissions } from "../controllers/departmentSubmissionsController.js";
+import { getDepartmentEvaluations } from "../controllers/departmentEvaluationsController.js";
 import { updateOwnPendingInternshipRecord } from "../controllers/pendingInternshipRecordController.js";
 import {
   approveInternshipRecord,
@@ -32,6 +34,22 @@ import {
 } from "../../../middleware/rateLimiter.js";
 
 const internshipRecordRoutes = express.Router();
+
+internshipRecordRoutes.get(
+  "/department-evaluations",
+  verifyUser,
+  verifyRole(["department_head"]),
+  paginationLimiter,
+  getDepartmentEvaluations,
+);
+
+internshipRecordRoutes.get(
+  "/department-submissions",
+  verifyUser,
+  verifyRole(["department_head"]),
+  paginationLimiter,
+  getDepartmentSubmissions,
+);
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 

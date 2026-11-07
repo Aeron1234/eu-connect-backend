@@ -1504,7 +1504,10 @@ export const getInternshipRecordDtr = async (req, res) => {
       const [rows] = await connection.execute(
         `SELECT id, total_hours, clock_in, clock_out, lat_in, lon_in, lat_out, lon_out,
             clock_in_photo_path, clock_out_photo_path, is_late, is_undertime, is_overtime,
-            status, flagged, flag_reason, auto_closed, created_at
+            status, flagged, flag_reason, auto_closed, auto_closed_at,
+            proposed_hours, student_explanation, explanation_submitted_at,
+            auto_close_review_status, overtime_reason, overtime_intended_end,
+            overtime_status, created_at
          FROM daily_time_records
          WHERE internship_id = ?
          ORDER BY clock_in DESC, id DESC
@@ -1522,7 +1525,10 @@ export const getInternshipRecordDtr = async (req, res) => {
     const [rows] = await connection.execute(
       `SELECT id, total_hours, clock_in, clock_out, lat_in, lon_in, lat_out, lon_out,
           clock_in_photo_path, clock_out_photo_path, is_late, is_undertime, is_overtime,
-          status, flagged, flag_reason, auto_closed, created_at
+          status, flagged, flag_reason, auto_closed, auto_closed_at,
+          proposed_hours, student_explanation, explanation_submitted_at,
+          auto_close_review_status, overtime_reason, overtime_intended_end,
+          overtime_status, created_at
        FROM daily_time_records
        WHERE internship_id = ?
        ORDER BY clock_in DESC
@@ -1582,7 +1588,7 @@ export const getInternshipRecordEvaluations = async (req, res) => {
     // It is separate from the confidential employer-to-student performance direction.
     const givenQuery = `
       SELECT 
-        m.id AS evaluation_id,
+        m.id AS evaluation_id, m.deleted_at, m.internship_record_id,
         m.other_remarks AS comments,
         m.created_at AS submitted_date,
         m.student_id AS actor_id,
