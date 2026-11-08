@@ -23,6 +23,7 @@ import {
 } from "./config/errorTracking.js";
 
 import { cleanupFeedbackFiles } from "./features/feedback/feedbackController.js";
+import { cleanupDtrPhotos } from "./config/dtrPhotoCleanup.js";
 import analyticsRoutes from "./features/analytics/analyticsRoutes.js";
 import feedbackRoutes from "./features/feedback/routes/feedbackRoutes.js";
 import announcementRoutes from "./features/announcements/routes/announcementRoutes.js";
@@ -176,7 +177,7 @@ registerMapLocationSockets(io);
 // Cron Jobs
 // Each API process registers these schedules in the host's local timezone; no
 // timezone option or deployment-wide scheduler lock is configured here.
-// The four jobs below report failures through their own catch paths.
+// Each job below reports failures through its own catch path.
 // ---------------------------------------------------------------------------
 // Hourly at minute zero: warn open shifts at 12 hours, then close at 16.
 cron.schedule("0 * * * *", async () => {
@@ -217,6 +218,11 @@ cron.schedule("*/5 * * * *", async () => {
   } catch (error) {
     reportBackgroundError("feedbackFileCleanup", error);
   }
+});
+
+cron.schedule("*/5 * * * *", async () => {
+  try { await cleanupDtrPhotos(); }
+  catch (error) { reportBackgroundError("dtrPhotoCleanup", error); }
 });
 
 // Port Configuration

@@ -6,10 +6,18 @@ import { invalidateDashboardCache } from "../../../config/cache/dashboardCache.j
 import { invalidateDepartmentInternshipsCache } from "../../../config/cache/staffInternshipsCache.js";
 import { invalidateProfileOverviewCache } from "../../../config/cache/profileOverviewCache.js";
 import { invalidateNotificationsCache } from "../../../config/cache/notificationsCache.js";
+import { clockOutTiming } from "../shiftTiming.js";
 
 const validId = value => Number.isSafeInteger(Number(value)) && Number(value) > 0;
-const validDateTime = value => typeof value === "string" && /^\d{4}-\d\d-\d\dT\d\d:\d\d$/.test(value) &&
-  !Number.isNaN(Date.parse(`${value}:00+08:00`));
+const validDateTime = value => {
+  if (typeof value !== "string") return false;
+  const match = /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)$/.exec(value);
+  if (!match) return false;
+  const [, year, month, day, hour, minute] = match.map(Number);
+  if (hour > 23 || minute > 59) return false;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() + 1 === month && date.getUTCDate() === day;
+};
 
 function refresh(userIds = []) {
   try {
@@ -63,6 +71,92 @@ function deliver(req, userId, senderId, type, title, message, link, linkId) {
   } catch (error) {
     reportError("Committed DTR notification delivery failed:", error);
   }
+}
+
+async function missedClockOutRecipients(connection, studentId, employerId) {
+  const [heads] = await connection.execute(
+    `SELECT DISTINCT hd.user_id FROM dept_heads_background_info hd
+     JOIN departments dep ON dep.id = hd.department_id AND dep.code <> 'REG'
+     JOIN student_academic_info sai ON sai.department_id = hd.department_id
+     WHERE sai.user_id = ? AND sai.id =
+       (SELECT MAX(latest.id) FROM student_academic_info latest WHERE latest.user_id = ?)`,
+    [studentId, studentId],
+  );
+  return [...new Set([employerId, ...heads.map(head => head.user_id)].filter(Boolean))];
+}
+
+// A missed clock-out is a claim, not a verified clock-out. Close the open row
+// so another shift can start after the normal rest period, but credit no hours
+// until the assigned employer or department head reviews the claim.
+export async function reportMissedClockOut(req, res) {
+  const explanation = String(req.body?.explanation ?? "").trim();
+  const claimedEnd = req.body?.claimedEnd;
+  if (explanation.length < 15 || explanation.length > 1000 || !validDateTime(claimedEnd)) {
+    return res.status(400).json({ error: "Enter when you stopped working and an explanation of 15 to 1000 characters." });
+  }
+  const claimedSql = `${claimedEnd.replace("T", " ")}:00`;
+  let connection;
+  try {
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+    const [users] = await connection.execute("SELECT id FROM users WHERE id = ? FOR UPDATE", [req.verifiedUser.id]);
+    if (!users.length) { await connection.rollback(); return res.status(401).json({ error: "Your account is no longer available." }); }
+    const [rows] = await connection.execute(
+      `SELECT dtr.id, dtr.internship_id, dtr.break_total_seconds,
+              DATE_FORMAT(dtr.expected_clock_out, '%Y-%m-%d %H:%i:%s') AS expected_clock_out,
+              TIMESTAMPDIFF(SECOND, dtr.clock_in, ?) AS claimed_seconds,
+              TIMESTAMPDIFF(SECOND, ?, NOW()) AS seconds_since_claim,
+              TIMESTAMPDIFF(SECOND, dtr.break_started_at, ?) AS active_break_seconds,
+              ir.employer_id, ir.company_name
+       FROM daily_time_records dtr
+       JOIN internship_records ir ON ir.id = dtr.internship_id AND ir.deleted_at IS NULL
+       WHERE dtr.user_id = ? AND dtr.clock_out IS NULL AND ir.status = 'ongoing'
+       ORDER BY dtr.clock_in DESC LIMIT 1 FOR UPDATE`,
+      [claimedSql, claimedSql, claimedSql, req.verifiedUser.id],
+    );
+    const row = rows[0];
+    if (!row) { await connection.rollback(); return res.status(409).json({ error: "No open ongoing shift needs a missed clock-out report." }); }
+    if (Number(row.claimed_seconds) < 0 || Number(row.claimed_seconds) > 16 * 3600 ||
+        row.claimed_seconds == null || row.seconds_since_claim == null ||
+        Number(row.seconds_since_claim) < 0 ||
+        (row.active_break_seconds != null && Number(row.active_break_seconds) < 0)) {
+      await connection.rollback();
+      return res.status(400).json({ error: "The reported end must be after clock-in and any active break, no later than now, and within 16 hours of clock-in." });
+    }
+    const breakSeconds = Math.max(0, Number(row.break_total_seconds) || 0) +
+      Math.max(0, Number(row.active_break_seconds) || 0);
+    const dutyHours = Math.max(0, (Number(row.claimed_seconds) - breakSeconds) / 3600);
+    const proposed = Math.round(Math.min(dutyHours, getMaxShiftHours()) * 100) / 100;
+    const timing = clockOutTiming(claimedSql, row.expected_clock_out, dutyHours);
+    const [updated] = await connection.execute(
+      `UPDATE daily_time_records SET clock_out = NOW(), auto_closed_at = NOW(),
+         claimed_clock_out_at = ?, missed_clock_out = 1, auto_closed = 1,
+         student_explanation = ?, explanation_submitted_at = NOW(),
+         auto_close_review_status = 'pending_review', proposed_hours = ?, total_hours = 0,
+         break_total_seconds = ?, break_started_at = NULL, status = 'present',
+         flagged = 1, flag_reason = 'Student reported missed clock-out; hours require review',
+         is_undertime = ?, is_overtime = ?
+       WHERE id = ? AND clock_out IS NULL`,
+      [claimedSql, explanation, proposed, breakSeconds, Number(timing.undertime), Number(timing.overtime), row.id],
+    );
+    if (updated.affectedRows !== 1) { await connection.rollback(); return res.status(409).json({ error: "This shift has already closed. Refresh your DTR." }); }
+    const recipients = await missedClockOutRecipients(connection, req.verifiedUser.id, row.employer_id);
+    const title = "Missed clock-out needs review";
+    const message = `A student reported a missed clock-out at ${row.company_name}. Review the explanation and proposed hours.`;
+    for (const recipient of recipients) {
+      await notify(connection, recipient, req.verifiedUser.id, "dtr_auto_close", title, message,
+        "/users", req.verifiedUser.id);
+    }
+    await connection.commit();
+    refresh([req.verifiedUser.id, ...recipients]);
+    for (const recipient of recipients) deliver(req, recipient, req.verifiedUser.id, "dtr_auto_close", title, message,
+      "/users", req.verifiedUser.id);
+    return res.json({ success: true, message: "Missed clock-out reported. Your hours are pending review." });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    reportError("Missed clock-out report failed:", error);
+    return res.status(500).json({ error: "Could not report the missed clock-out." });
+  } finally { connection?.release(); }
 }
 
 // A student can declare overtime from 30 minutes before the expected end.
@@ -162,6 +256,7 @@ export async function reviewOvertime(req, res) {
 
 export async function submitAutoCloseExplanation(req, res) {
   const explanation = String(req.body?.explanation ?? "").trim();
+  const claimedEnd = req.body?.claimedEnd;
   if (!validId(req.params.dtrId) || explanation.length < 15 || explanation.length > 1000)
     return res.status(400).json({ error: "Explain the missed clock-out in 15–1000 characters." });
   let connection;
@@ -179,22 +274,54 @@ export async function submitAutoCloseExplanation(req, res) {
     const row = rows[0];
     if (!row) { await connection.rollback(); return res.status(409).json({ error: "This entry no longer needs an explanation." }); }
     const legacy = row.auto_close_review_status === "legacy_credited";
+    if (!legacy && !validDateTime(claimedEnd)) {
+      await connection.rollback();
+      return res.status(400).json({ error: "Enter when you stopped working (Philippine time)." });
+    }
+    const claimedSql = legacy ? null : `${claimedEnd.replace("T", " ")}:00`;
+    let claimedSeconds = null;
+    if (!legacy) {
+      const [[times]] = await connection.execute(
+        `SELECT TIMESTAMPDIFF(SECOND, clock_in, ?) AS after_start,
+                TIMESTAMPDIFF(SECOND, ?, clock_out) AS before_system_close
+         FROM daily_time_records WHERE id = ?`,
+        [claimedSql, claimedSql, row.id],
+      );
+      if (times?.after_start == null || times?.before_system_close == null ||
+          Number(times.after_start) < 0 || Number(times.after_start) > 16 * 3600 ||
+          Number(times.before_system_close) < 0) {
+        await connection.rollback();
+        return res.status(400).json({ error: "The reported end must be between clock-in and the system closure, within 16 hours of clock-in." });
+      }
+      claimedSeconds = Number(times.after_start);
+    }
     await connection.execute(
       `UPDATE daily_time_records SET student_explanation = ?, explanation_submitted_at = NOW(),
+         claimed_clock_out_at = COALESCE(?, claimed_clock_out_at),
+         proposed_hours = CASE WHEN ? IS NULL THEN proposed_hours
+           ELSE LEAST(proposed_hours, ROUND(? / 3600, 2)) END,
          auto_close_review_status = ? WHERE id = ? AND student_explanation IS NULL`,
-      [explanation, legacy ? "legacy_credited" : "pending_review", row.id],
+      [explanation, claimedSql, claimedSeconds, claimedSeconds,
+        legacy ? "legacy_credited" : "pending_review", row.id],
     );
-    if (!legacy) {
-      const noticeMessage = `A student explained a missed clock-out at ${row.company_name}. Review the proposed hours.`;
-      await notify(connection, row.employer_id, req.verifiedUser.id, "dtr_auto_close",
-        "Auto-closed DTR needs review", noticeMessage,
+    const recipients = await missedClockOutRecipients(connection, row.student_id, row.employer_id);
+    const noticeTitle = legacy ? "Missed clock-out explanation added" : "Auto-closed DTR needs review";
+    const noticeMessage = legacy
+      ? `A student added an explanation for an older auto-closed shift at ${row.company_name}. Previously credited hours are unchanged.`
+      : `A student explained an auto-closed shift at ${row.company_name}. Review the proposed hours.`;
+    for (const recipient of recipients) {
+      await notify(connection, recipient, row.student_id, "dtr_auto_close", noticeTitle, noticeMessage,
         "/users", row.student_id);
-      await connection.commit(); refresh([row.employer_id, row.student_id]);
-      deliver(req, row.employer_id, req.verifiedUser.id, "dtr_auto_close", "Auto-closed DTR needs review", noticeMessage, "/users", row.student_id);
-      return res.json({ success: true, message: "Explanation saved for supervisor or department-head review." });
     }
-    await connection.commit(); refresh([row.student_id]);
-    return res.json({ success: true, message: "Explanation saved. Previously credited hours are unchanged." });
+    await connection.commit();
+    refresh([row.student_id, ...recipients]);
+    for (const recipient of recipients) {
+      deliver(req, recipient, row.student_id, "dtr_auto_close", noticeTitle, noticeMessage,
+        "/users", row.student_id);
+    }
+    return res.json({ success: true, message: legacy
+      ? "Explanation saved. Previously credited hours are unchanged. Available staff were notified."
+      : "Explanation saved for review. Available staff were notified." });
   } catch (error) {
     if (connection) await connection.rollback();
     reportError("DTR explanation failed:", error);

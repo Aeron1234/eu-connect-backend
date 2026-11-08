@@ -7,6 +7,7 @@ import { db } from "../../../config/db.js";
 import { isWithinRadius, verifyRecordAccess } from "../../../config/helpers.js";
 import { getMaxShiftHours } from "../../../config/shiftLimits.js";
 import { afterUploadCommit, cleanupUploadPaths } from "../../../config/uploadLifecycle.js";
+import { queueDtrPhotoCleanup, cleanupDtrPhotos } from "../../../config/dtrPhotoCleanup.js";
 import { supabase } from "../../../config/supabase.js";
 import { uploadDtrPhoto, validateDtrPhoto } from "../dtrPhoto.js";
 import { datedShiftExpectations, clockOutTiming } from "../shiftTiming.js";
@@ -51,7 +52,8 @@ export const getTodayDTR = async (req, res) => {
     }
 
     const [rows] = await connection.execute(
-      `SELECT id, clock_in, clock_out, created_at, status FROM daily_time_records 
+      `SELECT id, clock_in, clock_out, created_at, status,
+              auto_closed, missed_clock_out, claimed_clock_out_at FROM daily_time_records
        WHERE user_id = ? AND internship_id = ? AND clock_in IS NOT NULL
          AND (clock_in >= CURDATE() OR clock_out >= CURDATE() OR clock_out IS NULL)
        ORDER BY clock_in DESC
@@ -130,6 +132,7 @@ export const getLatestDtrStatus = async (req, res) => {
 
     const [records] = await connection.execute(
       `SELECT id, clock_in, clock_out, status, auto_closed, auto_closed_at,
+              missed_clock_out, claimed_clock_out_at,
               auto_close_review_status, proposed_hours, total_hours, student_explanation,
               overtime_status, overtime_intended_end, overtime_reason, expected_clock_out
        FROM daily_time_records 
@@ -232,7 +235,7 @@ export const clockIn = async (req, res) => {
     const [lastShifts] = await connection.execute(
       `SELECT DATE(clock_in) = CURDATE() AS started_today,
               id,
-              TIMESTAMPDIFF(SECOND, clock_out, NOW()) AS seconds_since_clock_out
+              TIMESTAMPDIFF(SECOND, COALESCE(claimed_clock_out_at, clock_out), NOW()) AS seconds_since_clock_out
        FROM daily_time_records
        WHERE user_id = ? AND clock_in IS NOT NULL
        ORDER BY clock_in DESC, id DESC
@@ -598,7 +601,7 @@ export const clockOut = async (req, res) => {
     const [[{ recorded_at: recordedAt }]] = await connection.execute(
       "SELECT DATE_FORMAT(NOW(), '%Y-%m-%d %H:%i:%s') AS recorded_at",
     );
-    const timing = clockOutTiming(recordedAt, record.expected_clock_out);
+    const timing = clockOutTiming(recordedAt, record.expected_clock_out, rawHours);
     if (req.file) photoPath = await uploadDtrPhoto(req.file, recordedAt, "out", userId);
     // Save the clock-out position, credited hours and flag on the locked shift.
     const [updateDtr] = await connection.execute(
@@ -734,14 +737,22 @@ export const deleteDTR = async (req, res) => {
       });
     }
 
+    const cleanupIds = await queueDtrPhotoCleanup(connection, [record.clock_in_photo_path, record.clock_out_photo_path]);
     await connection.commit();
-    await cleanupUploadPaths([record.clock_in_photo_path, record.clock_out_photo_path].filter(Boolean));
+    let cleanup = { pending: 0 };
+    if (cleanupIds.length) {
+      try { cleanup = await cleanupDtrPhotos(cleanupIds); }
+      catch (error) {
+        reportError("DTR was deleted; photo cleanup remains queued:", error);
+        cleanup = { pending: cleanupIds.length };
+      }
+    }
     invalidateAttendanceHistoryCache();
     invalidateProfileOverviewCache();
     invalidateDashboardCache();
     invalidateDepartmentInternshipsCache();
     res.status(200).json({
-      message: "Record deleted successfully.",
+      message: cleanup.pending ? "Record deleted. Photo removal is queued for retry." : "Record and attendance photos deleted successfully.",
       success: true,
     });
   } catch (error) {

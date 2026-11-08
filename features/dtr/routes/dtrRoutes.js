@@ -14,7 +14,7 @@ import {
   getDtrPhoto,
 } from "../controllers/dtrControllers.js";
 import { getDepartmentAttendance } from "../controllers/departmentAttendanceController.js";
-import { requestOvertime, reviewOvertime, submitAutoCloseExplanation, reviewAutoClosedDtr } from "../controllers/dtrReviewController.js";
+import { requestOvertime, reviewOvertime, submitAutoCloseExplanation, reviewAutoClosedDtr, reportMissedClockOut } from "../controllers/dtrReviewController.js";
 import { acceptDtrPhoto } from "../../../middleware/multipart-uploads.js";
 import {
   generalLimiter,
@@ -101,6 +101,7 @@ dtrRoutes.patch(
 );
 
 dtrRoutes.post("/dtr/overtime/request", verifyUser, verifyRole(["student"]), mediumLimiter, requestOvertime);
+dtrRoutes.post("/dtr/missed-clock-out", verifyUser, verifyRole(["student"]), mediumLimiter, reportMissedClockOut);
 dtrRoutes.patch("/dtr/:dtrId/overtime", verifyUser, verifyRole(["employer"]), mediumLimiter, reviewOvertime);
 dtrRoutes.patch("/dtr/:dtrId/explanation", verifyUser, verifyRole(["student"]), mediumLimiter, submitAutoCloseExplanation);
 dtrRoutes.patch("/dtr/:dtrId/auto-close-review", verifyUser, verifyRole(["employer", "department_head"]), mediumLimiter, reviewAutoClosedDtr);

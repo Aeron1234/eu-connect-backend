@@ -132,6 +132,7 @@ export const getStudentDashboardData = async (req, res) => {
       try {
         const [todayRows] = await connection.execute(
           `SELECT id, clock_in, clock_out, created_at, status, is_late, auto_closed,
+                  missed_clock_out, claimed_clock_out_at,
                   auto_close_review_status, overtime_status
            FROM daily_time_records 
            WHERE user_id = ? AND internship_id = ? AND clock_in IS NOT NULL
@@ -154,6 +155,7 @@ export const getStudentDashboardData = async (req, res) => {
       try {
         const [statusRows] = await connection.execute(
           `SELECT id, clock_in, clock_out, status, auto_closed, auto_closed_at,
+                  missed_clock_out, claimed_clock_out_at,
                   auto_close_review_status, proposed_hours, total_hours, student_explanation,
                   overtime_status, overtime_intended_end, overtime_reason, expected_clock_out
            FROM daily_time_records 

@@ -40,8 +40,8 @@ export function datedShiftExpectations(recordedAt, startTime, endTime, startDate
     ? null : expected;
 }
 
-export function clockOutTiming(recordedAt, expectedOut) {
-  if (!expectedOut) return { undertime: false, overtime: false };
+export function clockOutTiming(recordedAt, expectedOut, dutyHours) {
+  if (!expectedOut) return { undertime: Number.isFinite(dutyHours) && dutyHours < 7, overtime: false };
   const difference = parse(recordedAt) - parse(expectedOut);
-  return { undertime: difference < 0, overtime: difference >= 30 * 60_000 };
+  return { undertime: difference <= -60 * 60_000, overtime: difference >= 30 * 60_000 };
 }

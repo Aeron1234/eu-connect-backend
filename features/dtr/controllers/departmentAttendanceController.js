@@ -65,6 +65,7 @@ export async function getDepartmentAttendance(req, res) {
          dtr.clock_in_photo_path, dtr.clock_out_photo_path,
          dtr.is_late, dtr.is_undertime, dtr.is_overtime,
          dtr.status, dtr.flagged, dtr.flag_reason, dtr.auto_closed,
+         dtr.missed_clock_out, dtr.claimed_clock_out_at,
          dtr.auto_closed_at, dtr.proposed_hours, dtr.student_explanation,
          dtr.explanation_submitted_at, dtr.auto_close_review_status,
          dtr.overtime_reason, dtr.overtime_intended_end, dtr.overtime_status
