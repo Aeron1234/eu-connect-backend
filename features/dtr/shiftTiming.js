@@ -23,11 +23,19 @@ export function shiftExpectations(recordedAt, startTime, endTime) {
   // Choose the nearer occurrence of an overnight start. For 22:00 daily,
   // clock-ins before 10:00 belong to the previous night's shift.
   if (overnight && actual < start - 12 * 60 * 60_000) start -= 86_400_000;
+  // A shift starting shortly after midnight opens on the preceding date.
+  if (startMinute < 30 && actual >= day + 86_400_000 - 30 * 60_000) start += 86_400_000;
   const end = start + ((endMinute - startMinute + (overnight ? 1440 : 0)) * 60_000);
   return {
     expectedIn: format(start), expectedOut: format(end),
     late: actual >= start + 10 * 60_000,
   };
+}
+
+export function clockInWindow(recordedAt, expected) {
+  if (!expected) return { open: true, opensAt: null };
+  const opensAt = parse(expected.expectedIn) - 30 * 60_000;
+  return { open: parse(recordedAt) >= opensAt, opensAt: format(opensAt) };
 }
 
 // Optional bounds apply to the shift's start date, including overnight shifts

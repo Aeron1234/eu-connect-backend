@@ -10,7 +10,7 @@ import { afterUploadCommit, cleanupUploadPaths } from "../../../config/uploadLif
 import { queueDtrPhotoCleanup, cleanupDtrPhotos } from "../../../config/dtrPhotoCleanup.js";
 import { supabase } from "../../../config/supabase.js";
 import { uploadDtrPhoto, validateDtrPhoto } from "../dtrPhoto.js";
-import { datedShiftExpectations, clockOutTiming } from "../shiftTiming.js";
+import { datedShiftExpectations, clockInWindow, clockOutTiming } from "../shiftTiming.js";
 
 const MIN_REST_SECONDS = 6 * 60 * 60;
 
@@ -337,6 +337,14 @@ export const clockIn = async (req, res) => {
     );
     const expected = datedShiftExpectations(recordedAt, record.schedule_in, record.schedule_out,
       record.schedule_start_date, record.schedule_end_date);
+    const clockInAccess = clockInWindow(recordedAt, expected);
+    if (!clockInAccess.open) {
+      await connection.rollback();
+      return res.status(409).json({
+        error: `Clock in opens 30 minutes before your scheduled start (${record.schedule_in}, Philippine time).`,
+        opensAt: clockInAccess.opensAt,
+      });
+    }
     photoPath = await uploadDtrPhoto(req.file, recordedAt, "in", userId);
     const [result] = await connection.execute(
       `INSERT INTO daily_time_records 
