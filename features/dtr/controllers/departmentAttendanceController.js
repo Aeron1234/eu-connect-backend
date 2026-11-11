@@ -1,10 +1,13 @@
 import { db } from "../../../config/db.js";
 import { reportError } from "../../../config/errorTracking.js";
+import { readAttendanceTimeline } from "../attendanceTimeline.js";
 
 // Every query derives the head's current department from the database. The
 // latest academic row determines student membership, as on Records and photos.
 export async function getDepartmentAttendance(req, res) {
   res.set("Cache-Control", "private, no-store");
+  if (req.verifiedUser.role !== 'department_head')
+    return res.status(403).json({ error: 'Department-head access required.' });
   const page = Number(req.query.page ?? 1);
   if (!Number.isSafeInteger(page) || page < 1 || page > 1000000)
     return res.status(400).json({ error: "Invalid page." });
@@ -50,30 +53,19 @@ export async function getDepartmentAttendance(req, res) {
     if (company) { conditions.push("LOWER(ir.company_name) LIKE ?"); params.push(`%${company.toLowerCase()}%`); }
     if (courseId) { conditions.push("sai.course_id = ?"); params.push(Number(courseId)); }
     if (internshipId) { conditions.push("ir.id = ?"); params.push(internshipId); }
-    if (from) { conditions.push("DATE(dtr.clock_in) >= ?"); params.push(from); }
-    if (through) { conditions.push("DATE(dtr.clock_in) <= ?"); params.push(through); }
+    if (from) { conditions.push("DATE(COALESCE(dtr.expected_clock_in, dtr.clock_in, dtr.created_at)) >= ?"); params.push(from); }
+    if (through) { conditions.push("DATE(COALESCE(dtr.expected_clock_in, dtr.clock_in, dtr.created_at)) <= ?"); params.push(through); }
     const where = `WHERE ${conditions.join(" AND ")}`;
-    const [[count]] = await connection.execute(
-      `SELECT COUNT(*) AS total ${fromSql} ${where}`, params,
-    );
     const pageSize = 10;
-    const [rows] = await connection.execute(
-      `SELECT dtr.id, dtr.internship_id, ir.user_id AS student_id,
-         CONCAT_WS(' ', p.first_name, p.last_name) AS student_name,
-         ir.company_name, ir.internship_position,
-         dtr.clock_in, dtr.clock_out, dtr.created_at, dtr.total_hours,
-         dtr.clock_in_photo_path, dtr.clock_out_photo_path,
-         dtr.is_late, dtr.is_undertime, dtr.is_overtime,
-         dtr.status, dtr.flagged, dtr.flag_reason, dtr.auto_closed,
-         dtr.missed_clock_out, dtr.claimed_clock_out_at,
-         dtr.auto_closed_at, dtr.proposed_hours, dtr.student_explanation,
-         dtr.explanation_submitted_at, dtr.auto_close_review_status,
-         dtr.overtime_reason, dtr.overtime_intended_end, dtr.overtime_status
-       ${fromSql} ${where}
-       ORDER BY dtr.clock_in DESC, dtr.id DESC LIMIT ? OFFSET ?`,
-      [...params, pageSize, (page - 1) * pageSize],
-    );
-    const total = Number(count.total) || 0;
+    // Reuse every current department/search/course/date predicate for both sources.
+    const reportFrom = fromSql.replace('daily_time_records dtr', 'dtr_absence_reports r').replace('ir.id = dtr.internship_id', 'ir.id = r.internship_id');
+    const reportWhere = where.replaceAll('DATE(COALESCE(dtr.expected_clock_in, dtr.clock_in, dtr.created_at))', 'r.shift_date');
+    const { rows: timeline, total } = await readAttendanceTimeline(connection, {
+      attendance: { fields: "dtr.*, ir.user_id AS student_id, CONCAT_WS(' ', p.first_name, p.last_name) AS student_name, ir.company_name, ir.internship_position", from: fromSql, where, params },
+      absences: { fields: "r.*, CONCAT_WS(' ', p.first_name, p.last_name) AS student_name, ir.company_name", from: reportFrom, where: reportWhere, params },
+      limit: pageSize, offset: (page - 1) * pageSize,
+    });
+    const rows = timeline.map(row => row.absence_report ? { ...row, absence_staff: true } : row);
     return res.json({ rows, courses, page, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) });
   } catch (error) {
     reportError("Department attendance read failed:", error);

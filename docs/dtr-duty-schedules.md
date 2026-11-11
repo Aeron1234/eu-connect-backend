@@ -1,5 +1,9 @@
 # Weekly duty schedules and absence reporting
 
+## Unified attendance timeline
+
+`features/dtr/attendanceTimeline.js` pages attendance and absence keys together before fetching details. Student `/dtr/history` includes only reports owned by the authenticated student for the requested internship; other roles keep attendance-only history. `/dtr/department-attendance` is restricted to regular heads and applies latest department membership, student/company/course/internship/date filters to both sources. Corrected reports attach to their actual DTR rather than duplicate it. Absence rows use zero hours and Review-column reason actions. No new migration or environment variable is required; existing duty tables must already exist. `tests/attendance-timeline.test.js` covers mixed pagination, filters, owner scoping, Registrar/other-role denial and correction deduplication.
+
 Implemented November 11, 2026. This supersedes earlier guidance allowing unscheduled clock-in.
 
 ## Deployment order

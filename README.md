@@ -8,6 +8,8 @@ The backend serves students, employers/company supervisors, department heads, re
 
 ## Contents
 
+Attendance update (November 11): `features/dtr/attendanceTimeline.js` combines attendance and private absence reports before pagination. Student history is owner/internship-scoped; department Attendance applies current department membership and every filter to both sources. Corrected reports attach to their actual DTR once. Employer/admin history remains attendance-only, and Registrar heads are excluded. Deploy the matching frontend; no new SQL or environment variable is needed beyond the existing duty tables. See [duty schedules](docs/dtr-duty-schedules.md).
+
 - [Features](#features)
 - [Technology](#technology)
 - [Architecture](#architecture)

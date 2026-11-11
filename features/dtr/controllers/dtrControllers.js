@@ -1,4 +1,5 @@
 import { requireScheduledClockIn } from '../dutyScheduleService.js';
+import { readAttendanceTimeline } from '../attendanceTimeline.js';
 import { reportError } from "../../../config/errorTracking.js";
 import { invalidateAttendanceHistoryCache } from "../../../config/cache/attendanceHistoryCache.js";
 import { invalidateProfileOverviewCache } from "../../../config/cache/profileOverviewCache.js";
@@ -84,6 +85,22 @@ export const getAllDTRs = async (req, res) => {
 
     if (!internshipId) {
       return res.status(400).json({ error: "Internship ID is required" });
+    }
+
+    // The requested unified student table includes only this student's reports.
+    // Other roles retain the existing attendance-only read and never enter here.
+    if (req.verifiedUser.role === 'student') {
+      if (limit < 1 || limit > 100 || offset < 0) return res.status(400).json({ error: 'Invalid pagination.' });
+      const parent = `JOIN internship_records ir ON ir.id = ? AND ir.user_id = ? AND ir.deleted_at IS NULL`;
+      const timeline = await readAttendanceTimeline(connection, {
+        attendance: { fields: 'dtr.*', from: `FROM daily_time_records dtr ${parent}`,
+          where: 'WHERE dtr.user_id = ir.user_id AND dtr.internship_id = ir.id', params: [internshipId, id] },
+        absences: { fields: 'r.*', from: `FROM dtr_absence_reports r ${parent}`,
+          where: 'WHERE r.student_id = ir.user_id AND r.internship_id = ir.id', params: [internshipId, id] },
+        limit, offset,
+      });
+      return res.status(200).json({ dtrs: timeline.rows, totalRecords: timeline.total,
+        totalPages: Math.max(1, Math.ceil(timeline.total / limit)), currentPage: Math.floor(offset / limit) + 1 });
     }
 
     const [pageRows] = await connection.execute(
