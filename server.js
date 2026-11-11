@@ -9,6 +9,7 @@ import cors from "cors";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import cron from "node-cron";
+import { detectDtrAbsences, sendSundayScheduleReminders } from "./config/dtrDutyJobs.js";
 import cookieParser from "cookie-parser";
 import { writeSync } from "node:fs";
 import { registerMapLocationSockets } from "./features/map/mapLocationSockets.js";
@@ -238,6 +239,15 @@ cron.schedule("30 3 * * *", async () => {
     console.log("Soft-delete retention:", result);
   } catch (error) { reportBackgroundError("softDeleteRetention", error); }
 }, { timezone: "Asia/Manila" });
+
+// Every 15 minutes: finish scheduled-day detection even when students are offline.
+cron.schedule('*/15 * * * *', async () => {
+ try { await detectDtrAbsences(io); } catch(error) { reportBackgroundError('absenceDetection',error); }
+}, {timezone:'Asia/Manila', noOverlap:true});
+// Sunday catch-up every hour, 09:00-23:00 Manila. The ledger deduplicates mail.
+cron.schedule('0 9-23 * * 0', async () => {
+ try { await sendSundayScheduleReminders(); } catch(error) { reportBackgroundError('scheduleReminder',error); }
+}, {timezone:'Asia/Manila', noOverlap:true});
 
 // Port Configuration
 const PORT = process.env.PORT || 7000;

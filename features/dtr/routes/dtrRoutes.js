@@ -23,7 +23,10 @@ import {
   clockInLimiter,
 } from "../../../middleware/rateLimiter.js";
 
+import { dutyRead, dutyWrite } from '../controllers/dutyScheduleController.js';
 const dtrRoutes = express.Router();
+dtrRoutes.get('/dtr/duty', verifyUser, verifyRole(['student','department_head']), generalLimiter, dutyRead);
+dtrRoutes.post('/dtr/duty', verifyUser, verifyRole(['student','department_head']), mediumLimiter, dutyWrite);
 
 dtrRoutes.get(
   "/dtr/department-attendance",

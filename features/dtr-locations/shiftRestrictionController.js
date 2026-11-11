@@ -1,3 +1,5 @@
+import { daysArray } from '../dtr/dutyScheduleModel.js';
+import { versionEmployerSchedule } from '../dtr/dutyScheduleService.js';
 import { db } from "../../config/db.js";
 import { reportError } from "../../config/errorTracking.js";
 import { invalidateNotificationsCache } from "../../config/cache/notificationsCache.js";
@@ -31,7 +33,8 @@ async function currentSchedule(connection, internshipId) {
     `SELECT TIME_FORMAT(clock_in_time, '%H:%i') AS clockInTime,
             TIME_FORMAT(clock_out_time, '%H:%i') AS clockOutTime,
             DATE_FORMAT(start_date, '%Y-%m-%d') AS startDate,
-            DATE_FORMAT(end_date, '%Y-%m-%d') AS endDate
+            DATE_FORMAT(end_date, '%Y-%m-%d') AS endDate,
+            (SELECT working_days FROM dtr_weekly_schedules v WHERE v.internship_id=dtr_shift_restrictions.internship_id AND v.source='employer' ORDER BY v.id DESC LIMIT 1) AS workingDays
      FROM dtr_shift_restrictions WHERE internship_id = ? LIMIT 1 FOR UPDATE`,
     [internshipId],
   );
@@ -58,8 +61,8 @@ async function recordChange(connection, actor, internship, kind, schedule) {
   const title = kind === "removed" ? "DTR Shift Hours Removed" :
     kind === "updated" ? "DTR Shift Hours Updated" : "DTR Shift Hours Set";
   const message = schedule
-    ? `${actorName} ${kind === "updated" ? "updated" : "set"} your expected daily shift hours at ${internship.company_name}: ${detail}. During this schedule, Clock in opens 30 minutes before the scheduled start. Clock out remains available during your open shift.`
-    : `${actorName} removed your expected daily shift hours at ${internship.company_name}. Existing DTR entries keep their recorded labels.`;
+    ? `${actorName} ${kind === "updated" ? "updated" : "set"} your expected daily shift hours at ${internship.company_name}: ${detail}. Initial schedules may begin today; updates apply tomorrow or the selected later start date. During this schedule, Clock in opens 30 minutes before the scheduled start. Clock out remains available during your open shift.`
+    : `${actorName} removed your expected daily shift hours at ${internship.company_name}. Removal applies tomorrow onward. Set your student fallback schedule if needed. Existing DTR entries keep their recorded labels.`;
   await connection.execute(
     "INSERT INTO notifications (user_id, sender_id, type, title, message, link, link_uuid) VALUES (?, ?, 'dtr_shift_schedule', ?, ?, ?, ?)",
     [internship.user_id, actor.id, title, message, "/student", internship.id],
@@ -86,6 +89,9 @@ function deliver(req, notice) {
 
 export async function saveShiftRestriction(req, res) {
   const { clockInTime, clockOutTime } = req.body || {};
+  const workingDays = req.body?.workingDays ?? [0,1,2,3,4,5,6];
+  if (!Array.isArray(workingDays) || !workingDays.length || workingDays.length>7 || new Set(workingDays).size!==workingDays.length || workingDays.some(d=>!Number.isInteger(d)||d<0||d>6))
+    return res.status(400).json({success:false,error:'Choose valid working days.'});
   const startDate = optionalDate(req.body?.startDate);
   const endDate = optionalDate(req.body?.endDate);
   if (!validTime(clockInTime) || !validTime(clockOutTime) || clockInTime === clockOutTime)
@@ -102,10 +108,9 @@ export async function saveShiftRestriction(req, res) {
       return res.status(403).json({ success: false, error: "Only the student's current supervisor can set these hours." });
     }
     const previous = await currentSchedule(connection, internship.id);
-    if (previous && previous.clockInTime === clockInTime && previous.clockOutTime === clockOutTime &&
-        previous.startDate === startDate && previous.endDate === endDate) {
-      await connection.rollback(); transaction = false;
-      return res.json({ success: true, message: "Shift hours are already set to these values." });
+    if (previous && previous.clockInTime===clockInTime && previous.clockOutTime===clockOutTime && previous.startDate===startDate && previous.endDate===endDate &&
+      JSON.stringify([...daysArray(previous.workingDays||'[0,1,2,3,4,5,6]')].sort())===JSON.stringify([...workingDays].sort())) {
+      await connection.rollback();transaction=false;return res.json({success:true,message:'Shift schedule is already set to these values.'});
     }
     await connection.execute(
       `INSERT INTO dtr_shift_restrictions (internship_id, employer_id, clock_in_time, clock_out_time, start_date, end_date)
@@ -114,12 +119,14 @@ export async function saveShiftRestriction(req, res) {
        start_date = VALUES(start_date), end_date = VALUES(end_date)`,
       [internship.id, req.verifiedUser.id, clockInTime, clockOutTime, startDate, endDate],
     );
+    await versionEmployerSchedule(connection, internship.id, req.verifiedUser.id, {clockInTime,clockOutTime,startDate,endDate}, workingDays);
     const notice = await recordChange(connection, req.verifiedUser, internship, previous ? "updated" : "set", { clockInTime, clockOutTime, startDate, endDate });
     await connection.commit(); transaction = false;
     deliver(req, notice);
     return res.json({ success: true, message: "Shift hours saved. The student has been notified; future DTR entries use the schedule within its date range." });
   } catch (error) {
     if (transaction) await connection.rollback().catch(() => {});
+    if(error.status)return res.status(error.status).json({success:false,error:error.message});
     reportError("Save DTR shift restriction failed:", error);
     return res.status(500).json({ success: false, error: "Could not confirm shift hours. Refresh before retrying; the save may have completed." });
   } finally { connection?.release(); }
@@ -141,6 +148,7 @@ export async function removeShiftRestriction(req, res) {
       return res.json({ success: true, message: "No shift hours were set for this student." });
     }
     await connection.execute("DELETE FROM dtr_shift_restrictions WHERE internship_id = ?", [internship.id]);
+    await versionEmployerSchedule(connection, internship.id, req.verifiedUser.id, null, []);
     const notice = await recordChange(connection, req.verifiedUser, internship, "removed", null);
     await connection.commit(); transaction = false;
     deliver(req, notice);

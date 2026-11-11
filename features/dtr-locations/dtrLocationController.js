@@ -28,7 +28,8 @@ const columns = `ir.id AS internship_id, ir.user_id, ir.employer_id, ir.company_
   TIME_FORMAT(sr.clock_in_time, '%H:%i') AS schedule_in,
   TIME_FORMAT(sr.clock_out_time, '%H:%i') AS schedule_out,
   DATE_FORMAT(sr.start_date, '%Y-%m-%d') AS schedule_start_date,
-  DATE_FORMAT(sr.end_date, '%Y-%m-%d') AS schedule_end_date`;
+  DATE_FORMAT(sr.end_date, '%Y-%m-%d') AS schedule_end_date,
+  (SELECT working_days FROM dtr_weekly_schedules v WHERE v.internship_id=ir.id AND v.source='employer' AND v.created_by=ir.employer_id ORDER BY v.id DESC LIMIT 1) AS schedule_working_days`;
 
 // Resolve heads from current database membership on every read and write.
 // A stale or forged department claim cannot grant access, including to Registrar.
@@ -134,7 +135,7 @@ function studentRow(row, includeSchedule = false) {
     ...(includeSchedule ? {
       schedule: row.schedule_in && row.schedule_out
         ? { clockInTime: row.schedule_in, clockOutTime: row.schedule_out,
-            startDate: row.schedule_start_date, endDate: row.schedule_end_date }
+            startDate: row.schedule_start_date, endDate: row.schedule_end_date, workingDays: row.schedule_working_days ? (Array.isArray(row.schedule_working_days) ? row.schedule_working_days : JSON.parse(row.schedule_working_days)) : [0,1,2,3,4,5,6] }
         : null,
     } : {}),
     company_location:

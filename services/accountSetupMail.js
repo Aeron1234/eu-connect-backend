@@ -27,6 +27,17 @@ export async function sendAccountSetupEmail({ to, username, token, invitation })
   }
   const setupUrl = new URL('/set-password', base);
   setupUrl.searchParams.set('token', token);
+  return sendEmailJsTemplate(process.env.EMAILJS_TEMPLATE_ID, {
+    to_email:to, username, setup_url:setupUrl.toString(),
+    subject: invitation ? 'Set up your EU-Connect account' : 'Reset your EU-Connect password',
+    heading: invitation ? 'Your account is ready to set up' : 'Password reset requested',
+    instructions: invitation ? 'Your school created your account. Choose your own password using the button below.' : 'Use the button below to choose a new password. If you did not request this, ignore this email.',
+    expiry_text: invitation ? '24 hours' : '30 minutes',
+  });
+}
+
+export async function sendEmailJsTemplate(templateId, params) {
+  if (!templateId || ['EMAILJS_SERVICE_ID','EMAILJS_PUBLIC_KEY','EMAILJS_PRIVATE_KEY'].some(name=>!process.env[name]?.trim())) throw new AccountSetupMailError('EMAIL_CONFIGURATION_REQUIRED');
   if (waiting >= 20) throw new AccountSetupMailError('EMAIL_QUEUE_BUSY');
   const deadline = Date.now() + 20_000;
   waiting++;
@@ -43,16 +54,10 @@ export async function sendAccountSetupEmail({ to, username, token, invitation })
       signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
       body: JSON.stringify({
         service_id: process.env.EMAILJS_SERVICE_ID,
-        template_id: process.env.EMAILJS_TEMPLATE_ID,
+        template_id: templateId,
         user_id: process.env.EMAILJS_PUBLIC_KEY,
         accessToken: process.env.EMAILJS_PRIVATE_KEY,
-        template_params: {
-          to_email: to, username, setup_url: setupUrl.toString(),
-          subject: invitation ? 'Set up your EU-Connect account' : 'Reset your EU-Connect password',
-          heading: invitation ? 'Your account is ready to set up' : 'Password reset requested',
-          instructions: invitation ? 'Your school created your account. Choose your own password using the button below.' : 'Use the button below to choose a new password. If you did not request this, ignore this email.',
-          expiry_text: invitation ? '24 hours' : '30 minutes',
-        },
+        template_params: params,
       }),
     });
     void res.body?.cancel().catch(() => {});

@@ -1,3 +1,4 @@
+import { requireScheduledClockIn } from '../dutyScheduleService.js';
 import { reportError } from "../../../config/errorTracking.js";
 import { invalidateAttendanceHistoryCache } from "../../../config/cache/attendanceHistoryCache.js";
 import { invalidateProfileOverviewCache } from "../../../config/cache/profileOverviewCache.js";
@@ -201,7 +202,7 @@ export const clockIn = async (req, res) => {
     // before allowing another clock-in.
     const [openRecords] = await connection.execute(
       `SELECT id FROM daily_time_records 
-       WHERE user_id = ? AND clock_out IS NULL 
+       WHERE user_id = ? AND clock_in IS NOT NULL AND clock_out IS NULL
        LIMIT 1 FOR UPDATE`,
       [userId],
     );
@@ -230,8 +231,8 @@ export const clockIn = async (req, res) => {
       });
     }
 
-    // A shift belongs to its Manila clock-in date, even when clock-out is the
-    // next morning. After a prior-day shift, also require rest before another.
+    // A shift belongs to its scheduled start date, even after midnight.
+    // Keep the six-hour rest check before resolving the next scheduled shift.
     const [lastShifts] = await connection.execute(
       `SELECT DATE(clock_in) = CURDATE() AS started_today,
               id,
@@ -243,12 +244,6 @@ export const clockIn = async (req, res) => {
       [userId],
     );
     const lastShift = lastShifts[0];
-    if (Number(lastShift?.started_today) === 1) {
-      await connection.rollback();
-      return res.status(409).json({
-        error: "You have already clocked in for a shift starting today. Your next shift can start tomorrow (Philippine time).",
-      });
-    }
     const secondsSinceClockOut = Number(lastShift?.seconds_since_clock_out);
     if (lastShift && Number.isFinite(secondsSinceClockOut) && secondsSinceClockOut < MIN_REST_SECONDS) {
       await connection.rollback();
@@ -335,8 +330,7 @@ export const clockIn = async (req, res) => {
     const [[{ recorded_at: recordedAt }]] = await connection.execute(
       "SELECT DATE_FORMAT(NOW(), '%Y-%m-%d %H:%i:%s') AS recorded_at",
     );
-    const expected = datedShiftExpectations(recordedAt, record.schedule_in, record.schedule_out,
-      record.schedule_start_date, record.schedule_end_date);
+    const expected = await requireScheduledClockIn(connection, record.internship_id, recordedAt);
     const clockInAccess = clockInWindow(recordedAt, expected);
     if (!clockInAccess.open) {
       await connection.rollback();

@@ -134,7 +134,7 @@ test("student clock actions require a readable photo before attendance is change
 
 test("one Manila start date and six-hour rest work for day and overnight shifts", async () => {
   for (const [lastShift, expectedStatus, message] of [
-    [{ started_today: 1, seconds_since_clock_out: 36000 }, 409, /already clocked in.*today/i],
+    [{ started_today: 1, seconds_since_clock_out: 36000 }, 409, /attendance already exists/i],
     [{ started_today: 0, seconds_since_clock_out: 300 }, 409, /six hours/i],
     [{ started_today: 0, seconds_since_clock_out: 16 * 3600 }, 201, /successful/i],
     [null, 201, /successful/i],
@@ -147,6 +147,9 @@ test("one Manila start date and six-hour rest work for day and overnight shifts"
       async rollback() { rolledBack = true; },
       release() {},
       async execute(sql, params) {
+        if(sql.includes('FROM dtr_weekly_schedules'))return [[{id:1,source:'student',working_days:'[0,1,2,3,4,5,6]',clock_in_time:'08:00',clock_out_time:'18:00',effective_from:'2026-11-01'}]];
+        if(sql.includes('COUNT(*) AS total'))return [[{total:lastShift?.started_today?1:0}]];
+        if(sql.includes('FROM dtr_absence_reports'))return [[]];
         if (sql.includes("SELECT id FROM users")) {
           assert.match(sql, /FOR UPDATE/);
           assert.deepEqual(params, ["student"]);
@@ -790,6 +793,9 @@ test("valid Philippine coordinates produce an actionable storage error and roll 
       async commit() { committed = true; },
       release() { released = true; },
       async execute(sql, params) {
+        if(sql.includes('FROM dtr_weekly_schedules'))return [[{id:1,source:'student',working_days:'[0,1,2,3,4,5,6]',clock_in_time:'08:00',clock_out_time:'18:00',effective_from:'2026-11-01'}]];
+        if(sql.includes('COUNT(*) AS total'))return [[{total:0}]];
+        if(sql.includes('FROM dtr_absence_reports'))return [[]];
         if (sql.includes("SELECT id FROM users")) return [[{ id: "student" }]];
         if (sql.includes("SELECT id FROM daily_time_records")) return [[]];
         if (sql.includes("DATE(clock_in) = CURDATE()")) return [[]];

@@ -11,6 +11,8 @@ async function call(handler, { owner = true, existing = false, failNotification 
     async beginTransaction() {},
     async execute(sql, params) {
       statements.push(sql);
+      if(sql.includes("AS now"))return [[{now:'2026-11-06 08:00:00'}]];
+      if(sql.startsWith('SELECT id FROM dtr_weekly_schedules'))return [[]];
       if (failNotification && sql.startsWith('INSERT INTO notifications')) throw new Error('notification write failed');
       if (sql.startsWith('SELECT ir.id')) return [owner ? [{ id: 'internship', user_id: 'student', company_name: 'Company', first_name: 'Ana', last_name: 'Cruz' }] : []];
       if (sql.includes('FROM dtr_shift_restrictions WHERE internship_id')) return [existing ? [{ clockInTime: '08:00', clockOutTime: '17:00', startDate: null, endDate: null }] : []];
