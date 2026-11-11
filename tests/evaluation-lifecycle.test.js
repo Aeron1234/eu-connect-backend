@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { db } from '../config/db.js';
 import cache from '../config/cache/cache.js';
 import { createStudentEvaluation, deleteStudentEvaluation, getPastStudentEvaluations, getAllStudentEvaluations, reviewDisputedEvaluation } from '../features/evaluations/controllers/studentEvaluationControllers.js';
-import { createEmployerEvaluation, deleteEmployerEvaluation } from '../features/evaluations/controllers/employerEvaluationsController.js';
+import { createCompanyEvaluation, deleteCompanyEvaluation } from '../features/evaluations/controllers/companyEvaluationsController.js';
 import { evaluationEligibilityHandler } from '../features/evaluations/evaluationLifecycle.js';
 const original = db.getConnection;
 beforeEach(() => cache.flushAll());
@@ -14,7 +14,7 @@ const req = (role, id = 'author') => ({ verifiedUser: { id, role, department_id:
   body: { student_id: 'student', scores: Array.from({ length: 29 }, (_, n) => ({ criterion_id: n + 1, score: 4 })) }, app: { get() {} } });
 
 test('concurrent creates allow multiple evaluations in both directions', async () => {
-  for (const [create, role] of [[createStudentEvaluation, 'employer'], [createEmployerEvaluation, 'student']]) {
+  for (const [create, role] of [[createStudentEvaluation, 'employer'], [createCompanyEvaluation, 'student']]) {
     let lock = Promise.resolve(), inserts = 0, scoreWrites = 0, commits = 0;
     const masters = new Set(), notifiedMasters = new Set();
     db.getConnection = async () => {
@@ -26,12 +26,12 @@ test('concurrent creates allow multiple evaluations in both directions', async (
           return [[{ id: 'record', employer_id: 'author', date_started: '2000-01-01', company_name: 'Company' }]];
         }
         if (sql.trim().startsWith('SELECT department_id FROM student_academic_info')) return [[{ department_id: 3 }]];
-        if (sql.includes('FROM student_evaluation_criteria') || sql.includes('FROM employer_evaluation_criteria')) return [Array.from({ length: 29 }, (_, n) => ({ id: n + 1 }))];
+        if (sql.includes('FROM student_evaluation_criteria') || sql.includes('FROM company_evaluation_criteria')) return [Array.from({ length: 29 }, (_, n) => ({ id: n + 1 }))];
         assert.doesNotMatch(sql, /SELECT id FROM .*evaluation_masters/, 'neither direction should check for an occupied slot');
-        if (/INSERT INTO (student|employer)_evaluation_masters/.test(sql)) {
+        if (/INSERT INTO (student|company)_evaluation_masters/.test(sql)) {
           assert(!masters.has(params[0])); masters.add(params[0]); inserts++;
         }
-        if (/INSERT INTO (student|employer)_evaluation_scores/.test(sql)) {
+        if (/INSERT INTO (student|company)_evaluation_scores/.test(sql)) {
           assert(masters.has(params[0]), 'scores must belong to the new master'); scoreWrites++;
         }
         if (sql.includes('FROM user_profiles')) return [[{ first_name: 'Author', last_name: 'Name' }]];
@@ -54,7 +54,7 @@ test('concurrent creates allow multiple evaluations in both directions', async (
 });
 
 test('authors soft-delete only their own evaluation and never delete scores; staff purge only deleted entries', async () => {
-  for (const [remove, authorRole] of [[deleteStudentEvaluation, 'employer'], [deleteEmployerEvaluation, 'student']]) {
+  for (const [remove, authorRole] of [[deleteStudentEvaluation, 'employer'], [deleteCompanyEvaluation, 'student']]) {
     for (const [role, deleted, allowed, status] of [[authorRole, false, true, 200], [authorRole, true, true, 404], [authorRole, false, false, 404], ['admin', false, true, 409], ['admin', true, true, 200], ['department_head', true, true, 200], ['department_head', true, false, 404]]) {
       const writes = []; let committed = false;
       db.getConnection = async () => ({ release() {}, async beginTransaction() {}, async commit() { committed = true; }, async rollback() {},
@@ -102,9 +102,9 @@ test('authors cannot read deleted summaries; staff history retains their deleted
 });
 
 test('posting availability ignores earlier evaluations in both directions', async () => {
-  for (const direction of ['performance', 'supervisor']) for (const active of [false, true]) {
+  for (const direction of ['performance', 'company']) for (const active of [false, true]) {
     db.getConnection = async () => ({ release() {}, async execute(sql, params) {
-      assert.match(sql, /ir.deleted_at IS NULL/); assert.match(sql, /ir.employer_id IS NOT NULL/);
+      assert.match(sql, /ir.deleted_at IS NULL/);
       if (direction === 'performance') {
         assert.doesNotMatch(sql, /evaluation_masters/);
         assert.match(sql, /AND ir.employer_id = \?/); assert.deepEqual(params, ['student', 'author']);
@@ -149,16 +149,15 @@ test('an unapplied performance migration returns a schema error and rolls back i
   assert(rolledBack); assert.equal(writes, 1);
 });
 
-test('an unapplied supervisor-evaluation migration returns a schema error and rolls back', async () => {
+test('company evaluation conflict returns a retryable error and rolls back', async () => {
   let rolledBack = false;
   db.getConnection = async () => ({ release() {}, async beginTransaction() {}, async commit() { assert.fail('must not commit'); },
     async rollback() { rolledBack = true; }, async execute(sql) {
       if (sql.includes('FROM internship_records')) return [[{ id: 'record', employer_id: 'author', company_name: 'Company' }]];
       throw Object.assign(new Error('Duplicate key'), { code: 'ER_DUP_ENTRY', sqlMessage: "Duplicate entry for key 'uq_employer_evaluation_active_slot'" });
     } });
-  const res = response(); await createEmployerEvaluation(req('student'), res);
-  assert.equal(res.statusCode, 503); assert.equal(res.body.code, 'EVALUATION_SCHEMA_UPGRADE_REQUIRED');
-  assert.match(res.body.error, /administrator.*migration/); assert(rolledBack);
+  const res = response(); await createCompanyEvaluation(req('student'), res);
+  assert.equal(res.statusCode, 409); assert.match(res.body.error, /conflicting record/); assert(rolledBack);
 });
 
 test('performance history keeps several active reviews of one internship as independent score groups', async () => {
@@ -177,21 +176,21 @@ test('performance history keeps several active reviews of one internship as inde
     [['review-400', 'record', 9, 10], ['review-200', 'record', 3, 5]]);
 });
 
-test('student history keeps multiple supervisor evaluations of one internship separate', async () => {
+test('student history keeps multiple company evaluations of one internship separate', async () => {
   db.getConnection = async () => ({ release() {}, async execute(sql, params) {
-    assert.match(sql, /FROM employer_evaluation_masters AS m/);
+    assert.match(sql, /FROM company_evaluation_masters AS m/);
     assert.match(sql, /m.deleted_at IS NULL/);
     assert.deepEqual(params, ['author']);
     return [[
-      { evaluation_id: 'supervisor-2', submitted_date: '2026-11-04', company: 'Company', breakdown_label: 'Support', breakdown_score: 5 },
-      { evaluation_id: 'supervisor-1', submitted_date: '2026-11-03', company: 'Company', breakdown_label: 'Support', breakdown_score: 3 },
+      { evaluation_id: 'company-2', submitted_date: '2026-11-04', company: 'Company', breakdown_label: 'Support', breakdown_score: 5 },
+      { evaluation_id: 'company-1', submitted_date: '2026-11-03', company: 'Company', breakdown_label: 'Support', breakdown_score: 3 },
     ]];
   } });
   const res = response(); await getAllStudentEvaluations(req('student'), res);
   assert.equal(res.statusCode, 200);
   assert.deepEqual(res.body.data.map(item => [item.id, item.type, item.breakdown[0].score]), [
-    ['supervisor-2', 'Supervisor Evaluation', 5],
-    ['supervisor-1', 'Supervisor Evaluation', 3],
+    ['company-2', 'Company Evaluation', 5],
+    ['company-1', 'Company Evaluation', 3],
   ]);
 });
 
@@ -202,6 +201,17 @@ test('multiple performance migration removes only its unique index and preserves
   assert.equal((statements.match(/ALTER TABLE/g) || []).length, 1);
   assert.doesNotMatch(statements, /\b(UPDATE|DELETE|INSERT|TRUNCATE)\b/i);
   assert.doesNotMatch(statements, /DROP.*uq_employer_evaluation_active_slot|DROP COLUMN/i);
+});
+
+test('company migration replaces only student-authored supervisor evaluation tables', () => {
+  const sql = readFileSync(new URL('../scripts/2026-11-10-company-evaluations.sql', import.meta.url), 'utf8');
+  const statements = sql.replace(/--[^\n]*/g, '');
+  for (const suffix of ['criteria', 'masters', 'scores']) {
+    assert.match(statements, new RegExp(`CREATE TABLE IF NOT EXISTS company_evaluation_${suffix}`));
+    assert.match(statements, new RegExp(`DROP TABLE IF EXISTS employer_evaluation_${suffix}`));
+  }
+  assert(statements.indexOf('CREATE TABLE IF NOT EXISTS company_evaluation_scores') < statements.indexOf('DROP TABLE IF EXISTS employer_evaluation_scores'));
+  assert.doesNotMatch(statements, /DROP TABLE IF EXISTS student_evaluation_/);
 });
 
 test('multiple supervisor migration removes only its unique index and preserves evaluation data', () => {

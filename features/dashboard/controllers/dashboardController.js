@@ -767,15 +767,15 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
       );
     }
 
-    let employerEvaluationAverages = [];
+    let companyEvaluationAverages = [];
     try {
       const [rows] = await connection.execute(
         `SELECT
            eec.category,
            AVG(ees.score) AS avg_score
-         FROM employer_evaluation_scores ees
-         INNER JOIN employer_evaluation_criteria eec ON eec.id = ees.criterion_id
-         INNER JOIN employer_evaluation_masters eem ON eem.id = ees.evaluation_master_id
+         FROM company_evaluation_scores ees
+         INNER JOIN company_evaluation_criteria eec ON eec.id = ees.criterion_id
+         INNER JOIN company_evaluation_masters eem ON eem.id = ees.evaluation_master_id
          INNER JOIN (
            SELECT sai1.user_id, sai1.department_id, sai1.course_id
            FROM student_academic_info AS sai1
@@ -790,14 +790,14 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
          ORDER BY eec.category ASC`,
         [departmentId],
       );
-      employerEvaluationAverages = rows.map((r) => ({
+      companyEvaluationAverages = rows.map((r) => ({
         category: r.category,
         score: Number(Number(r.avg_score).toFixed(2)),
       }));
     } catch (err) {
       res.locals.skipCache = true;
       reportError(
-        "getDepartmentHeadDashboardData: employer evaluation averages query failed:",
+        "getDepartmentHeadDashboardData: company evaluation averages query failed:",
         err,
       );
     }
@@ -872,7 +872,7 @@ export const getDepartmentHeadDashboardData = async (req, res) => {
       stats,
       ongoingPerCourse,
       studentEvaluationAverages,
-      employerEvaluationAverages,
+      companyEvaluationAverages,
       hoursTracker,
       hoursDistribution,
       availableShiftHoursMonths,

@@ -23,7 +23,10 @@ import {
 } from "./config/errorTracking.js";
 
 import { cleanupFeedbackFiles } from "./features/feedback/feedbackController.js";
-import { cleanupDtrPhotos } from "./config/dtrPhotoCleanup.js";
+import { cleanupDtrPhotos, queueDtrPhotoCleanup } from "./config/dtrPhotoCleanup.js";
+import { purgeExpiredSoftDeletes } from "./config/softDeleteRetention.js";
+import { db } from "./config/db.js";
+import { invalidateAllResponseCache } from "./config/cache/cache.js";
 import analyticsRoutes from "./features/analytics/analyticsRoutes.js";
 import feedbackRoutes from "./features/feedback/routes/feedbackRoutes.js";
 import announcementRoutes from "./features/announcements/routes/announcementRoutes.js";
@@ -41,7 +44,7 @@ import searchedUserRoutes from "./features/users/routes/searchedUserRoutes.js";
 
 import internshipPostingRoutes from "./features/internship-posts/routes/internshipPostsRoutes.js";
 import supervisorRequestRoutes from "./features/supervisor-requests/routes/supervisorRequestRoutes.js";
-import employerEvaluationsRoutes from "./features/evaluations/routes/employerEvaluationsRoutes.js";
+import companyEvaluationsRoutes from "./features/evaluations/routes/companyEvaluationsRoutes.js";
 import mapRoutes from "./features/map/routes/mapRoutes.js";
 import hteReportRoutes from "./features/sipp-reports/routes/hteReportRoutes.js";
 import alumniRoutes from "./features/past-internships/routes/alumniRecordRoutes.js";
@@ -140,7 +143,7 @@ mountApiRoutes(app, [
   searchedUserRoutes,
   internshipPostingRoutes,
   supervisorRequestRoutes,
-  employerEvaluationsRoutes,
+  companyEvaluationsRoutes,
   mapRoutes,
   hteReportRoutes,
   alumniRoutes,
@@ -224,6 +227,17 @@ cron.schedule("*/5 * * * *", async () => {
   try { await cleanupDtrPhotos(); }
   catch (error) { reportBackgroundError("dtrPhotoCleanup", error); }
 });
+
+// Daily at 03:30 Philippine time: permanently remove rows deleted over 30 days ago.
+cron.schedule("30 3 * * *", async () => {
+  try {
+    const result = await purgeExpiredSoftDeletes({
+      pool: db, queueFiles: queueDtrPhotoCleanup, invalidate: invalidateAllResponseCache,
+      onError: (error, context) => reportBackgroundError("softDeleteRetention", error, context),
+    });
+    console.log("Soft-delete retention:", result);
+  } catch (error) { reportBackgroundError("softDeleteRetention", error); }
+}, { timezone: "Asia/Manila" });
 
 // Port Configuration
 const PORT = process.env.PORT || 7000;

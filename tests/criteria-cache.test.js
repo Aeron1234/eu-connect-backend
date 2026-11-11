@@ -4,7 +4,7 @@ import { db } from "../config/db.js";
 import { getStudentEvaluationCriteria, deactivateStudentEvaluationCriterion } from "../features/evaluation-criteria/controllers/evaluationsCriteriaController.js";
 import { validateCriteriaScores } from "../features/evaluation-criteria/criteriaDepartment.js";
 import { getStudentEvaluationCriteria as getEmployerForm } from "../features/evaluations/controllers/studentEvaluationControllers.js";
-import { getEvaluationCriterias as getStudentForm } from "../features/evaluations/controllers/employerEvaluationsController.js";
+import { getEvaluationCriterias as getStudentForm } from "../features/evaluations/controllers/companyEvaluationsController.js";
 
 const response = () => ({ statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } });
 

@@ -117,12 +117,11 @@ are. The existing in-flight read protection and single-process limitation apply.
 
 ## Evaluation criteria
 
-Department-head criteria lists (`/criteria/employer-evaluation` and
+Department-head criteria lists (`/criteria/company-evaluation` and
 `/criteria/student-evaluation`) and active-form endpoints
-(`/evaluation-criterias` and `/student-evaluation/criteria`) are not cached by
+(`/company-evaluation/criteria` and `/student-evaluation/criteria`) are not cached by
 the backend response cache. Their answers depend on the head's current database
-department or the evaluated student's latest academic department. The employer
-form also depends on the target student's ongoing supervisor relationship.
+department or the evaluated student's latest academic department. The employer performance form also depends on the target student's ongoing supervisor relationship; the student company form needs an ongoing internship only.
 
 After criterion creation, individual deactivation/reactivation or section
 deactivation/reactivation commits, `invalidateCriteriaCache(tableName)` clears

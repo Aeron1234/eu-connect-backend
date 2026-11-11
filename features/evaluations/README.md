@@ -1,57 +1,30 @@
-# Evaluation posting and deletion
+# Evaluations
 
-Employers can submit multiple performance evaluations for the same ongoing
-internship, so departments can review progress at their required intervals.
-Earlier active evaluations do not block another review. There is no automatic
-200-hour gate or department-specific configuration. Each submission has its own
-master ID, scores, submitted date, history entry, notification and printable PDF.
-The legacy complete-summary endpoint continues to return its latest master;
-history and record-detail endpoints include the individual evaluations.
+There are two active evaluation directions:
 
-Students can also submit multiple supervisor evaluations during the same ongoing
-internship. Earlier evaluations do not need to be deleted first. Both directions
-require an accepted supervisor and an ongoing internship; the Philippine
-internship-start check applies to employer-authored performance reviews.
-Forms post immediately without a confirmation/status step.
-Performance evaluations remain confidential from students.
+| Direction | Author | Data tables | Audience |
+| --- | --- | --- | --- |
+| Performance evaluation | Accepted employer supervisor | `student_evaluation_criteria`, `student_evaluation_masters`, `student_evaluation_scores` | Employer and authorized school staff; confidential from students |
+| Company evaluation | Student with an ongoing internship | `company_evaluation_criteria`, `company_evaluation_masters`, `company_evaluation_scores` | Student author and authorized school staff |
 
-Author deletion sets `deleted_at` and hides only that evaluation from the author's
-history and PDF reads. Scores and other evaluations are retained. Staff histories
-include deleted entries with a Deleted label. Admins may permanently delete only
-already deleted entries; department heads may do so only within their current
-database-verified student department. Purge removes that evaluation's scores and
-linked notifications transactionally. Successful writes invalidate caches after
-commit. Notifications target the internship record and identify each evaluation
-with its own `link_uuid`.
+Both directions support multiple submissions for the same ongoing internship. Each submission has its own ID, scores, and timestamp. Only employer performance evaluations require the accepted-supervisor relationship and internship start-date check. A student can evaluate their internship company even when no supervisor is assigned. Forms post immediately; no student confirmation or automatic 200-hour milestone applies.
 
-Submission locks the ongoing internship row before checking assignment.
-Neither direction checks for an existing active evaluation. The supervisor
-evaluation unique index `uq_employer_evaluation_active_slot` must be removed
-by the November 4 migration. Availability reads are private/no-store
-and fail closed on errors; submission remains authoritative. Existing submission
-rate limits apply. Legacy confirmation/dispute endpoints remain retired.
+Department heads outside the Registrar manage active questions for their own department through `/criteria/student-evaluation` and `/criteria/company-evaluation`. Company questions are new and empty after migration; heads must add questions before students can submit. The backend validates that each active department question is answered exactly once. Inactive questions remain available to render historical scores.
 
-## Deployment and SQL
+Authors can soft-delete individual evaluations. Their own history then hides the deleted row. Authorized staff can still review it with a Deleted label and may permanently delete an already soft-deleted row. Performance scores remain inaccessible to students through history, record details, prints, and direct API requests. Department evaluation lists and record detail reads enforce current student-department scope for heads; the Registrar cannot use them.
 
-Back up first. For databases with the October 22 soft-delete baseline already
-installed (including the latest supplied Layerbase export), run
-[`2026-10-29-multiple-performance-evaluations.sql`](../../scripts/2026-10-29-multiple-performance-evaluations.sql),
-if not yet applied, followed by
-[`2026-11-04-multiple-supervisor-evaluations.sql`](../../scripts/2026-11-04-multiple-supervisor-evaluations.sql),
-then deploy the matching backend and frontend. The November migration drops only
-`uq_employer_evaluation_active_slot`, first adding a nonunique internship index
-so the existing foreign key remains supported. Both migrations preserve rows,
-scores and deleted timestamps and are safe
-to rerun. No environment or package changes are required. The API reports a
-schema-upgrade error if an old index still rejects another evaluation.
+## Evaluated companies
 
-For an older schema without soft deletion, apply
-[`2026-10-22-evaluation-soft-delete.sql`](../../scripts/2026-10-22-evaluation-soft-delete.sql)
-first, following its duplicate-consolidation review, then both upgrades in date
-order. Never replay that historical baseline after enabling multiple reviews: it
-would archive older active entries and recreate the retired indexes.
-The new migration does not restore previously deleted historical entries.
-DDL commits implicitly. No live database migration was executed by Codex.
-# Department-owned criteria
+`GET /evaluations/company/summary` and `/evaluations/company/summary/:companyKey` are for non-Registrar department heads only. Admins are rejected. The head's current department is read from the database; the optional course filter accepts only a course in that department. Date filters use the internship start date, inclusive. Active company evaluations linked to nondeleted ongoing/finished internship records and nondeleted students contribute to ratings across departments.
 
-Run `scripts/2026-11-06-department-evaluation-criteria.sql` after backing up the database and before deploying the paired API and frontend. The migration adds `department_id` to both criteria tables and assigns all existing questions to CCS without changing criterion IDs. Non-Registrar department heads manage only their own department's questions. Students receive supervisor evaluation questions for their latest academic department; employers receive performance questions for the supervised ongoing student's department. Both forms submit stable criterion IDs, and the backend checks that each active question is answered exactly once. Departments without active questions must add them before an evaluation can be submitted. Historical scores retain their existing criterion references. No new environment variables or dependencies are needed.
+Company identity is normalized whitespace/case in **both** name and address. Missing addresses are kept separate by internship record, and same-name companies at multiple addresses are flagged for review. Overall and category scores average each evaluation, then average a student's multiple evaluations, then average students equally. Fewer than three distinct reviewers is labeled Limited feedback. The list is sorted highest-to-lowest by default and supports lowest-to-highest. Ties sort by company name and address.
+
+The detail API masks names from other departments and removes their remarks before returning JSON; the frontend does not receive those private fields. The head sees full names and remarks only for students in their current department. No database migration or new environment variable is required for this read-only summary; the existing November 10 company evaluation migration remains a prerequisite.
+
+## Deployment
+
+1. Back up the database. Confirm prior evaluation and department-criteria migrations are already applied for this database.
+2. Run [`scripts/2026-11-10-company-evaluations.sql`](../../scripts/2026-11-10-company-evaluations.sql) before deploying the new backend and frontend. It creates the company criteria, master and score tables, then drops old `employer_evaluation_*` tables. **This deletes all previous student-to-supervisor evaluations and questions.** The employer-authored `student_evaluation_*` performance tables are preserved.
+3. Deploy the backend and matching frontend together. A department head must enter new company-focused criteria before students can submit company evaluations.
+
+The old October/November supervisor migration scripts are historical and should not be run after this migration. This feature needs no new environment variables or packages. No live database was changed by preparing this migration.

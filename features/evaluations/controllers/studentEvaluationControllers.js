@@ -530,7 +530,7 @@ export const getAllStudentEvaluations = async (req, res) => {
   try {
     connection = await db.getConnection();
 
-    // The student's history contains their own undeleted Supervisor Evaluations only.
+    // The student's history contains their own undeleted Company Evaluations only.
     // It excludes confidential employer Performance Evaluations; legacy reviewer fields stay null.
     const givenQuery = `
       SELECT 
@@ -539,14 +539,12 @@ export const getAllStudentEvaluations = async (req, res) => {
         m.created_at AS submitted_date,
         m.student_id AS actor_id,
         ir.company_name AS company,
-        CONCAT(up.first_name, ' ', up.last_name) AS actor_name,
         c.category AS breakdown_label,
         s.score AS breakdown_score
-      FROM employer_evaluation_masters AS m
+      FROM company_evaluation_masters AS m
       JOIN internship_records AS ir ON m.internship_record_id = ir.id
-      JOIN employer_evaluation_scores AS s ON s.evaluation_master_id = m.id
-      JOIN employer_evaluation_criteria AS c ON s.criterion_id = c.id
-      LEFT JOIN user_profiles AS up ON m.employer_id = up.user_id
+      JOIN company_evaluation_scores AS s ON s.evaluation_master_id = m.id
+      JOIN company_evaluation_criteria AS c ON s.criterion_id = c.id
       WHERE m.student_id = ? AND m.deleted_at IS NULL
       ORDER BY m.created_at DESC, c.category ASC
     `;
@@ -618,7 +616,7 @@ export const getAllStudentEvaluations = async (req, res) => {
       return Object.values(group);
     }
 
-    const given = groupRows(givenRows, "Supervisor Evaluation", "self");
+    const given = groupRows(givenRows, "Company Evaluation", "self");
 
     const combined = [...given].sort(
       (a, b) => new Date(b.submittedDate) - new Date(a.submittedDate),

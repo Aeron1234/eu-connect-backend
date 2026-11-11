@@ -10,70 +10,70 @@ import {
   strictLimiter,
 } from "../../../middleware/rateLimiter.js";
 import {
-  addEmployerEvaluationCriterion,
+  addCompanyEvaluationCriterion,
   addStudentEvaluationCriterion,
-  deactivateEmployerEvaluationCriterion,
-  deactivateEmployerEvaluationSection,
+  deactivateCompanyEvaluationCriterion,
+  deactivateCompanyEvaluationSection,
   deactivateStudentEvaluationCriterion,
   deactivateStudentEvaluationSection,
-  reactivateEmployerEvaluationCriterion,
+  reactivateCompanyEvaluationCriterion,
   reactivateStudentEvaluationCriterion,
-  reactivateEmployerEvaluationSection,
+  reactivateCompanyEvaluationSection,
   reactivateStudentEvaluationSection,
-  getEmployerEvaluationCriteria,
+  getCompanyEvaluationCriteria,
   getStudentEvaluationCriteria,
 } from "../controllers/evaluationsCriteriaController.js";
 
 const criteriaRoutes = express.Router();
 
-// Student-evaluating-employer criteria
+// Student-evaluating-company criteria
 criteriaRoutes.get(
-  "/criteria/employer-evaluation",
+  "/criteria/company-evaluation",
   verifyUser,
   verifyRole(["department_head"]),
   generalLimiter,
   cacheRoute(300),
-  getEmployerEvaluationCriteria,
+  getCompanyEvaluationCriteria,
 );
 
 criteriaRoutes.post(
-  "/criteria/employer-evaluation",
+  "/criteria/company-evaluation",
   verifyUser,
   verifyRole(["department_head"]),
   generalLimiter,
-  addEmployerEvaluationCriterion,
+  addCompanyEvaluationCriterion,
 );
 
 criteriaRoutes.delete(
-  "/criteria/employer-evaluation/:criterionId",
+  "/criteria/company-evaluation/:criterionId",
   verifyUser,
   verifyRole(["department_head"]),
   generalLimiter,
-  deactivateEmployerEvaluationCriterion,
+  deactivateCompanyEvaluationCriterion,
 );
 
 criteriaRoutes.patch(
-  "/criteria/employer-evaluation/:criterionId/reactivate",
+  "/criteria/company-evaluation/:criterionId/reactivate",
   verifyUser,
   verifyRole(["department_head"]),
   generalLimiter,
-  reactivateEmployerEvaluationCriterion,
+  reactivateCompanyEvaluationCriterion,
 );
 
 criteriaRoutes.delete(
-  "/criteria/employer-evaluation/section/:category",
+  "/criteria/company-evaluation/section/:category",
   verifyUser,
   verifyRole(["department_head"]),
   generalLimiter,
-  deactivateEmployerEvaluationSection,
+  deactivateCompanyEvaluationSection,
 );
 
 criteriaRoutes.patch(
-  "/criteria/employer-evaluation/section/:category/reactivate",
+  "/criteria/company-evaluation/section/:category/reactivate",
   verifyUser,
   verifyRole(["department_head"]),
   generalLimiter,
-  reactivateEmployerEvaluationSection,
+  reactivateCompanyEvaluationSection,
 );
 
 // Employer-evaluating-student criteria

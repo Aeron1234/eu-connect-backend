@@ -465,14 +465,16 @@ export const getAlumniInternships = async (req, res) => {
     const normalizedNames = companyPage.map((c) => c.normalized_name);
     const placeholders = normalizedNames.map(() => "?").join(",");
 
-    // This list returns only fields used by company/alumni rows. Optional position,
-    // hours, supervisor and notes remain stored but are absent from this response.
+    // Include each position and linked student ID so the UI can group the same
+    // student under one company while still showing every available position.
     const [rows] = await connection.execute(
       `SELECT air.id, air.alumni_name, air.company_name, air.company_address,
-              air.industry, air.course_id, air.batch_year, air.academic_year,
+              air.industry, air.internship_position, air.course_id, air.batch_year, air.academic_year,
+              ir.user_id AS student_user_id, ir.date_started,
               c.course_name, d.id AS department_id, d.code AS department_code,
               d.name AS department_name
        FROM alumni_internship_records air
+       LEFT JOIN internship_records ir ON ir.id = air.internship_record_id
        LEFT JOIN courses c ON air.course_id = c.id
        LEFT JOIN departments d ON air.department_id = d.id
        WHERE LOWER(TRIM(air.company_name)) IN (${placeholders})${conditions.length ? " AND " + conditions.join(" AND ") : ""}
@@ -490,12 +492,15 @@ export const getAlumniInternships = async (req, res) => {
           company_address: row.company_address,
           industry: row.industry,
           alumni: [],
+          studentsById: new Map(),
         };
       }
 
-      groups[normalized].alumni.push({
+      const record = {
         id: row.id,
         alumni_name: row.alumni_name,
+        internship_position: row.internship_position,
+        date_started: row.date_started,
         course_name: row.course_name,
         course_id: row.course_id,
         batch_year: row.batch_year,
@@ -503,12 +508,24 @@ export const getAlumniInternships = async (req, res) => {
         department_id: row.department_id,
         department_code: row.department_code,
         department_name: row.department_name,
-      });
+      };
+      // System-linked records identify the same student reliably. Manual alumni
+      // entries have no student account, so keep them separate instead of
+      // merging two people who happen to share a name.
+      const studentKey = row.student_user_id || row.id;
+      const group = groups[normalized];
+      if (!group.studentsById.has(studentKey)) {
+        const student = { ...record, records: [] };
+        group.studentsById.set(studentKey, student);
+        group.alumni.push(student);
+      }
+      group.studentsById.get(studentKey).records.push(record);
     });
 
     const companies = companyPage.map((c) => {
       const group = groups[c.normalized_name];
-      return { ...group, alumni_count: group.alumni.length };
+      const { studentsById, ...publicGroup } = group;
+      return { ...publicGroup, alumni_count: publicGroup.alumni.length };
     });
 
     return res.status(200).json({

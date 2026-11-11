@@ -5,7 +5,7 @@ import { once } from "node:events";
 import { db } from "../config/db.js";
 import cache from "../config/cache/cache.js";
 import * as student from "../features/evaluations/controllers/studentEvaluationControllers.js";
-import { getPendingStudentEvaluations } from "../features/evaluations/controllers/employerEvaluationsController.js";
+import { getPendingStudentEvaluations } from "../features/evaluations/controllers/companyEvaluationsController.js";
 import { getAllNotifications, getUnreadNotificationCount } from "../features/notifications/controllers/notificationControllers.js";
 
 process.env.ACCESS_TOKEN_SECRET = "confidential-evaluation-test";
@@ -38,7 +38,7 @@ test("student history reads only their own submitted supervisor feedback", async
   } });
   const res = response(); await student.getAllStudentEvaluations(request(), res);
   assert.equal(res.statusCode, 200); assert.equal(queries.length, 1);
-  assert.deepEqual(res.body.data.map(item => item.type), ["Supervisor Evaluation"]);
+  assert.deepEqual(res.body.data.map(item => item.type), ["Company Evaluation"]);
 });
 
 test("PDF and profile reads scope employer authors and the student's current department using database membership", async () => {

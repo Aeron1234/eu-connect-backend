@@ -58,7 +58,7 @@ async function recordChange(connection, actor, internship, kind, schedule) {
   const title = kind === "removed" ? "DTR Shift Hours Removed" :
     kind === "updated" ? "DTR Shift Hours Updated" : "DTR Shift Hours Set";
   const message = schedule
-    ? `${actorName} ${kind === "updated" ? "updated" : "set"} your expected daily shift hours at ${internship.company_name}: ${detail}. These hours label future DTR entries; they do not block clocking in or out.`
+    ? `${actorName} ${kind === "updated" ? "updated" : "set"} your expected daily shift hours at ${internship.company_name}: ${detail}. During this schedule, Clock in opens 30 minutes before the scheduled start. Clock out remains available during your open shift.`
     : `${actorName} removed your expected daily shift hours at ${internship.company_name}. Existing DTR entries keep their recorded labels.`;
   await connection.execute(
     "INSERT INTO notifications (user_id, sender_id, type, title, message, link, link_uuid) VALUES (?, ?, 'dtr_shift_schedule', ?, ?, ?, ?)",

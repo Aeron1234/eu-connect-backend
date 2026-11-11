@@ -16,7 +16,7 @@ export async function getDepartmentEvaluations(req, res) {
   const from = String(req.query.from ?? "");
   const through = String(req.query.through ?? "");
   if (!Number.isSafeInteger(page) || page < 1 || page > 1000000 ||
-      !["", "performance", "supervisor"].includes(type) ||
+      !["", "performance", "company"].includes(type) ||
       !["", "active", "deleted"].includes(status) || search.length > 100 || company.length > 100 ||
       (courseId && !/^\d+$/.test(courseId)) ||
       (internshipId && !/^[\w-]{1,64}$/.test(internshipId)) ||
@@ -42,7 +42,7 @@ export async function getDepartmentEvaluations(req, res) {
     const items = `(SELECT id, internship_record_id, evaluated_by AS author_id,
         'performance' AS type, created_at, deleted_at FROM student_evaluation_masters
       UNION ALL SELECT id, internship_record_id, student_id AS author_id,
-        'supervisor' AS type, created_at, deleted_at FROM employer_evaluation_masters)`;
+        'company' AS type, created_at, deleted_at FROM company_evaluation_masters)`;
     const joins = `FROM ${items} e
       JOIN internship_records ir ON ir.id = e.internship_record_id AND ir.deleted_at IS NULL
       JOIN users u ON u.id = ir.user_id AND u.deleted_at IS NULL

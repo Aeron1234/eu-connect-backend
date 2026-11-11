@@ -6,7 +6,7 @@ process.env.SUPABASE_KEY = "no-network";
 process.env.CACHE_ENABLED = "false";
 const { db } = await import("../config/db.js");
 const student = await import("../features/evaluations/controllers/studentEvaluationControllers.js");
-const employer = await import("../features/evaluations/controllers/employerEvaluationsController.js");
+const employer = await import("../features/evaluations/controllers/companyEvaluationsController.js");
 const records = await import("../features/internship-records/controllers/internshipRecordControllers.js");
 const original = db.getConnection;
 after(async () => { db.getConnection = original; await db.end(); });
@@ -85,12 +85,12 @@ test("all and record histories retain received and given evaluation shapes", asy
       if (sql.includes("SELECT ir.id, ir.deleted_at"))
         return [{ id: "internship", deleted_at: null, department_id: 1 }];
       if (sql.includes("FROM student_evaluation_masters")) return scores.slice(0, 3);
-      if (sql.includes("FROM employer_evaluation_masters")) return scores.slice(3);
+      if (sql.includes("FROM company_evaluation_masters")) return scores.slice(3);
       throw new Error(`Unexpected SQL: ${sql}`);
     });
     assert.equal(res.statusCode, 200, handler.name);
     const items = Array.isArray(res.body) ? res.body : res.body.data;
-    assert.deepEqual(items.map((item) => item.type), handler === student.getAllStudentEvaluations ? ["Supervisor Evaluation"] : ["Performance Evaluation", "Supervisor Evaluation"]);
+    assert.deepEqual(items.map((item) => item.type), handler === student.getAllStudentEvaluations ? ["Company Evaluation"] : ["Performance Evaluation", "Company Evaluation"]);
     if (handler !== student.getAllStudentEvaluations) assert.deepEqual(items[0].breakdown, firstBreakdown);
     assert.deepEqual(items.at(-1).breakdown, [{ label: "Skills", score: 2, max: 5 }]);
     assert.equal(releases, 1, handler.name);
@@ -108,13 +108,13 @@ test("submitted evaluations group interleaved scores by master", async () => {
     { evaluation_master_id: "first", category: "Skills", score: 4 },
   ];
   const { res, calls, releases } = await invoke(employer.getStudentSubmittedEvaluations, {},
-    (sql) => sql.includes("FROM employer_evaluation_masters") ? masters : points);
+    (sql) => sql.includes("FROM company_evaluation_masters") ? masters : points);
   assert.equal(res.statusCode, 200);
   assert.equal(calls.length, 2);
   assert.deepEqual(res.body.map((item) => [item.id, item.total_score, item.total_max]),
     [["first", 7, 10], ["second", 5, 5]]);
   assert.deepEqual(res.body[0].categories, [{ category: "Skills", score: 7, max: 10 }]);
-  assert.equal(res.body[1].employer_name, "Your Supervisor");
+  assert.equal(res.body[1].company_name, "Company B");
   assert.equal(releases, 1);
 });
 

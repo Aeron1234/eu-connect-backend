@@ -6,7 +6,7 @@ import { db } from "../../../config/db.js";
 import { newUUID } from "../../../config/helpers.js";
 import { studentCriteriaDepartment, validateCriteriaScores } from "../../evaluation-criteria/criteriaDepartment.js";
 
-// In this API, employer evaluation means the student evaluating their supervisor.
+// Students evaluate the company of their current ongoing internship.
 export const getEvaluationCriterias = async (req, res) => {
   let connection;
   try {
@@ -17,7 +17,7 @@ export const getEvaluationCriterias = async (req, res) => {
     // Offer active questions only; inactive rows remain available to historical score joins.
     const query = `
       SELECT id, category, criterion_name 
-      FROM employer_evaluation_criteria
+      FROM company_evaluation_criteria
       WHERE department_id = ? AND is_active = 1
       ORDER BY id ASC
     `;
@@ -61,11 +61,11 @@ export const getPendingStudentEvaluations = async (req, res) => {
   return res.status(403).json({ error: "Employer evaluations are confidential." });
 };
 
-export const createEmployerEvaluation = async (req, res) => {
+export const createCompanyEvaluation = async (req, res) => {
   const { id: studentId, role } = req.verifiedUser;
   const { other_remarks, scores } = req.body;
 
-  // Supervisor Evaluation is the student-to-employer direction.
+  // Scores apply to department-owned company criteria.
 
   if (!Array.isArray(scores)) {
     return res.status(400).json({ error: "Missing required evaluation data." });
@@ -97,9 +97,9 @@ export const createEmployerEvaluation = async (req, res) => {
     connection = await db.getConnection();
     await connection.beginTransaction();
 
-    // Lock the student's live ongoing record while resolving the accepted supervisor.
+    // Lock the current ongoing internship; company evaluations do not require a supervisor.
     const [records] = await connection.execute(
-      `SELECT id, employer_id, company_name FROM internship_records WHERE user_id = ? AND status = 'ongoing' AND deleted_at IS NULL LIMIT 1 FOR UPDATE`,
+      `SELECT id, company_name FROM internship_records WHERE user_id = ? AND status = 'ongoing' AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
       [studentId],
     );
 
@@ -112,17 +112,9 @@ export const createEmployerEvaluation = async (req, res) => {
 
     const internship = records[0];
     const departmentId = await studentCriteriaDepartment(connection, studentId);
-    if (!departmentId || !(await validateCriteriaScores(connection, "employer_evaluation_criteria", departmentId, scores))) {
+    if (!departmentId || !(await validateCriteriaScores(connection, "company_evaluation_criteria", departmentId, scores))) {
       await connection.rollback();
       return res.status(400).json({ error: "Answer every current evaluation criterion for your department." });
-    }
-
-    if (!internship.employer_id) {
-      await connection.rollback();
-      return res.status(400).json({
-        error:
-          "You don't have an accepted supervisor yet, so there's no one to evaluate.",
-      });
     }
 
     const evaluationPeriod = new Date().toISOString().slice(0, 7); // UTC YYYY-MM display label, not a posting limit.
@@ -130,20 +122,19 @@ export const createEmployerEvaluation = async (req, res) => {
     const masterId = newUUID();
 
     await connection.execute(
-      `INSERT INTO employer_evaluation_masters (id, internship_record_id, student_id, employer_id, other_remarks, evaluation_period)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO company_evaluation_masters (id, internship_record_id, student_id, other_remarks, evaluation_period)
+       VALUES (?, ?, ?, ?, ?)`,
       [
         masterId,
         internship.id,
         studentId,
-        internship.employer_id,
         other_remarks || null,
         evaluationPeriod,
       ],
     );
 
     const scoreQuery = `
-      INSERT INTO employer_evaluation_scores (evaluation_master_id, criterion_id, score)
+      INSERT INTO company_evaluation_scores (evaluation_master_id, criterion_id, score)
       VALUES (?, ?, ?)
     `;
 
@@ -164,13 +155,12 @@ export const createEmployerEvaluation = async (req, res) => {
         [
           studentId,
           role,
-          "employer_evaluation_submitted",
-          "employer_evaluation_masters",
+          "company_evaluation_submitted",
+          "company_evaluation_masters",
           masterId,
-          `Student submitted a supervisor evaluation for their internship at ${internship.company_name}.`,
+          `Student submitted a company evaluation for their internship at ${internship.company_name}.`,
           JSON.stringify({
             internship_record_id: internship.id,
-            employer_id: internship.employer_id,
             evaluation_period: evaluationPeriod,
             criteria_count: scores.length,
           }),
@@ -178,7 +168,7 @@ export const createEmployerEvaluation = async (req, res) => {
       );
     } catch (logError) {
       reportError(
-        "Activity log insert failed (employer evaluation):",
+        "Activity log insert failed (company evaluation):",
         logError,
       );
     }
@@ -192,23 +182,17 @@ export const createEmployerEvaluation = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: "Supervisor evaluation submitted successfully.",
+      message: "Company evaluation submitted successfully.",
       evaluationId: masterId,
     });
   } catch (error) {
     if (connection) await connection.rollback();
     if (error?.status) return res.status(error.status).json({ error: error.message, code: error.code });
-    if (error?.code === "ER_DUP_ENTRY" && /uq_employer_evaluation_active_slot/.test(error.sqlMessage || error.message || "")) {
-      return res.status(503).json({
-        error: "Multiple supervisor evaluations require a database update. Please ask your administrator to apply the evaluation migration.",
-        code: "EVALUATION_SCHEMA_UPGRADE_REQUIRED",
-      });
-    }
     if (error?.code === "ER_DUP_ENTRY") return res.status(409).json({ error: "The evaluation could not be saved because of a conflicting record. Refresh and try again." });
-    reportError("Create employer evaluation error:", error);
+    reportError("Create company evaluation error:", error);
     res.status(500).json({
       success: false,
-      error: "Failed to submit supervisor evaluation.",
+      error: "Failed to submit company evaluation.",
     });
   } finally {
     if (connection) connection.release();
@@ -224,11 +208,9 @@ export const getStudentSubmittedEvaluations = async (req, res) => {
     const [masters] = await connection.execute(
       `SELECT 
          m.id, m.other_remarks, m.created_at, m.evaluation_period,
-         ir.company_name,
-         up.first_name AS employer_first_name, up.last_name AS employer_last_name
-       FROM employer_evaluation_masters m
+         ir.company_name
+       FROM company_evaluation_masters m
        INNER JOIN internship_records ir ON m.internship_record_id = ir.id
-       LEFT JOIN user_profiles up ON m.employer_id = up.user_id
        WHERE m.student_id = ? AND m.deleted_at IS NULL
        ORDER BY m.created_at DESC`,
       [studentId],
@@ -241,8 +223,8 @@ export const getStudentSubmittedEvaluations = async (req, res) => {
 
     const [scores] = await connection.execute(
       `SELECT s.evaluation_master_id, c.category, s.score
-       FROM employer_evaluation_scores s
-       JOIN employer_evaluation_criteria c ON s.criterion_id = c.id
+       FROM company_evaluation_scores s
+       JOIN company_evaluation_criteria c ON s.criterion_id = c.id
        WHERE s.evaluation_master_id IN (${placeholders})`,
       masterIds,
     );
@@ -275,9 +257,6 @@ export const getStudentSubmittedEvaluations = async (req, res) => {
       return {
         id: m.id,
         company_name: m.company_name,
-        employer_name:
-          `${m.employer_first_name || ""} ${m.employer_last_name || ""}`.trim() ||
-          "Your Supervisor",
         other_remarks: m.other_remarks,
         evaluation_period: m.evaluation_period,
         created_at: m.created_at,
@@ -298,4 +277,4 @@ export const getStudentSubmittedEvaluations = async (req, res) => {
   }
 };
 
-export const deleteEmployerEvaluation = evaluationDeleteHandler({ table: 'employer_evaluation_masters', scoresTable: 'employer_evaluation_scores', ownerColumn: 'student_id', authorRole: 'student' });
+export const deleteCompanyEvaluation = evaluationDeleteHandler({ table: 'company_evaluation_masters', scoresTable: 'company_evaluation_scores', ownerColumn: 'student_id', authorRole: 'student' });

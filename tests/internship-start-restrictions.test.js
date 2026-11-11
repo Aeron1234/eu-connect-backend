@@ -139,13 +139,15 @@ function evaluationFixture({ dateStarted = "2000-01-01", status = "ongoing", del
         return [status === "ongoing" && !deleted ? [{ id: "internship", company_name: "Company", employer_id: supervisor, date_started: dateStarted }] : []];
       }
       if (sql.includes("FROM user_profiles")) return [[{ first_name: "Test", last_name: "Supervisor" }]];
+      if (sql.includes("FROM student_academic_info WHERE user_id = ? ORDER BY id DESC LIMIT 1")) return [[{ department_id: 1 }]];
+      if (sql.includes("SELECT id FROM student_evaluation_criteria")) return [Array.from({ length: 29 }, (_, i) => ({ id: i + 1 }))];
       if (sql.includes("SELECT DISTINCT u.id")) return [[{ id: "department-head" }]];
       state.writes.push({ sql, params }); return [{ affectedRows: 1 }];
     },
   });
   const req = {
     verifiedUser: { id: "employer", role: "employer" },
-    body: { student_id: "student", evaluated_by: "employer", scores: Array.from({ length: 29 }, (_, i) => ({ criterion_name: `Criterion ${i}`, score: 4 })) },
+    body: { student_id: "student", evaluated_by: "employer", scores: Array.from({ length: 29 }, (_, i) => ({ criterion_id: i + 1, score: 4 })) },
     app: { get: () => ({ to: () => ({ emit: () => { assert.equal(state.commits, 1); state.events++; } }) }) },
   };
   for (const [key, path] of [["evaluations", "/evaluations/all"], ["notifications", "/notifications"], ["activity", "/activity-logs"]]) {

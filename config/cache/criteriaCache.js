@@ -2,9 +2,9 @@ import { invalidateDashboardCache } from "./dashboardCache.js";
 import { invalidateRouteCache } from "./cache.js";
 
 const routesByTable = {
-  employer_evaluation_criteria: [
-    "/api/v1/criteria/employer-evaluation",
-    "/api/v1/evaluation-criterias",
+  company_evaluation_criteria: [
+    "/api/v1/criteria/company-evaluation",
+    "/api/v1/company-evaluation/criteria",
   ],
   student_evaluation_criteria: [
     "/api/v1/criteria/student-evaluation",

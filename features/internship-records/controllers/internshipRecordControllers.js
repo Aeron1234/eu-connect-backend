@@ -1584,7 +1584,7 @@ export const getInternshipRecordEvaluations = async (req, res) => {
       ORDER BY m.created_at DESC, c.category ASC
     `;
 
-    // The student-to-supervisor direction retains null legacy reviewer fields.
+    // The student-to-company direction retains null legacy reviewer fields.
     // It is separate from the confidential employer-to-student performance direction.
     const givenQuery = `
       SELECT 
@@ -1596,10 +1596,10 @@ export const getInternshipRecordEvaluations = async (req, res) => {
         CONCAT(student_up.first_name, ' ', student_up.last_name) AS actor_name,
         c.category AS breakdown_label,
         s.score AS breakdown_score
-      FROM employer_evaluation_masters AS m
+      FROM company_evaluation_masters AS m
       JOIN internship_records AS ir ON m.internship_record_id = ir.id
-      JOIN employer_evaluation_scores AS s ON s.evaluation_master_id = m.id
-      JOIN employer_evaluation_criteria AS c ON s.criterion_id = c.id
+      JOIN company_evaluation_scores AS s ON s.evaluation_master_id = m.id
+      JOIN company_evaluation_criteria AS c ON s.criterion_id = c.id
       LEFT JOIN user_profiles AS student_up ON ir.user_id = student_up.user_id
       WHERE ir.id = ?
       ORDER BY m.created_at DESC, c.category ASC
@@ -1685,7 +1685,7 @@ export const getInternshipRecordEvaluations = async (req, res) => {
       "employer",
 
     );
-    const given = groupRows(givenRows, "Supervisor Evaluation", "self");
+    const given = groupRows(givenRows, "Company Evaluation", "self");
 
     const combined = [...received, ...given].sort(
       (a, b) => new Date(b.submittedDate) - new Date(a.submittedDate),

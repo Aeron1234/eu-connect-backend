@@ -85,11 +85,11 @@ export function evaluationEligibilityHandler(direction) {
       const params = performance ? [studentId, viewer.id] : [studentId];
       const [[record]] = await connection.execute(
         `SELECT ir.id
-         FROM internship_records ir WHERE ir.user_id = ? AND ir.status = 'ongoing' AND ir.deleted_at IS NULL AND ir.employer_id IS NOT NULL
+         FROM internship_records ir WHERE ir.user_id = ? AND ir.status = 'ongoing' AND ir.deleted_at IS NULL
          ${performance ? 'AND ir.employer_id = ?' : ''} ORDER BY ir.created_at DESC LIMIT 1`, params);
       res.set?.('Cache-Control', 'private, no-store');
       return res.json({ can_post: Boolean(record), internship_record_id: record?.id || null,
-        message: !record ? 'An ongoing internship with an accepted supervisor is required.' : '' });
+        message: !record ? (performance ? 'An ongoing internship with an accepted supervisor is required.' : 'An ongoing internship is required.') : '' });
     } catch (error) {
       reportError('Evaluation eligibility failed:', error);
       return res.status(500).json({ error: 'Could not check whether you can post an evaluation.' });

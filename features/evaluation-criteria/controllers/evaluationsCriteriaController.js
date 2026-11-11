@@ -7,7 +7,7 @@ import { headCriteriaDepartment } from "../criteriaDepartment.js";
 // routes are for non-Registrar department heads. Categories stay on criteria rows.
 function createCriteriaEndpoints(tableName) {
   const isStudentCriteria = tableName === "student_evaluation_criteria";
-  // Performance criteria omit a leading numeric category prefix; supervisor
+  // Performance criteria omit a leading numeric category prefix; company
   // criteria keep their category text after trimming.
   const cleanCategory = (value) => isStudentCriteria
     ? value.trim().replace(/^\d+\.\s*/, "").trim()
@@ -312,13 +312,13 @@ function createCriteriaEndpoints(tableName) {
 }
 
 export const {
-  getCriteria: getEmployerEvaluationCriteria,
-  addCriterion: addEmployerEvaluationCriterion,
-  deactivateCriterion: deactivateEmployerEvaluationCriterion,
-  reactivateCriterion: reactivateEmployerEvaluationCriterion,
-  deactivateSection: deactivateEmployerEvaluationSection,
-  reactivateSection: reactivateEmployerEvaluationSection,
-} = createCriteriaEndpoints("employer_evaluation_criteria");
+  getCriteria: getCompanyEvaluationCriteria,
+  addCriterion: addCompanyEvaluationCriterion,
+  deactivateCriterion: deactivateCompanyEvaluationCriterion,
+  reactivateCriterion: reactivateCompanyEvaluationCriterion,
+  deactivateSection: deactivateCompanyEvaluationSection,
+  reactivateSection: reactivateCompanyEvaluationSection,
+} = createCriteriaEndpoints("company_evaluation_criteria");
 
 export const {
   getCriteria: getStudentEvaluationCriteria,

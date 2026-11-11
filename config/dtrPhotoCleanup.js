@@ -3,6 +3,7 @@ import { db } from "./db.js";
 import { supabase } from "./supabase.js";
 import { reportError } from "./errorTracking.js";
 
+// Also reused by internship retention for document/report objects in the same bucket.
 // Queue in the same transaction that removes the DTR. Storage failures can
 // then be retried without retaining a deleted attendance row or losing paths.
 export async function queueDtrPhotoCleanup(connection, paths) {

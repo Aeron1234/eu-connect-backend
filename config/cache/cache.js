@@ -44,3 +44,9 @@ export function invalidateRouteCache(path, userId) {
 }
 
 export default cache;
+
+// Retention can remove entire internship trees used by many cached reports.
+export function invalidateAllResponseCache() {
+  generation += 1;
+  cache.flushAll();
+}
