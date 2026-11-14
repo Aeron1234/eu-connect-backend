@@ -2,6 +2,8 @@
 
 ## Past internship grouping (November 11, 2026)
 
+Runtime security baseline (November 14): package.json and package-lock.json require Node `>=24.22.3 <25`, incorporating the official November 11 security release. Update and verify local and hosted runtimes independently, then restart application processes; changing the engine requirement alone does not replace Node or restart deployments. This runtime patch does not require application dependency or environment-variable changes. Historical references to prior test/runtime versions are not current minimum requirements.
+
 `GET /alumni-internships` groups records linked through `internship_record_id` by student user ID within each normalized company. `alumni_count` counts those student groups; each group retains its original records in `records`, including optional `internship_position`, for display and record-specific staff actions. Manual alumni rows remain separate because a matching name does not prove they are the same person. Preserve the course/department/year filters and authorization before grouping; the frontend displays distinct nonempty positions in the single student row. No schema or environment change is needed.
 
 ## Missed DTR clock-out and photo cleanup (November 8, 2026)

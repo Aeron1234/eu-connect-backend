@@ -81,7 +81,7 @@ PDF files are generated in the **Next.js frontend's server runtime**. This backe
 
 | Area | Implementation |
 | --- | --- |
-| Runtime | Node.js `>=24.22.1 <25`, JavaScript ES modules |
+| Runtime | Node.js `>=24.22.3 <25`, JavaScript ES modules; November 11, 2026 security patch minimum |
 | HTTP API | Express 5 |
 | Database | MySQL-compatible database through `mysql2/promise`; supplied incremental SQL includes MariaDB-specific syntax |
 | Authentication | jsonwebtoken, bcryptjs, refresh-token records |

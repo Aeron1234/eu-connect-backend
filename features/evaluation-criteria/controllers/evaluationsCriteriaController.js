@@ -9,12 +9,25 @@ function createCriteriaEndpoints(tableName) {
   const isStudentCriteria = tableName === "student_evaluation_criteria";
   // Performance criteria omit a leading numeric category prefix; company
   // criteria keep their category text after trimming.
-  const cleanCategory = (value) => isStudentCriteria
-    ? value.trim().replace(/^\d+\.\s*/, "").trim()
-    : value.trim();
+  const cleanCategory = (value) =>
+    isStudentCriteria
+      ? value
+          .trim()
+          .replace(/^\d+\.\s*/, "")
+          .trim()
+      : value.trim();
   const departmentFor = async (connection, req, res) => {
-    const departmentId = await headCriteriaDepartment(connection, req.verifiedUser.id);
-    if (!departmentId) res.status(403).json({ error: "Evaluation criteria are available only to non-Registrar department heads." });
+    const departmentId = await headCriteriaDepartment(
+      connection,
+      req.verifiedUser.id,
+    );
+    if (!departmentId)
+      res
+        .status(403)
+        .json({
+          error:
+            "Evaluation criteria are available only to non-Registrar department heads.",
+        });
     return departmentId;
   };
   const getCriteria = async (req, res) => {
@@ -27,7 +40,9 @@ function createCriteriaEndpoints(tableName) {
       if (!departmentId) return;
 
       const whereClause =
-        includeInactive === "true" ? "WHERE department_id = ?" : "WHERE department_id = ? AND is_active = 1";
+        includeInactive === "true"
+          ? "WHERE department_id = ?"
+          : "WHERE department_id = ? AND is_active = 1";
 
       const [rows] = await connection.execute(
         `SELECT id, category, criterion_name, is_active
@@ -65,7 +80,8 @@ function createCriteriaEndpoints(tableName) {
     try {
       const { category, criterion_name } = req.body;
 
-      const categoryName = typeof category === "string" ? cleanCategory(category) : "";
+      const categoryName =
+        typeof category === "string" ? cleanCategory(category) : "";
       if (!categoryName || !criterion_name?.trim()) {
         return res
           .status(400)
@@ -208,7 +224,8 @@ function createCriteriaEndpoints(tableName) {
     try {
       const { category } = req.params;
 
-      const categoryName = typeof category === "string" ? cleanCategory(category) : "";
+      const categoryName =
+        typeof category === "string" ? cleanCategory(category) : "";
       if (!categoryName) {
         return res.status(400).json({ error: "category is required." });
       }
@@ -258,7 +275,8 @@ function createCriteriaEndpoints(tableName) {
     try {
       const { category } = req.params;
 
-      const categoryName = typeof category === "string" ? cleanCategory(category) : "";
+      const categoryName =
+        typeof category === "string" ? cleanCategory(category) : "";
       if (!categoryName) {
         return res.status(400).json({ error: "category is required." });
       }

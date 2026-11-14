@@ -45,6 +45,7 @@ test('approval remains reason-free and clears any prior reason',async()=>{
   const {req,calls}=setup();req.body={status:'ongoing'};const res=response();await approveInternshipRecord(req,res);assert.equal(res.code,200);
   assert.deepEqual(calls.find(c=>c.sql.includes('SET updated_at = NOW(), status')).values,['ongoing',null,'record']);
 });
+
 test('restore clears the saved reason and student list selects it',async()=>{
   const {req,calls}=setup({status:'rejected'});const res=response();await restoreInternshipRecord(req,res);assert.equal(res.code,200);
   assert.ok(calls.some(c=>c.sql.includes("rejection_reason = NULL")));
