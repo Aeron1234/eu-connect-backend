@@ -1,3 +1,4 @@
+import { validateStudentIdentity } from "../studentIdentity.mjs";
 import crypto from "node:crypto";
 import { prepareAccountSetup, deliverAccountSetup } from "../../auth/accountSetup.js";
 import { formatActivityLogUserName } from "../../../config/activityLogNames.js";
@@ -125,7 +126,7 @@ export const getUserProfile = async (req, res) => {
             u.id, u.email, u.username, r.role, u.status, u.created_at, u.password_changed_at,
             up.first_name, up.last_name, up.contact_number, up.full_address, up.gender, up.avatar,
             c.course_name AS course, d.code AS department_code, d.name AS department_name,
-            sai.student_number, sai.year_level
+            COALESCE(up.school_id, sai.student_number) AS student_number, sai.year_level
           FROM users u
           INNER JOIN roles r ON r.id = u.role_id
           INNER JOIN user_profiles up ON up.user_id = u.id
@@ -597,18 +598,19 @@ export const createUser = async (req, res) => {
     return res.status(400).json({ message: "Email address is required." });
   }
   const email = submittedEmail.trim();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 50) {
     return res.status(400).json({ message: "Invalid email format." });
   }
 
   let connection;
+  let creationLocked = false;
   try {
     connection = await db.getConnection();
     const { id: userId, role: actorRole } = req.verifiedUser;
     const userData = req.body;
 
     const {
-      username,
+      username: submittedUsername,
       first_name,
       middle_initial,
       last_name,
@@ -619,17 +621,20 @@ export const createUser = async (req, res) => {
     } = userData;
 
     const requiredFields = [
-      "username",
       "first_name",
       "last_name",
       "role",
     ];
     for (const field of requiredFields) {
-      if (!userData[field] || userData[field].trim() === "") {
+      if (typeof userData[field] !== "string" || userData[field].trim() === "") {
         return res.status(400).json({
           message: `${field.replace(/_/g, " ")} is required.`,
         });
       }
+    }
+
+    if ([...first_name].length > 50 || [...last_name].length > 50) {
+      return res.status(400).json({ message: "First and last names must be at most 50 characters." });
     }
 
     // Accept an optional single letter with an optional period; persist uppercase
@@ -695,7 +700,59 @@ export const createUser = async (req, res) => {
       studentDepartmentId = courseRows[0].department_id;
     }
 
+    let username = submittedUsername;
+    let schoolId = null;
+    if (roleName === "student") {
+      try {
+        const identity = validateStudentIdentity(userData);
+        username = identity.username;
+        schoolId = identity.schoolId || null;
+      } catch (error) {
+        return res.status(400).json({ message: error.message });
+      }
+    } else if (typeof username !== "string" || !username.trim() || [...username.trim()].length > 50) {
+      return res.status(400).json({ message: "Enter a username of at most 50 characters." });
+    } else {
+      username = username.trim();
+    }
+
+    const [[creationLock]] = await connection.execute("SELECT GET_LOCK('account_creation', 10) AS acquired");
+    if (Number(creationLock?.acquired) !== 1) {
+      return res.status(409).json({ message: "Account creation is busy. Please try again." });
+    }
+    creationLocked = true;
     await connection.beginTransaction();
+
+    if (schoolId) {
+      const [legacyIds] = await connection.execute("SELECT user_id FROM student_academic_info WHERE UPPER(TRIM(student_number)) = ? LIMIT 1", [schoolId]);
+      if (legacyIds.length) {
+        await connection.rollback();
+        return res.status(409).json({ message: "School ID is already assigned to an account." });
+      }
+      const [existingIds] = await connection.execute("SELECT user_id FROM user_profiles WHERE school_id = ?", [schoolId]);
+      if (existingIds.length) {
+        await connection.rollback();
+        return res.status(409).json({ message: "School ID is already assigned to an account." });
+      }
+    }
+    if (roleName === "student" && !schoolId) {
+      const base = username;
+      let suffix = 1;
+      let taken = true;
+      while (taken && suffix <= 1000) {
+        const [matches] = await connection.execute("SELECT id FROM users WHERE username = ?", [username]);
+        taken = matches.length > 0;
+        if (taken) {
+          suffix++;
+          const ending = "." + suffix;
+          username = [...base].slice(0, 50 - ending.length).join("") + ending;
+        }
+      }
+      if (taken) {
+        await connection.rollback();
+        return res.status(409).json({ message: "Could not allocate a username. Try adding the school ID." });
+      }
+    }
 
     const [usernameExists] = await connection.execute(
       `SELECT id FROM users WHERE username = ?`,
@@ -747,12 +804,17 @@ export const createUser = async (req, res) => {
       [newId, first_name, normalizedMiddleInitial || null, last_name, roleName === "student" ? gender : null],
     );
 
+    if (roleName === "student" && schoolId) {
+      await connection.execute("UPDATE user_profiles SET school_id = ? WHERE user_id = ?", [schoolId, newId]);
+    }
+
     if (roleName === "student") {
       // department_id comes from the selected course, not a form field
       await connection.execute(
         `INSERT INTO student_academic_info (user_id, course_id, department_id) VALUES (?, ?, ?)`,
         [newId, Number(course), studentDepartmentId],
       );
+      if (schoolId) await connection.execute("UPDATE student_academic_info SET student_number = ? WHERE user_id = ?", [schoolId, newId]);
     }
 
     if (roleName === "department_head") {
@@ -799,24 +861,35 @@ export const createUser = async (req, res) => {
       reportError("Activity log insert failed (account created):", logError);
     }
 
-    const invitation = await prepareAccountSetup(connection, { id: newId, email, username, password_setup_required: 1 });
+    let invitation;
+    if (req.queueAccountInvitation) {
+      await connection.execute("INSERT INTO account_invitation_jobs (user_id) VALUES (?)", [newId]);
+    } else {
+      invitation = await prepareAccountSetup(connection, { id: newId, email, username, password_setup_required: 1 });
+    }
     await connection.commit();
     // Release the pool connection before waiting on external email delivery.
+    await connection.execute("SELECT RELEASE_LOCK('account_creation')");
+    creationLocked = false;
     connection.release(); connection = null;
     invalidateActivityLogsCache();
 
     invalidateRouteCache("/api/v1/accounts");
-    const sent = await deliverAccountSetup(invitation);
+    const sent = invitation ? await deliverAccountSetup(invitation) : false;
     res.status(201).json({
-      success: true, accountId: newId, invitation_sent: sent,
-      message: sent ? "Account created. A password setup invitation was sent." : "Account created, but the invitation email could not be confirmed. Use Resend invitation; do not create the account again.",
+      success: true, accountId: newId, username, invitation_sent: sent, invitation_queued: Boolean(req.queueAccountInvitation),
+      message: req.queueAccountInvitation ? "Account created. Invitation queued." : sent ? "Account created. A password setup invitation was sent." : "Account created, but the invitation email could not be confirmed. Use Resend invitation; do not create the account again.",
     });
   } catch (error) {
     if (connection) await connection.rollback();
-    console.log("Create account error: ", error);
+    reportError("Account creation failed:", new Error(error?.code === "ER_DUP_ENTRY" ? "Duplicate account identity." : "Account creation operation failed."));
+    if (error?.code === "ER_DUP_ENTRY") return res.status(409).json({ success: false, error: "Email, username or school ID already exists." });
     res.status(500).json({ error: "Database query failed", success: false });
   } finally {
-    if (connection) connection.release();
+    if (connection) {
+      try { if (creationLocked) await connection.execute("SELECT RELEASE_LOCK('account_creation')"); }
+      finally { connection.release(); }
+    }
   }
 };
 

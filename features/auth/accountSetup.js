@@ -62,6 +62,11 @@ export async function resendAccountInvitation(req, res) {
       await connection.rollback();
       return res.status(409).json({ error: 'Only active accounts awaiting password setup can receive an invitation.' });
     }
+    const [queued] = await connection.execute("SELECT status FROM account_invitation_jobs WHERE user_id = ? AND status IN ('pending','processing')", [user.id]);
+    if (queued.length) {
+      await connection.rollback();
+      return res.status(409).json({ error: 'The invitation is queued or being sent. Refresh its status before resending.' });
+    }
     if (Number(user.cooldown)) {
       await connection.rollback();
       return res.status(429).json({ error: 'Please wait one minute before resending this invitation.' });
@@ -74,6 +79,7 @@ export async function resendAccountInvitation(req, res) {
     connection.release(); connection = null;
     invalidateActivityLogsCache(); invalidateRouteCache('/api/v1/accounts');
     const sent = await deliverAccountSetup(job);
+    await db.execute("UPDATE account_invitation_jobs SET status = ? WHERE user_id = ?", [sent ? "sent" : "failed", user.id]);
     return res.json({ success: sent, prepared: true, invitation_sent: sent,
       ...(sent ? { message: 'Invitation sent. Earlier setup links are no longer valid.' } : { error: 'The invitation email could not be confirmed. Check the email configuration and try again after one minute.' }) });
   } catch {
@@ -99,6 +105,8 @@ export async function requestPasswordSetup(req, res) {
     if (!user || user.status !== 'active' || user.deleted_at || Number(user.cooldown)) {
       await connection.rollback(); return res.json(generic);
     }
+    const [queued] = await connection.execute("SELECT status FROM account_invitation_jobs WHERE user_id = ? AND status IN ('pending','processing')", [user.id]);
+    if (queued.length) { await connection.rollback(); return res.json(generic); }
     job = await prepareAccountSetup(connection, user);
     await connection.commit();
     connection.release(); connection = null;

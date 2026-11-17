@@ -25,6 +25,9 @@ test('creation ignores a submitted password, saves pending setup and commits bef
   delete process.env.EMAILJS_SERVICE_ID;
   db.getConnection = async () => ({ async beginTransaction() {}, async rollback() { assert.fail('must not rollback a successful creation'); },
     async commit() { committed = true; }, release() { released = true; }, async execute(sql, params) {
+    if (sql.includes("GET_LOCK")) return [[{ acquired: 1 }]];
+    if (sql.includes("RELEASE_LOCK")) return [[{ released: 1 }]];
+    if (sql.includes("FROM account_invitation_jobs")) return [[]];
       calls.push({sql,params});
       if (sql.includes('FROM roles')) return [[{role:'employer'}]];
       if (sql.startsWith('SELECT id FROM users')) return [[]];
@@ -43,7 +46,10 @@ test('creation ignores a submitted password, saves pending setup and commits bef
 
 test('preparing invitations/recovery stores only a digest, replaces previous credentials, and uses distinct expiry periods',async()=>{
   for(const pending of [0,1]){
-    const calls=[];const job=await prepareAccountSetup({async execute(sql,params){calls.push({sql,params});return[{affectedRows:1}];}}, {...setupUser,password_setup_required:pending});
+    const calls=[];const job=await prepareAccountSetup({async execute(sql,params){
+    if (sql.includes("GET_LOCK")) return [[{ acquired: 1 }]];
+    if (sql.includes("RELEASE_LOCK")) return [[{ released: 1 }]];
+    if (sql.includes("FROM account_invitation_jobs")) return [[]];calls.push({sql,params});return[{affectedRows:1}];}}, {...setupUser,password_setup_required:pending});
     assert.match(job.token,/^[a-f0-9]{64}$/);assert.equal(calls[0].params[0],digest(job.token));assert.notEqual(calls[0].params[0],job.token);
     assert.equal(calls[0].params[1],pending?1440:30);assert.match(calls[0].sql,/temp_password_jti = NULL/);
   }
@@ -53,6 +59,9 @@ test('successful creation sends only after committing and releasing its connecti
   Object.assign(process.env,{EMAILJS_SERVICE_ID:'test-service',EMAILJS_TEMPLATE_ID:'test-template',EMAILJS_PUBLIC_KEY:'test-public',EMAILJS_PRIVATE_KEY:'test-private',CLIENT_URL:'https://frontend.example.test'});
   let committed=false,released=false,delivered=0;
   db.getConnection=async()=>({async beginTransaction(){},async rollback(){assert.fail('must not rollback');},async commit(){committed=true;},release(){released=true;},async execute(sql){
+    if (sql.includes("GET_LOCK")) return [[{ acquired: 1 }]];
+    if (sql.includes("RELEASE_LOCK")) return [[{ released: 1 }]];
+    if (sql.includes("FROM account_invitation_jobs")) return [[]];
     if(sql.includes('FROM roles'))return[[{role:'employer'}]];
     if(sql.startsWith('SELECT id FROM users'))return[[]];return[{affectedRows:1}];
   }});
@@ -64,6 +73,9 @@ test('successful creation sends only after committing and releasing its connecti
 test('setup consumes exactly one token and commits password, activation, session revocation and audit together',async()=>{
   let available=true,lock=Promise.resolve();const writes=[];let commits=0;
   db.getConnection=async()=>{let unlock;return{async beginTransaction(){},async commit(){commits++;unlock?.();},async rollback(){unlock?.();},release(){},async execute(sql,params){
+    if (sql.includes("GET_LOCK")) return [[{ acquired: 1 }]];
+    if (sql.includes("RELEASE_LOCK")) return [[{ released: 1 }]];
+    if (sql.includes("FROM account_invitation_jobs")) return [[]];
     if(sql.includes('SELECT u.id')){const previous=lock;lock=new Promise(resolve=>{unlock=resolve;});await previous;assert.match(sql,/FOR UPDATE/);assert.match(sql,/expires_at > NOW\(\)/);assert.deepEqual(params,[digest(token)]);return[available?[setupUser]:[]];}
     writes.push({sql,params});if(sql.startsWith('UPDATE users SET password_hash')){assert.match(sql,/password_setup_required = 0/);assert.match(sql,/password_setup_token_hash = NULL/);assert.equal(await bcrypt.compare(passwords.newPassword,params[0]),true);available=false;}
     return[{affectedRows:1}];
@@ -75,7 +87,10 @@ test('setup consumes exactly one token and commits password, activation, session
 });
 
 test('expired/replaced/deactivated or unknown links cannot write; malformed credentials fail before database access',async()=>{
-  db.getConnection=async()=>({async beginTransaction(){},async rollback(){},release(){},async execute(sql){assert.match(sql,/status = 'active'.*deleted_at IS NULL/s);assert(sql.includes('SELECT'));return[[]];}});
+  db.getConnection=async()=>({async beginTransaction(){},async rollback(){},release(){},async execute(sql){
+    if (sql.includes("GET_LOCK")) return [[{ acquired: 1 }]];
+    if (sql.includes("RELEASE_LOCK")) return [[{ released: 1 }]];
+    if (sql.includes("FROM account_invitation_jobs")) return [[]];assert.match(sql,/status = 'active'.*deleted_at IS NULL/s);assert(sql.includes('SELECT'));return[[]];}});
   const expired=response();await completeAccountSetup({body:passwords},expired);assert.equal(expired.statusCode,400);
   db.getConnection=async()=>assert.fail('invalid input must not acquire a connection');
   for(const body of [{...passwords,token:'bad'},{...passwords,newPassword:'short'},{...passwords,confirmPassword:'different'},{...passwords,newPassword:'🌴'.repeat(30),confirmPassword:'🌴'.repeat(30)}]){
@@ -87,6 +102,9 @@ test('a setup transaction failure rolls back without claiming completion or inva
   cache.set('setup-cache-fixture',{userId:'new-user',path:'/api/v1/accounts',body:{pending:true}});
   let rolledBack=false;
   db.getConnection=async()=>({async beginTransaction(){},async rollback(){rolledBack=true;},async commit(){assert.fail('must not commit');},release(){},async execute(sql){
+    if (sql.includes("GET_LOCK")) return [[{ acquired: 1 }]];
+    if (sql.includes("RELEASE_LOCK")) return [[{ released: 1 }]];
+    if (sql.includes("FROM account_invitation_jobs")) return [[]];
     if(sql.includes('SELECT u.id'))return[[setupUser]];
     if(sql.startsWith('UPDATE users SET password_hash'))return[{affectedRows:1}];
     throw new Error('test failure');
@@ -96,7 +114,10 @@ test('a setup transaction failure rolls back without claiming completion or inva
 
 test('resend enforces pending/active state and cooldown without sending or writing on denial',async()=>{
   for(const user of [null,{...setupUser,password_setup_required:0},{...setupUser,status:'inactive'},{...setupUser,cooldown:1}]){
-    db.getConnection=async()=>({async beginTransaction(){},async rollback(){},release(){},async execute(sql){assert(sql.includes('SELECT'));return[user?[user]:[]];}});
+    db.getConnection=async()=>({async beginTransaction(){},async rollback(){},release(){},async execute(sql){
+    if (sql.includes("GET_LOCK")) return [[{ acquired: 1 }]];
+    if (sql.includes("RELEASE_LOCK")) return [[{ released: 1 }]];
+    if (sql.includes("FROM account_invitation_jobs")) return [[]];assert(sql.includes('SELECT'));return[user?[user]:[]];}});
     const res=response();await resendAccountInvitation({params:{accountId:'new-user'},verifiedUser:{id:'admin',role:'admin'}},res);
     assert.equal(res.statusCode,user?.cooldown?429:409);
   }
@@ -106,7 +127,10 @@ test('public recovery returns the same response for missing, inactive, throttled
   delete process.env.EMAILJS_SERVICE_ID;
   const bodies=[];
   for(const user of [null,{...setupUser,status:'inactive'},{...setupUser,cooldown:1},setupUser,{...setupUser,password_setup_required:0}]){
-    db.getConnection=async()=>({async beginTransaction(){},async commit(){},async rollback(){},release(){},async execute(sql){return sql.includes('SELECT')?[user?[user]:[]]:[{affectedRows:1}];}});
+    db.getConnection=async()=>({async beginTransaction(){},async commit(){},async rollback(){},release(){},async execute(sql){
+    if (sql.includes("GET_LOCK")) return [[{ acquired: 1 }]];
+    if (sql.includes("RELEASE_LOCK")) return [[{ released: 1 }]];
+    if (sql.includes("FROM account_invitation_jobs")) return [[]];return sql.includes('SELECT')?[user?[user]:[]]:[{affectedRows:1}];}});
     const res=response();await requestPasswordSetup({body:{email:' new@example.test '}},res);assert.equal(res.statusCode,200);bodies.push(res.body);
   }
   assert(bodies.every(x=>JSON.stringify(x)===JSON.stringify(bodies[0])));
@@ -160,7 +184,10 @@ test('recovery logs safe provider/schema diagnostics while keeping its public re
   const logged=[], originalError=console.error;
   console.error=(...args)=>logged.push(args);
   try {
-    db.getConnection=async()=>({async beginTransaction(){},async commit(){},async rollback(){},release(){},async execute(sql){return sql.includes('SELECT')?[[{...setupUser,password_setup_required:0}]]:[{affectedRows:1}];}});
+    db.getConnection=async()=>({async beginTransaction(){},async commit(){},async rollback(){},release(){},async execute(sql){
+    if (sql.includes("GET_LOCK")) return [[{ acquired: 1 }]];
+    if (sql.includes("RELEASE_LOCK")) return [[{ released: 1 }]];
+    if (sql.includes("FROM account_invitation_jobs")) return [[]];return sql.includes('SELECT')?[[{...setupUser,password_setup_required:0}]]:[{affectedRows:1}];}});
     global.fetch=async()=>new Response(`new@example.test SENSITIVE-private-key ${token}`,{status:403});
     const delivery=response();await requestPasswordSetup({body:{email:'new@example.test'}},delivery);
     assert.equal(delivery.statusCode,200);assert.match(delivery.body.message,/If that email is registered/);

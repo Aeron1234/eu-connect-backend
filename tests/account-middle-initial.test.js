@@ -36,6 +36,9 @@ test("admin account creation saves an optional uppercase middle initial", async 
     async rollback() {},
     release() {},
     async execute(sql, params) {
+        if (sql.includes("GET_LOCK")) return [[{ acquired: 1 }]];
+        if (sql.includes("RELEASE_LOCK")) return [[{ released: 1 }]];
+        if (sql.includes("FROM account_invitation_jobs")) return [[]];
       calls.push({ sql, params });
       if (sql.includes("FROM roles")) return [[{ role: "employer" }]];
       if (sql.startsWith("SELECT id FROM users")) return [[]];

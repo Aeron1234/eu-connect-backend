@@ -37,6 +37,9 @@ test('every new account role checks and stores the trimmed required email withou
     db.getConnection = async () => ({
       async beginTransaction() {}, async rollback() {}, async commit() { committed = true; }, release() { released = true; },
       async execute(sql, params) {
+        if (sql.includes("GET_LOCK")) return [[{ acquired: 1 }]];
+        if (sql.includes("RELEASE_LOCK")) return [[{ released: 1 }]];
+        if (sql.includes("FROM account_invitation_jobs")) return [[]];
         calls.push({ sql, params });
         if (sql.includes('FROM roles')) return [[{ role }]];
         if (sql.includes('SELECT department_id FROM courses')) return [[{ department_id: 9 }]];
@@ -61,6 +64,9 @@ test('an existing email is rejected after trimming without creating an account o
     async beginTransaction() {}, async commit() { assert.fail('duplicate must not commit'); },
     async rollback() { rolledBack = true; }, release() { released = true; },
     async execute(sql, params) {
+        if (sql.includes("GET_LOCK")) return [[{ acquired: 1 }]];
+        if (sql.includes("RELEASE_LOCK")) return [[{ released: 1 }]];
+        if (sql.includes("FROM account_invitation_jobs")) return [[]];
       if (sql.includes('FROM roles')) return [[{ role: 'employer' }]];
       if (sql.includes('WHERE username = ?')) return [[]];
       if (sql.includes('WHERE email = ?')) { assert.deepEqual(params, ['person@example.test']); return [[{ id: 'existing' }]]; }

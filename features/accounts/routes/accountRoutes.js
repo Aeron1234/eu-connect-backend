@@ -1,3 +1,4 @@
+import { previewAccountImport, importStudentAccounts, accountImportInvitations } from "../accountImport.js";
 import { resendAccountInvitation } from "../../auth/accountSetup.js";
 import express from "express";
 import multer from "multer";
@@ -124,5 +125,9 @@ accountRoutes.patch(
 );
 
 accountRoutes.post("/accounts/:accountId/invitation", verifyUser, verifyRole(["admin"]), strictLimiter, resendAccountInvitation);
+
+accountRoutes.post("/accounts/import/preview", verifyUser, verifyRole(["admin"]), generalLimiter, previewAccountImport);
+accountRoutes.post("/accounts/import", verifyUser, verifyRole(["admin"]), mediumLimiter, importStudentAccounts);
+accountRoutes.post("/accounts/import/invitations", verifyUser, verifyRole(["admin"]), generalLimiter, accountImportInvitations);
 
 export default accountRoutes;

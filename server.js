@@ -1,5 +1,6 @@
 // Load local environment settings before routes evaluate JWT/socket configuration.
 import "dotenv/config";
+import { drainAccountInvitations } from "./features/accounts/accountInvitationQueue.js";
 import { mountApiRoutes } from "./config/api.js";
 import dns from "node:dns";
 dns.setDefaultResultOrder("ipv4first");
@@ -255,3 +256,6 @@ const PORT = process.env.PORT || 7000;
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
+// Durable CSV invitation delivery. Existing mail service serializes sends.
+cron.schedule("* * * * *", () => drainAccountInvitations().catch(() => reportError("Account invitation queue:", new Error("Could not process invitation jobs."))));
