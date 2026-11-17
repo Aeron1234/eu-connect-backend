@@ -1,0 +1,25 @@
+[Unit]
+Description=EU-Connect Express API and scheduled jobs
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=euconnect
+Group=euconnect
+WorkingDirectory=/srv/eu-connect/current/backend
+Environment=NODE_ENV=production
+Environment=TZ=Asia/Manila
+Environment=HOME=/srv/eu-connect
+EnvironmentFile=/srv/eu-connect/shared/backend.env
+ExecStart=/usr/local/bin/node /srv/eu-connect/current/backend/server.js
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
+

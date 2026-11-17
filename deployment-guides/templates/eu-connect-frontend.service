@@ -1,0 +1,26 @@
+[Unit]
+Description=EU-Connect Next.js frontend
+Wants=network-online.target
+After=network-online.target eu-connect-backend.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=euconnect
+Group=euconnect
+WorkingDirectory=/srv/eu-connect/current/frontend
+Environment=NODE_ENV=production
+Environment=TZ=Asia/Manila
+Environment=HOME=/srv/eu-connect
+Environment=PUPPETEER_CACHE_DIR=/srv/eu-connect/.cache/puppeteer
+EnvironmentFile=/srv/eu-connect/shared/frontend.env
+ExecStart=/usr/local/bin/node /srv/eu-connect/current/frontend/node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 3000
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
+

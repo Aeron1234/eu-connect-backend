@@ -25,7 +25,7 @@ async function deleteInternship(connection, id, queueFiles) {
   }
   // These references do not all cascade in the deployed MariaDB schema.
   await connection.execute("DELETE i FROM summary_report_images i JOIN summary_reports r ON r.id = i.report_id WHERE r.internship_id = ?", [id]);
-  for (const table of ["summary_reports", "weekly_narratives", "daily_narratives", "daily_time_records", "internship_documents", "dtr_locations", "dtr_shift_restrictions", "internship_rotations", "supervisor_requests"]) {
+  for (const table of ["summary_reports", "weekly_narratives", "daily_time_records", "internship_documents", "dtr_locations", "dtr_shift_restrictions", "internship_rotations", "supervisor_requests"]) {
     await connection.execute(`DELETE FROM ${table} WHERE internship_id = ?`, [id]);
   }
   await connection.execute("DELETE FROM alumni_internship_records WHERE internship_record_id = ?", [id]);

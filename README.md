@@ -357,7 +357,7 @@ Paths below are relative to the API base. The linked routers define exact method
 | Internship records | `/internships/new`, `/internship-records/department`, `/internship-records/overview/:internshipId`, record lifecycle/detail paths | [internshipRecordRoutes.js](features/internship-records/routes/internshipRecordRoutes.js) |
 | Attendance | `/dtr/today`, `/dtr/history`, `/dtr/status`, `/dtr/clock-in`, `/dtr/clock-out`, `/dtr/break/start`, `/dtr/break/resume` | [dtrRoutes.js](features/dtr/routes/dtrRoutes.js) |
 | Weekly narratives | `/weekly-narratives/history`, `/weekly-narratives/new`, `/weekly-narratives/print/:internshipId` | [weeklyNarrativeRoutes.js](features/weekly-narratives/routes/weeklyNarrativeRoutes.js) |
-| Earlier narrative endpoints | `/narratives/history`, `/narratives/new`, record/profile narrative paths | [narrativeRoutes.js](features/narratives/routes/narrativeRoutes.js) |
+| Weekly narrative endpoints | `/weekly-narratives/history` and weekly record/profile paths | [weeklyNarrativeRoutes.js](features/weekly-narratives/routes/weeklyNarrativeRoutes.js) |
 | Summary reports | `/summary-reports`, `/summary-reports/:internshipId`, authorized attachment and record paths | [summaryReportRoutes.js](features/summary-reports/routes/summaryReportRoutes.js) |
 | Documents | `/internships/files`, `/internships/files/new`, `/internships/files/:fileId/download`, `/files/:fileId/accept` | [fileRoutes.js](features/documents/routes/fileRoutes.js) |
 | Opportunities and favorites | `/internship-postings`, `/internship-postings/:postingId`, `/internship-postings/toggle-favorite/:postingId` | [internshipPostsRoutes.js](features/internship-posts/routes/internshipPostsRoutes.js) |
@@ -759,3 +759,14 @@ Both templates were saved directly in EmailJS with matching maroon EU-Connect he
 Administrators retain manual creation and can import up to 100 students from a UTF-8 CSV (256 KB maximum), preview validation errors, create eligible rows and download rows to correct. Both creation paths generate LastName.FirstName.SCHOOL-ID using optional school IDs; no-ID name collisions receive numeric suffixes. IDs are saved in user_profiles.school_id and mirrored to the initial academic student_number. Existing usernames are preserved. Duplicate checks include inactive accounts and historical student numbers. Other roles retain manual usernames.
 
 Apply backend scripts/2026-11-17-student-account-import.sql before paired deployment. Bulk invitations are durable account_invitation_jobs processed five per minute, using existing EmailJS configuration; failed/uncertain sends retain accounts and require explicit resend. Preview/import/status APIs are admin-only; validate again on import and serialize creation via DB lock. Keep both studentIdentity.mjs copies identical. Help/page manuals share the accounts guide. See docs/student-account-import.md for format, limits, partial-success/retry behavior and operations. No new package or environment variable is required. A production schema migration and real email/browser verification are separate deployment steps.
+
+
+## Daily narrative retirement (November 17, 2026)
+
+Weekly narratives are the supported journal feature. Daily narrative routes and controllers under features/narratives have been removed, and server.js no longer mounts them on either API prefix. Legacy /narratives/*, /searched-user/narratives/:searchedUserId and /internship-records/narratives/:internshipId routes are retired. Use the existing weekly-narratives endpoints and frontend pages.
+
+The internship retention worker no longer queries daily_narratives. Deploy this backend before applying scripts/2026-11-17-remove-daily-narratives.sql to permanently drop that table. The migration is repeatable, destroys daily narrative data and requires a backup. Historical copies/ files are unmounted reference snapshots. No frontend, environment or dependency change is required. Verify with tests/soft-delete-retention.test.js and the existing weekly narrative tests.
+
+## VPS deployment guides
+
+See [deployment-guides](deployment-guides/README.md) for both services, Nginx, HTTPS, systemd, environment templates, database migration and operational procedures. The included orientation SQL contains private account data and requires restricted access.

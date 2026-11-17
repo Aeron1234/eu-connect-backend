@@ -7,6 +7,8 @@ function fixture({ table = "internship_records", lock = 1, restored = false, fai
   const connection = {
     execute: async (sql, params) => {
       calls.push({ sql, params });
+      // Production databases may already have permanently dropped the retired table.
+      if (sql.includes("daily_narratives")) throw Object.assign(new Error("retired table is absent"), { code: "ER_NO_SUCH_TABLE" });
       if (sql.includes("GET_LOCK")) return [[{ acquired: lock }]];
       if (sql.includes("ORDER BY deleted_at")) return [sql.includes(`FROM ${table} `) ? [{ id: "expired" }] : []];
       if (sql.includes("FOR UPDATE") && sql.includes("deleted_at <")) return [restored ? [] : [{ id: "expired" }]];
@@ -34,6 +36,7 @@ test("retention covers only the five approved families and rechecks 30-day cutof
   assert(f.calls.findIndex(c => c.sql === "QUEUE FILES") < f.calls.findIndex(c => c.sql === "DELETE FROM internship_records WHERE id = ?"));
   assert(f.calls.findIndex(c => c.sql.startsWith("DELETE FROM weekly_narratives")) < f.calls.findIndex(c => c.sql === "DELETE FROM internship_records WHERE id = ?"));
   assert.equal(f.invalidated(), 1);
+  assert.equal(f.errors.length, 0);
 });
 test("overlapping workers skip without deleting", async () => {
   const f = fixture({ lock: 0 }); assert.equal((await f.run()).skipped, true);

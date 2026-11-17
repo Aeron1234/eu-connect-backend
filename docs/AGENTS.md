@@ -312,17 +312,17 @@ Do not reintroduce anonymous or cross-user response sharing.
 
 All paths below are relative to `/eu-connect/api`.
 
-| Area                 | Cached GET endpoints                                                            | TTL         |
-| -------------------- | ------------------------------------------------------------------------------- | ----------- |
-| Accounts             | `/avatars`, `/account/user`, `/accounts`, `/create-account-form-data`, `/roles` | 60 seconds  |
-| Activity logs        | `/activity-logs/mine`, `/activity-logs`                                         | 30 seconds  |
-| Notifications        | `/notifications`, `/notifications/unread-count`                                 | 15 seconds  |
-| Departments/courses  | `/departments`, `/courses`                                                      | 300 seconds |
-| Criteria management and forms | Department-scoped criteria and active-form endpoints | Not response-cached |
-| Internship postings  | `/internship-postings`, `/posted-jobs`                                          | 30 seconds  |
-| Dashboard summaries  | Six endpoints listed below                                                      | 15 seconds  |
-| Announcements | `/announcements/history` | 30 seconds |
-| Announcement categories | `/announcements/categories` | 300 seconds |
+| Area                          | Cached GET endpoints                                                            | TTL                 |
+| ----------------------------- | ------------------------------------------------------------------------------- | ------------------- |
+| Accounts                      | `/avatars`, `/account/user`, `/accounts`, `/create-account-form-data`, `/roles` | 60 seconds          |
+| Activity logs                 | `/activity-logs/mine`, `/activity-logs`                                         | 30 seconds          |
+| Notifications                 | `/notifications`, `/notifications/unread-count`                                 | 15 seconds          |
+| Departments/courses           | `/departments`, `/courses`                                                      | 300 seconds         |
+| Criteria management and forms | Department-scoped criteria and active-form endpoints                            | Not response-cached |
+| Internship postings           | `/internship-postings`, `/posted-jobs`                                          | 30 seconds          |
+| Dashboard summaries           | Six endpoints listed below                                                      | 15 seconds          |
+| Announcements                 | `/announcements/history`                                                        | 30 seconds          |
+| Announcement categories       | `/announcements/categories`                                                     | 300 seconds         |
 
 | Alumni and company directory | `/alumni-internships`, `/company-directory` | 60 seconds |
 
@@ -435,8 +435,7 @@ has not been benchmarked. Existing single-process restrictions apply.
 ### Weekly narratives
 
 User requirement: daily narratives were dropped; school requires weekly only.
-Do not implement daily-narrative caching or restore that feature. Legacy daily
-source files still exist in this checkout; this phase does not delete them.
+Do not implement daily-narrative caching or restore that feature. The active daily routes/controllers were permanently removed on November 17, 2026; historical copies/ snapshots remain unmounted.
 
 Three GET views use a 30-second TTL under /eu-connect/api:
 /weekly-narratives/history, /searched-user/weekly-narratives/:searchedUserId,
@@ -1565,11 +1564,9 @@ and annual mutation invalidation is unchanged. The existing
 order. No schema or write path changed, and no production-scale speedup was
 measured.
 
-
 ## Database connection collation
 
 The mysql2 pool explicitly negotiates UTF8MB4_GENERAL_CI, matching the existing utf8mb4_general_ci session setting. Setting only collation_connection while leaving the driver at its unicode_ci default can produce error 1267 (Illegal mix of collations) in prepared parameter/literal comparisons, including announcement visibility checks. Keep both aligned when changing connection configuration. No table conversion or SQL migration is required for this fix; restart/redeploy the backend to replace existing connections. Regression coverage: tests/db-collation.test.js checks configuration without accessing a database; live deployment verification is separate.
-
 
 ## DTR longitude storage
 
@@ -1591,13 +1588,14 @@ Department-category announcement cards and expanded content show the author depa
 
 Tags always force tagged_students_only=1 on create/edit using persisted tags, even when a stale client submits broad mode. Existing tagged posts require scripts/2026-10-31-tagged-announcements-default-private.sql after the earlier tag-table and targeted-audience migrations; it updates only the audience flag, with no schema change or new notifications. Live feed/direct/calendar/inbox guards enforce the restricted audience. Keep author/admin viewing, involved student/head notifications and optional current-supervisor sharing. Broad posts must have no tags.
 
-
 ### Announcement mutation reliability
 
 Announcement mutations: edit recipient reconciliation compares live eligible users before and after the write under the announcement lock, independently of existing alerts. Ordinary edits must not recreate dismissed notifications; only newly eligible recipients are notified. Remove out-of-audience UUID and legacy numeric-link alerts. Pin accepts only numeric/string 0 or 1; admin may pin any existing post, heads must pass fresh DB department/Registrar and targeted viewing checks. Pin commits before silent announcements_changed events; socket failures do not report the saved pin as failed. Existing client listeners refresh announcement, notification and calendar queries. No new SQL/schema/env settings are needed for these mutation fixes; earlier tagging migrations remain required.
+
 ## Department evaluation criteria (November 6, 2026)
 
 Criteria in both directions belong to `departments` through `department_id`. Run `scripts/2026-11-06-department-evaluation-criteria.sql` before deploying this API; existing questions become CCS questions without changing IDs or historical score references. Management routes allow department heads only, and controllers verify the head's current department in the database and reject Registrar. Student-authored supervisor forms use that student's latest academic department. Employer-authored student forms require the target student's ongoing internship with that employer and use the target's latest academic department. Writes validate every active criterion ID in that department in the same transaction as the evaluation. Do not cache a criteria response across viewers or targets.
+
 ## Department Attendance (November 7, 2026)
 
 `GET /dtr/department-attendance` is a paginated read for non-Registrar department heads. Resolve the department from `dept_heads_background_info` on every request and reject REG before querying. Join each student's latest `student_academic_info` row and exclude deleted internships and users; never trust a client department ID. Search, course, internship and clock-in date filters apply to both count and rows. The endpoint returns DTR metadata and photo-path presence; actual photos still require the existing per-record authorized signed-URL route. No schema migration or new environment setting is required.
@@ -1609,10 +1607,10 @@ Criteria in both directions belong to `departments` through `department_id`. Run
 ## Department Evaluations (November 7, 2026)
 
 `GET /department-evaluations` in internship-record routes is non-Registrar department-head only. Resolve the head's current department from the DB, join the student's latest academic row, and exclude deleted internships and users. Union employer-authored `student_evaluation_masters` (performance) and student-authored `company_evaluation_masters` (company) without joining scores, so each evaluation appears once. Apply all filters to both count and page. Return metadata and deleted state only; existing authorized detail endpoints provide scores/comments and staff deletion. Preserve the confidential performance-evaluation boundary. Student-to-company record detail also needs `deleted_at` to label author-deleted evaluations accurately. The November 10 company-evaluations migration is required before deploying this version; no environment change is required.
+
 # DTR overtime and auto-close review (2026-11-07)
 
 `scripts/2026-11-07-dtr-overtime-auto-close-review.sql` follows the DTR photo and shift-date migrations. Keep `MAX_SHIFT_HOURS` below 16 as the credit cap. The safety closure is fixed at 16 wall hours; `MAX_SHIFT_WALL_HOURS` is obsolete. The hourly `warnLongShifts` uses `wall_warning_sent_at` to send one reminder at 12 wall hours. `config/autoCloseStaleShifts.js` closes only after 16 wall hours, proposes break-adjusted hours, credits zero, and notifies the student. Historical auto-closed rows are `legacy_credited` and preserve existing credit; they accept an optional student explanation without changing credit or starting a new review. Student overtime request uses an open row and a Manila intended end; assigned employer approves or declines, independent of timing badges. Manual clock-out still requires photo and geofence. Student explanation is required after a new auto-close and before another clock-in, even if the unexplained row is not the latest shift. An explanation submission notifies the assigned employer, if present, and the student's current non-REG department head; legacy explanations send an informational notice but do not change prior credit or start review. Employer or non-REG head may then confirm or reduce new auto-close credit under a row lock; add it to internship accumulated hours exactly once. Keep scoped DTR reads, notification routing, cache invalidation, UI help, and frontend review controls in sync. The frontend dashboard also warns while open after 12 wall hours.
-
 
 ## Automatic soft-delete retention (November 11, 2026)
 
@@ -1624,7 +1622,6 @@ Before internship deletion commits, private document/report/photo paths are plac
 
 No new environment variables or SQL migration are required: the existing `deleted_at` columns and `dtr_photo_cleanup` table are reused. Apply the existing DTR photo-cleanup migration before deployment if not already applied. The backend must be running at the scheduled time; missed runs are picked up by the next scheduled run. Run `node --test tests/soft-delete-retention.test.js` for transaction/order/locking regression checks.
 
-
 ## Weekly duty schedules and private absences (November 11, 2026)
 
 Unified timeline: `features/dtr/attendanceTimeline.js` pages authorized attendance/report keys together in SQL, then fetches scoped details. Only student-owned `/dtr/history` and non-Registrar same-department `/dtr/department-attendance` include reports; employer/admin reads must remain attendance-only. Apply identical student/company/course/internship/date predicates to both head sources. Suppress a report's separate row when its correction DTR exists, attaching the private report to that row for the authorized viewer instead. Do not enable normal DTR deletion on report/correction rows. No new schema/configuration is required; paired frontend uses one DTR table and Storage's modal category Select. Regression coverage is in `tests/attendance-timeline.test.js`.
@@ -1635,14 +1632,18 @@ Deploy `scripts/2026-11-11-dtr-duty-schedules-absence.sql` before paired code. B
 
 DTR duty migration recovery: if the original November 11 migration completed its tables/seed but failed at PREPARE, run only `scripts/2026-11-11-dtr-duty-notification-recovery.sql`. The main migration now uses direct notification DDL and widens `notifications.link` to VARCHAR(255); never rerun the successful seed to recover this step. See docs/dtr-duty-schedules.md.
 
-
 ## EmailJS template designs (November 11, 2026)
 
 Both templates were saved directly in EmailJS with matching maroon EU-Connect headers, compact information panels, Arial typography and a single primary action. Account setup/reset retains `template_0lgvvoe` and the current backend variable contract. Weekly duty reminders use `template_bdj6kry`; configure `EMAILJS_DTR_TEMPLATE_ID=template_bdj6kry` in the deployed backend (the local backend value is set). Existing service credentials and default connected sender are retained. Repository copies are `docs/emailjs-account-template.html` and `docs/emailjs-duty-reminder-template.html`. The To Email field uses `{{to_email}}` and Subject uses `{{subject}}`; reminder parameters are username/message/week_start/dashboard_url. No emails were sent as part of this template editing task. Layout changes do not guarantee inbox placement; investigate sender authentication/reputation if Gmail continues to flag mail.
-
 
 ## Student account usernames and optional CSV import (November 17, 2026)
 
 Administrators retain manual creation and can import up to 100 students from a UTF-8 CSV (256 KB maximum), preview validation errors, create eligible rows and download rows to correct. Both creation paths generate LastName.FirstName.SCHOOL-ID using optional school IDs; no-ID name collisions receive numeric suffixes. IDs are saved in user_profiles.school_id and mirrored to the initial academic student_number. Existing usernames are preserved. Duplicate checks include inactive accounts and historical student numbers. Other roles retain manual usernames.
 
 Apply backend scripts/2026-11-17-student-account-import.sql before paired deployment. Bulk invitations are durable account_invitation_jobs processed five per minute, using existing EmailJS configuration; failed/uncertain sends retain accounts and require explicit resend. Preview/import/status APIs are admin-only; validate again on import and serialize creation via DB lock. Keep both studentIdentity.mjs copies identical. Help/page manuals share the accounts guide. See docs/student-account-import.md for format, limits, partial-success/retry behavior and operations. No new package or environment variable is required. A production schema migration and real email/browser verification are separate deployment steps.
+
+## Daily narrative retirement (November 17, 2026)
+
+Weekly narratives are the supported journal feature. Daily narrative routes and controllers under features/narratives have been removed, and server.js no longer mounts them on either API prefix. Legacy /narratives/\*, /searched-user/narratives/:searchedUserId and /internship-records/narratives/:internshipId routes are retired. Use the existing weekly-narratives endpoints and frontend pages.
+
+The internship retention worker no longer queries daily_narratives. Deploy this backend before applying scripts/2026-11-17-remove-daily-narratives.sql to permanently drop that table. The migration is repeatable, destroys daily narrative data and requires a backup. Historical copies/ files are unmounted reference snapshots. No frontend, environment or dependency change is required. Verify with tests/soft-delete-retention.test.js and the existing weekly narrative tests.

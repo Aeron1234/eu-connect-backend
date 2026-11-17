@@ -430,8 +430,7 @@ This phase awaits installer application. Existing process-local limits apply.
 ## Weekly narratives
 
 User requirement: daily narratives were dropped; school requires weekly only.
-Do not implement daily-narrative caching or restore that feature. Legacy daily
-source files still exist in this checkout; this phase does not delete them.
+Do not implement daily-narrative caching or restore that feature. The active daily routes/controllers were permanently removed on November 17, 2026; historical copies/ snapshots remain unmounted.
 
 Three GET views use a 30-second TTL under /eu-connect/api:
 /weekly-narratives/history, /searched-user/weekly-narratives/:searchedUserId,
@@ -558,3 +557,10 @@ their `startedAt` values match. The frontend `/admin/cache-monitoring` page does
 this for its optional 30-second refresh and resets the interval view if the
 backend process changes. Storage byte counts are NodeCache estimates, not actual
 heap usage. The endpoint does not measure database query latency.
+
+
+## Daily narrative retirement (November 17, 2026)
+
+Weekly narratives are the supported journal feature. Daily narrative routes and controllers under features/narratives have been removed, and server.js no longer mounts them on either API prefix. Legacy /narratives/*, /searched-user/narratives/:searchedUserId and /internship-records/narratives/:internshipId routes are retired. Use the existing weekly-narratives endpoints and frontend pages.
+
+The internship retention worker no longer queries daily_narratives. Deploy this backend before applying scripts/2026-11-17-remove-daily-narratives.sql to permanently drop that table. The migration is repeatable, destroys daily narrative data and requires a backup. Historical copies/ files are unmounted reference snapshots. No frontend, environment or dependency change is required. Verify with tests/soft-delete-retention.test.js and the existing weekly narrative tests.
