@@ -10,7 +10,7 @@ Assign a technical owner and record evidence/date for each item before the schoo
 - [ ] Complete production schema is verified and migration ledger reconciled.
 - [ ] Dummy accounts, sample evaluations and personal data have an approved disposition.
 - [ ] Separate runtime and migration database credentials are configured.
-- [ ] Database and Supabase files have encrypted off-host backups and a successful restore test.
+- [ ] Database and the selected file storage have coordinated encrypted off-host backups and a successful restore test.
 - [ ] Services restart after a controlled VPS reboot.
 - [ ] Firewall blocks public 3000, 7000 and local DB 3306 for IPv4 and IPv6.
 - [ ] HTTPS, redirect and certificate renewal dry run pass.
@@ -46,3 +46,11 @@ Assign a technical owner and record evidence/date for each item before the schoo
 
 Use controlled test recipients and staging data for destructive/elapsed-time tests. Do not accelerate the production clock or purge real records to exercise scheduled work.
 
+
+## Selected VPS file storage
+
+- [ ] Chapter 09 backend storage changes are implemented and tested.
+- [ ] Existing objects are copied with relative keys preserved and checksums reconciled.
+- [ ] Private downloads, role checks, previews, cleanup queues and legacy URL records work.
+- [ ] Off-server backup/restore includes the persistent upload root.
+- [ ] Supabase credentials are retired only after approved migration acceptance.

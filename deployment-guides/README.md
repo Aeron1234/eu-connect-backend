@@ -2,6 +2,10 @@
 
 Prepared November 17, 2026 from the current frontend and backend source. This is a deployment handoff for the school's technical administrator. Commands target a fresh Ubuntu 24.04 LTS x86-64 VPS, a school-owned domain, one frontend process and one backend process. Replace example.edu and all REPLACE values before use. The school must select its domain, hosting resources, database location, backup retention and maintenance owner.
 
+## Selected upload storage
+
+The school selected private Hostinger VPS filesystem storage on November 18, 2026. Follow [the storage migration guide](09-hostinger-vps-storage.md) before switching. The current backend still uses Supabase directly; the guide identifies the required implementation and migration work.
+
 ## Read in this order
 
 1. [Requirements and architecture](01-requirements.md)
@@ -10,7 +14,9 @@ Prepared November 17, 2026 from the current frontend and backend source. This is
 4. [Frontend and PDF exports](04-frontend.md)
 5. [Nginx, DNS and HTTPS](05-nginx-https.md)
 6. [Updates, backups and troubleshooting](06-operations.md)
-7. [Go-live acceptance checklist](07-go-live-checklist.md)
+7. [Move uploads to Hostinger VPS storage](09-hostinger-vps-storage.md)
+8. [Go-live acceptance checklist](07-go-live-checklist.md)
+9. [Cloud storage endpoint inventory](10-storage-endpoints.md)
 
 The [templates](templates/) directory contains two environment examples, two systemd units and an Nginx site. They contain placeholders and must be reviewed before installation. They are documentation examples and have not been installed on a VPS.
 
@@ -25,6 +31,7 @@ The [templates](templates/) directory contains two environment examples, two sys
   shared/
     frontend.env             # private production values
     backend.env              # private production values
+    uploads/                 # selected private file root after storage migration
 ```
 
 The release IDs should identify a tested frontend/backend pair. Keep a previous release for rollback. Build the frontend before switching current. Both applications run as the unprivileged euconnect user. Next.js uses port 3000; Express/Socket.IO uses 7000. Only Nginx's 80/443 and restricted SSH are publicly allowed.

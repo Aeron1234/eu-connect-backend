@@ -51,6 +51,10 @@ These jobs are registered by server.js through node-cron. systemd keeps the appl
 
 New auto-close entries await explanations/review; the 10-hour credit cap is separate. Bulk invitation jobs survive restarts in MariaDB. Failed or uncertain invitation sends require explicit admin resend. After downtime, inspect open shifts, missed detections and reminder/queue progress; cron does not guarantee replay of every missed invocation.
 
+## Storage migration target
+
+Uploaded files are planned to move into private Hostinger VPS storage. Follow [chapter 09](09-hostinger-vps-storage.md) for the implementation dependencies, transfer, private downloads and rollback. Existing Supabase environment settings are still required by the current code until that change is deployed.
+
 ## Provider and health checks
 
 Supabase storage uses SUPABASE_KEY and SUPABASE_BUCKET on the server. Preserve the private-bucket design and authorized short-lived signed links. Database backups do not include object contents. EmailJS uses its existing service, private/public key and two templates. Validate approved sender, delivery and quotas in the school's accounts.

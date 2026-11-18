@@ -10,7 +10,7 @@
 | Next.js production build and persistent frontend process | Server Actions, authentication and PDF API routes require a Node server. |
 | Persistent Express process | APIs, Socket.IO, job execution and queue draining run in server.js. |
 | MariaDB-compatible database and complete application schema | The current application uses mysql2 and MariaDB features, transactions and named locks. |
-| Supabase project and configured private storage bucket | Current document/photo uploads and cleanup use this external storage. |
+| Private persistent VPS uploads and an adapted storage backend | Selected deployment target. The current code still requires Supabase until the storage migration is implemented and verified. See chapter 09. |
 | EmailJS service, account template, duty-reminder template and working credentials | Needed for onboarding, recovery and Sunday reminders. |
 | Domain, DNS and HTTPS | Required for production secure cookies and phone camera/location use. |
 | Reverse proxy and automatic process supervision | Nginx and systemd are the choices used in this guide. |
@@ -34,6 +34,8 @@ Start planning around 2 vCPU and 4 GB RAM for light use, preferably more memory 
 
 ## Traffic and services
 
+The diagram shows the selected target. Its local-storage connection requires the chapter 09 application changes before deployment.
+
 ```mermaid
 flowchart LR
   U["Student, employer, department head or admin browser"] -->|HTTPS| N["Nginx"]
@@ -43,7 +45,7 @@ flowchart LR
   F -->|server-only API requests| B
   F --> P["Puppeteer Chrome for PDFs"]
   B --> D["MariaDB"]
-  B --> S["Supabase private storage"]
+  B --> S["Private Hostinger uploads after storage migration"]
   B --> E["EmailJS"]
   U --> M["Map tiles and browser geocoding providers"]
 ```

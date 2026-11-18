@@ -25,7 +25,7 @@ The school's maintainer should review Node 24.x, Next.js and transitive dependen
 | Data | Suggested starting policy |
 | --- | --- |
 | MariaDB | Encrypted daily full backup; more frequent incrementals/binlogs if the school needs less than 24 hours data loss |
-| Supabase bucket objects | Versioned or separate secure backup matching the database restore point |
+| Private uploads | Back up the VPS upload root off-server after migration; retain matching Supabase backups during transition |
 | Environment values and provider configuration | Encrypted school-controlled vault, with access audit |
 | Releases/migration ledger | Record both commit IDs and retain working artifacts |
 | Logs | Rotate and retain only as long as school policy requires |
@@ -67,3 +67,7 @@ Inspect queue counts and processing age through an authorized database administr
 | Invitation failed | EmailJS template/credentials/quota and provider history; explicitly resend after investigation |
 | Data missing after cleanup | Soft-delete dates, retention logs and backup history |
 
+
+## Hostinger upload storage
+
+After the storage migration, include /srv/eu-connect/shared/uploads in backup, restore, disk/inode and permission checks. See [chapter 09](09-hostinger-vps-storage.md) for cutover and rollback handling across providers.

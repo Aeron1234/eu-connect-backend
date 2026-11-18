@@ -7,3 +7,5 @@ Import into the intended orientation database after backing up any existing targ
 The export predates the backend daily narrative removal. After importing it, deploy the updated backend and apply scripts/2026-11-17-remove-daily-narratives.sql if retiring that table. This drops daily narratives while retaining the other orientation data. The cleaned admin1-only exports are separate and are not the selected orientation dataset.
 
 Database imports do not include Supabase storage objects. Demonstration uploads require the corresponding authorized storage project and files. No live database was changed by attaching this export.
+
+For the selected move to Hostinger uploads, follow [the storage migration guide](../09-hostinger-vps-storage.md). Existing database references need the corresponding file bytes transferred from Supabase before orientation downloads can work on local storage.
