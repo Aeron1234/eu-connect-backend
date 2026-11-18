@@ -3,12 +3,15 @@ import assert from "node:assert/strict";
 import { db } from "../config/db.js";
 import cache from "../config/cache/cache.js";
 import { createUser } from "../features/accounts/controllers/accountControllers.js";
-import { parseAccountCsv, previewStudents, importStudentAccounts } from "../features/accounts/accountImport.js";
+import { parseAccountCsv as parseCsv, previewAccounts, importAccounts, previewAccountImport } from "../features/accounts/accountImport.js";
 import { studentUsername, validateStudentIdentity } from "../features/accounts/studentIdentity.mjs";
 import { drainAccountInvitations } from "../features/accounts/accountInvitationQueue.js";
 
 const original = { getConnection: db.getConnection, fetch: global.fetch };
 after(async () => { db.getConnection = original.getConnection; global.fetch = original.fetch; cache.close(); await db.end(); });
+const parseAccountCsv = csv => parseCsv(csv, "student");
+const previewStudents = csv => previewAccounts(csv, "student");
+const importStudentAccounts = (request, res) => importAccounts({ ...request, body: { ...request.body, role: "student" } }, res);
 const header = "first_name,middle_initial,last_name,email,school_id,course_code,gender";
 const csv = header + "\r\nJohn Carlo,,Dela Cruz,john@example.test,A24-0483,BSCS,male";
 const response = () => ({ statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } });
@@ -31,7 +34,7 @@ test("CSV accepts BOM, quoted commas, escaped quotes and optional headers; rejec
   assert.equal(parseAccountCsv(header + "\nJ,D")[0].error, "Column count does not match the header.");
 });
 
-function fixture({ occupied = [], existingEmail = false, legacyId = false, failInsert = false } = {}) {
+function fixture({ occupied = [], existingEmail = false, legacyId = false, failInsert = false, role = "student" } = {}) {
   const calls = [];
   let committed = 0, rolledBack = 0;
   const connection = {
@@ -41,7 +44,8 @@ function fixture({ occupied = [], existingEmail = false, legacyId = false, failI
       if (sql.includes("GET_LOCK")) return [[{ acquired: 1 }]];
       if (sql.includes("RELEASE_LOCK")) return [[{ released: 1 }]];
       if (sql.startsWith("SELECT id, short_name FROM courses")) return [[{ id: 7, short_name: "BSCS" }]];
-      if (sql.includes("FROM roles")) return [[{ id: 1, role: "student" }]];
+      if (sql.includes("FROM roles")) return [[{ id: 1, role }]];
+      if (sql.includes("FROM departments")) return [[{ id: 6, code: "CCS" }]];
       if (sql.includes("SELECT department_id FROM courses")) return [[{ department_id: 2 }]];
       if (sql.includes("FROM users WHERE username")) return [occupied.includes(params[0]) ? [{ id: "existing" }] : []];
       if (sql.includes("FROM users WHERE email")) return [existingEmail ? [{ id: "existing" }] : []];
@@ -132,3 +136,63 @@ test("queue prepares after claiming, sends after commit and records failed deliv
   assert(!calls.some(c => c.sql.includes("DELETE")));
 });
 
+
+
+test("CSV casing is normalized before preview, username generation and persisted account creation", async () => {
+  const input = header + "\n  jOHN   cARLO ,a.,dELA cRUZ,john@example.test,A12-0000,bscs, MALE ";
+  fixture();
+  const rows = await previewStudents(input);
+  assert.equal(rows[0].error, null);
+  assert.equal(rows[0].data.first_name, "John Carlo");
+  assert.equal(rows[0].data.last_name, "Dela Cruz");
+  assert.equal(rows[0].data.middle_initial, "A.");
+  assert.equal(rows[0].data.gender, "male");
+  assert.equal(rows[0].username, "DelaCruz.JohnCarlo.A12-0000");
+  const f = fixture();
+  const result = response(); await importStudentAccounts(req({ csv: input }), result);
+  assert.equal(result.body.results[0].status, "created");
+  const stored = f.calls.find(call => call.sql.startsWith("INSERT INTO user_profiles"));
+  assert.deepEqual(stored.params.slice(1), ["John Carlo", "A", "Dela Cruz", "male"]);
+  const invalid = await previewStudents(input.replace(" MALE ", "unknown"));
+  assert.match(invalid[0].error, /Gender/);
+});
+
+test("CSV title casing retains accented letters, apostrophes and hyphens", () => {
+  const row = parseAccountCsv(header + "\njos\u00e9-mARIE,,o'NEIL,j@example.test,,BSCS,FeMaLe")[0];
+  assert.equal(row.data.first_name, "Jos\u00e9-Marie");
+  assert.equal(row.data.last_name, "O'Neil");
+  assert.equal(row.data.gender, "female");
+});
+
+test("CSV endpoints require a supported role and reject another role's columns", async () => {
+  for (const role of [undefined, "", "__proto__", ["student"], "employer"]) {
+    const request = req({ csv, role });
+    for (const handler of [previewAccountImport, importAccounts]) {
+      const res = response();
+      await handler(request, res);
+      assert.equal(res.statusCode, 400);
+      assert.match(res.body.error, /role/i);
+    }
+  }
+});
+
+test("bulk creation uses the selected role and validates its username and department fields", async () => {
+  const common = "first_name,last_name,email,username";
+  for (const role of ["employer", "department_head", "admin"]) {
+    const head = role === "department_head";
+    const contents = common + (head ? ",department_code" : "") +
+      "\nJOHN,perez,john@example.test,John.Perez" + (head ? ",ccs" : "");
+    const f = fixture({ role });
+    const res = response();
+    await importAccounts(req({ role, csv: contents }), res);
+    assert.equal(res.body.results[0].status, "created");
+    assert.equal(res.body.results[0].username, "John.Perez");
+    assert.equal(f.calls.find(call => call.sql === "SELECT id FROM roles WHERE role = ?").params[0], role);
+    assert.equal(f.calls.some(call => call.sql.includes("INSERT INTO employer_background_info")), role === "employer");
+    if (head) {
+      assert.equal(f.calls.find(call => call.sql.includes("INSERT INTO dept_heads_background_info")).params[1], 6);
+      assert.match((await previewAccounts(contents.replace(",ccs", ",unknown"), role))[0].error, /Department code/);
+    }
+    assert.match((await previewAccounts(contents, role))[0].error, /Username is already taken/);
+  }
+});

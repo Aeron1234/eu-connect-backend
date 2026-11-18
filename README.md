@@ -756,7 +756,7 @@ Both templates were saved directly in EmailJS with matching maroon EU-Connect he
 
 ## Student account usernames and optional CSV import (November 17, 2026)
 
-Administrators retain manual creation and can import up to 100 students from a UTF-8 CSV (256 KB maximum), preview validation errors, create eligible rows and download rows to correct. Both creation paths generate LastName.FirstName.SCHOOL-ID using optional school IDs; no-ID name collisions receive numeric suffixes. IDs are saved in user_profiles.school_id and mirrored to the initial academic student_number. Existing usernames are preserved. Duplicate checks include inactive accounts and historical student numbers. Other roles retain manual usernames.
+Administrators retain manual creation and can select a role and import up to 100 accounts from a UTF-8 CSV (256 KB maximum), preview validation errors, create eligible rows and download rows to correct. Both student creation paths generate LastName.FirstName.SCHOOL-ID using optional school IDs; no-ID name collisions receive numeric suffixes. IDs are saved in user_profiles.school_id and mirrored to the initial academic student_number. Existing usernames are preserved. Duplicate checks include inactive accounts and historical student numbers. Other roles supply a username. Department head imports also require an active department code.
 
 Apply backend scripts/2026-11-17-student-account-import.sql before paired deployment. Bulk invitations are durable account_invitation_jobs processed five per minute, using existing EmailJS configuration; failed/uncertain sends retain accounts and require explicit resend. Preview/import/status APIs are admin-only; validate again on import and serialize creation via DB lock. Keep both studentIdentity.mjs copies identical. Help/page manuals share the accounts guide. See docs/student-account-import.md for format, limits, partial-success/retry behavior and operations. No new package or environment variable is required. A production schema migration and real email/browser verification are separate deployment steps.
 
@@ -770,3 +770,5 @@ The internship retention worker no longer queries daily_narratives. Deploy this 
 ## VPS deployment guides
 
 See [deployment-guides](deployment-guides/README.md) for both services, Nginx, HTTPS, systemd, environment templates, database migration and operational procedures. The included orientation SQL contains private account data and requires restricted access.
+
+The bulk import role picker uses the shared shadcn Select. Changing the role clears the file and preview. The browser formats names and middle initials and lowercases student gender before submitting the CSV for preview or import. The backend applies the same formatting and validates the selected role, CSV columns and allowed gender values. The preview displays usernames beside names. Keep the frontend and backend accountCsv.mjs parsers aligned. See docs/student-account-import.md.

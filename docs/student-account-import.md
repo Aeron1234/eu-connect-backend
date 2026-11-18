@@ -1,6 +1,6 @@
-# Student account creation and CSV import
+# Account creation and CSV import
 
-Administrators can use the existing manual form or the optional Import CSV tab at /admin/create-account. Bulk creation currently supports students. Employer, department-head and admin usernames remain manually entered.
+Administrators can use the existing manual form or the optional Import CSV tab at /admin/create-account. Select one role per CSV. Administrators can import student, employer, department head and admin accounts.
 
 ## Student names and school IDs
 
@@ -14,11 +14,14 @@ First/last names and usernames must fit 50 characters, school IDs 30 characters,
 
 ## CSV workflow
 
-1. Open Import CSV and download the template.
-2. Use UTF-8 CSV. Headers are first_name,middle_initial,last_name,email,school_id,course_code,gender. Middle initial and school ID columns may be omitted. All remaining columns are required.
-3. Use male or female for gender and exactly one active course's short_name for course_code. An unknown or ambiguous course code must be corrected. The student department is derived from that course.
-4. Upload up to 100 students in a file no larger than 256 KB. Validate and preview before confirming. Quoted values, escaped quotes, BOM and CRLF are supported. The displayed CSV row is the nonblank record position including the header; multiline values can span physical lines.
-5. Review generated usernames and row errors. Confirm Create accounts to import eligible rows. The backend validates the raw CSV again and repeats creation-time checks; preview usernames can change if another administrator creates accounts meanwhile.
+1. Open Import CSV, select the required account role in the dropdown, and download its template. Changing the role clears the selected file and preview.
+2. Use UTF-8 CSV. All roles require first_name, last_name and email. The middle_initial column is optional.
+3. Add the columns for the selected role.
+   - Student requires course_code and gender. school_id is optional. Use an active course code and male or female. The department comes from the course, and the username is generated.
+   - Employer and admin require username. Admin imports grant administrator access.
+   - Department head requires username and department_code. Use an active department code.
+4. Upload up to 100 accounts in a file no larger than 256 KB. Validate and preview before confirming. Quoted values, escaped quotes, BOM and CRLF are supported. The displayed CSV row is the nonblank record position including the header; multiline values can span physical lines.
+5. Review the Username column beside Name and check any row errors. Confirm Create accounts to import eligible rows. The backend validates the raw CSV again and repeats creation-time checks; preview usernames can change if another administrator creates accounts meanwhile.
 6. Review created, skipped and failed rows. Download rows to correct. Re-uploading a file skips already-created emails or IDs. No existing accounts are overwritten. An interrupted request may have committed some rows, so preview again before retrying.
 7. Check invitation status separately. Pending/processing means queued/in progress, sent means delivery accepted, failed means delivery unconfirmed, and cancelled means the account became ineligible. A failed invitation retains the account and offers the existing Resend invitation action.
 
@@ -38,3 +41,7 @@ All import, preview and status endpoints are administrator-only on both API pref
 
 Run the paired account tests with mocked databases and mocked mail. Verify real database migration, CSV import, invitation delivery and both manual roles on staging before rollout. This source update does not run a migration, create real accounts or send real mail.
 
+
+## CSV casing normalization (November 18, 2026)
+
+CSV names are formatted in title case, repeated spaces are collapsed, middle initials are uppercased, and gender values are compared after lowercasing. MALE, Male and male all become male; FEMALE variants become female. Unknown gender values still require correction. The browser formats the CSV before sending it for preview or import. Student gender reaches the backend as lowercase male or female when valid. The backend reapplies the same normalization before validating the row and generating the username. Accents, apostrophes and hyphens are retained. Review special name capitalization in the preview; automatic title case cannot infer every preferred spelling.

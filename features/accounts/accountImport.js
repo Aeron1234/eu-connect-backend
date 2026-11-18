@@ -2,57 +2,21 @@ import { db } from "../../config/db.js";
 import { createUser } from "./controllers/accountControllers.js";
 import { validateStudentIdentity } from "./studentIdentity.mjs";
 
-const columns = ["first_name", "middle_initial", "last_name", "email", "school_id", "course_code", "gender"];
-const requiredColumns = ["first_name", "last_name", "email", "course_code", "gender"];
+import { parseAccountCsv } from "./accountCsv.mjs";
+export { parseAccountCsv } from "./accountCsv.mjs";
 
-export function parseAccountCsv(csv) {
-  if (typeof csv !== "string" || Buffer.byteLength(csv, "utf8") > 256 * 1024) throw new Error("Upload a CSV of at most 256 KB.");
-  const records = [];
-  let record = [], value = "", quoted = false, closed = false;
-  const pushValue = () => { record.push(value.trim()); value = ""; closed = false; };
-  const pushRecord = () => {
-    pushValue();
-    if (record.some(Boolean)) records.push(record);
-    record = [];
-    if (records.length > 101) throw new Error("Import at most 100 students at a time.");
-  };
-  const text = csv.replace(/^\uFEFF/, "");
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i];
-    if (quoted) {
-      if (char === '"' && text[i + 1] === '"') { value += '"'; i++; }
-      else if (char === '"') { quoted = false; closed = true; }
-      else value += char;
-    } else if (char === "," || char === "\n" || char === "\r") {
-      if (char === ",") pushValue();
-      else { pushRecord(); if (char === "\r" && text[i + 1] === "\n") i++; }
-    } else if (char === '"' && !value && !closed) quoted = true;
-    else {
-      if (closed || char === '"') throw new Error("Invalid CSV quoting. Export the file as CSV UTF-8.");
-      value += char;
-    }
-  }
-  if (quoted) throw new Error("The CSV contains an unclosed quoted field.");
-  if (value || record.length || closed) pushRecord();
-  const headers = records.shift()?.map(s => s.toLowerCase()) ?? [];
-  if (!records.length) throw new Error("Include a header and at least one student.");
-  if (new Set(headers).size !== headers.length || headers.some(s => !columns.includes(s)) || requiredColumns.some(s => !headers.includes(s))) {
-    throw new Error("Use the provided CSV template with its original column names.");
-  }
-  return records.map((values, index) => ({
-    row: index + 2,
-    data: Object.fromEntries(headers.map((key, n) => [key, values[n] ?? ""])),
-    error: values.length !== headers.length ? "Column count does not match the header." : null,
-  }));
-}
-
-export async function previewStudents(csv) {
-  const rows = parseAccountCsv(csv);
+export async function previewAccounts(csv, role) {
+  const rows = parseAccountCsv(csv, role);
   const connection = await db.getConnection();
   try {
-    const [courses] = await connection.execute("SELECT id, short_name FROM courses WHERE is_active = 1");
-    const [roles] = await connection.execute("SELECT id FROM roles WHERE role = 'student'");
-    if (!roles.length) throw new Error("The student role is unavailable.");
+    const [roles] = await connection.execute("SELECT id FROM roles WHERE role = ?", [role]);
+    if (!roles.length) throw new Error("The selected account role is unavailable.");
+    const [courses] = role === "student"
+      ? await connection.execute("SELECT id, short_name FROM courses WHERE is_active = 1")
+      : [[]];
+    const [departments] = role === "department_head"
+      ? await connection.execute("SELECT id, code FROM departments WHERE is_active = 1")
+      : [[]];
     const seenEmails = new Set(), seenIds = new Set(), reservedNames = new Set();
     for (const row of rows) {
       if (row.error) continue;
@@ -62,10 +26,24 @@ export async function previewStudents(csv) {
         if (/[\r\n\t]/.test(data.first_name + data.last_name)) throw new Error("Names must be on one line.");
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email) || data.email.length > 50) throw new Error("Enter a valid email address of at most 50 characters.");
         if (data.middle_initial && !/^[A-Za-z]\.?$/.test(data.middle_initial)) throw new Error("Middle initial must be one letter.");
-        if (!["male", "female"].includes(data.gender)) throw new Error("Gender must be male or female.");
-        const matchedCourses = courses.filter(c => c.short_name?.toLowerCase() === data.course_code.toLowerCase());
-        if (matchedCourses.length !== 1) throw new Error("Course code must match exactly one active course.");
-        const { username: base, schoolId } = validateStudentIdentity(data);
+        const account = { ...data, role: String(roles[0].id) };
+        let base = data.username;
+        let schoolId = "";
+        if (role === "student") {
+          if (!["male", "female"].includes(data.gender)) throw new Error("Gender must be male or female.");
+          const matches = courses.filter(course => course.short_name?.toLowerCase() === data.course_code.toLowerCase());
+          if (matches.length !== 1) throw new Error("Course code must match exactly one active course.");
+          ({ username: base, schoolId } = validateStudentIdentity(data));
+          account.course = String(matches[0].id);
+          account.school_id = schoolId;
+        } else if (!base || [...base].length > 50 || /[\r\n\t]/.test(base)) {
+          throw new Error("Enter a username on one line with at most 50 characters.");
+        }
+        if (role === "department_head") {
+          const matches = departments.filter(department => department.code?.toLowerCase() === data.department_code.toLowerCase());
+          if (matches.length !== 1) throw new Error("Department code must match exactly one active department.");
+          account.department = String(matches[0].id);
+        }
         const emailKey = data.email.toLowerCase();
         if (seenEmails.has(emailKey)) throw new Error("Duplicate email within this file.");
         if (schoolId && seenIds.has(schoolId)) throw new Error("Duplicate school ID within this file.");
@@ -85,6 +63,7 @@ export async function previewStudents(csv) {
           const [names] = await connection.execute("SELECT id FROM users WHERE username = ?", [username]);
           taken = names.length || reservedNames.has(username.toLowerCase());
           if (taken) {
+            if (role !== "student") throw new Error("Username is already taken.");
             if (schoolId) throw new Error("Generated username is already taken.");
             suffix++;
             const ending = "." + suffix;
@@ -94,7 +73,7 @@ export async function previewStudents(csv) {
         } while (taken);
         reservedNames.add(username.toLowerCase());
         row.username = username;
-        row.account = { ...data, school_id: schoolId, course: String(matchedCourses[0].id), role: String(roles[0].id) };
+        row.account = { ...account, username };
       } catch (error) { row.error = error.message; }
     }
     return rows;
@@ -103,7 +82,7 @@ export async function previewStudents(csv) {
 
 export async function previewAccountImport(req, res) {
   try {
-    const rows = await previewStudents(req.body?.csv);
+    const rows = await previewAccounts(req.body?.csv, req.body?.role);
     return res.json({ success: true, rows: rows.map(({ account, ...row }) => row) });
   } catch (error) {
     const validation = error instanceof Error && !error.code;
@@ -112,9 +91,9 @@ export async function previewAccountImport(req, res) {
   }
 }
 
-export async function importStudentAccounts(req, res) {
+export async function importAccounts(req, res) {
   try {
-    const rows = await previewStudents(req.body?.csv);
+    const rows = await previewAccounts(req.body?.csv, req.body?.role);
     const results = [];
     for (const row of rows) {
       if (row.error) {
@@ -135,8 +114,10 @@ export async function importStudentAccounts(req, res) {
       });
     }
     return res.json({ success: true, results });
-  } catch {
-    return res.status(400).json({ success: false, error: "Could not import the CSV. Refresh the preview and try again." });
+  } catch (error) {
+    const validation = error instanceof Error && !error.code;
+    return res.status(validation ? 400 : 500).json({ success: false,
+      error: validation ? error.message : "Could not import the CSV. Refresh the preview and try again." });
   }
 }
 
